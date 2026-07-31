@@ -1,0 +1,18 @@
+{
+  "name": "pideck",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A calm, editorial desktop workspace for Pi.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @pideck/desktop run dev",
+    "build": "npm --workspace @pideck/desktop run build",
+    "typecheck": "npm --workspace @pideck/desktop run typecheck"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
