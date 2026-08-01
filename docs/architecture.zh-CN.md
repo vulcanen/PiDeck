@@ -1,197 +1,174 @@
-# PiDeck 架构说明
+# PiDeck 当前架构说明
 
-> 与 [产品与技术方案](product-plan.zh-CN.md) 配套。本文只冻结模块边界、运行时边界和 Pi CLI 覆盖策略。
+> 本文描述当前仓库已经实现的结构，不描述尚未落地的目标架构。
+> 目标方案和后续计划请见 [产品与技术方案](product-plan.zh-CN.md)。
 
-## 1. 架构目标
+## 1. 产品边界
 
-PiDeck 的核心约束：
+PiDeck 是 `@earendil-works/pi-coding-agent` 的桌面适配层：Renderer 负责交互和呈现，PiHost 负责 Pi Session、ModelRuntime、Agent、Tool、Provider、资源和 CLI 兼容能力。
 
-1. Pi CLI 的本地能力不丢失。
-2. UI 不依赖 Pi SDK 类型，Pi 升级只影响适配层。
-3. Agent、扩展、Bash 和文件操作不能阻塞桌面渲染。
-4. 凭据、文件系统和 Shell 权限保持在 Renderer 之外。
-5. 每个模块只有一个主要变化原因，可以独立测试和替换。
+PiDeck 不提供：
 
-身份边界：PiDeck 本身没有账户、登录、云端工作区和同步服务。Provider 登录（API Key、OAuth、Token 刷新）仍由 Pi Runtime 提供，凭据只保留在本机 Pi 配置目录中。
+- PiDeck 账户、云端登录、云端会话同步或团队工作区。
+- 第二套 Agent、模型目录、凭据存储或会话数据库。
+- Renderer 侧的 Node.js、文件系统、Shell 或 Pi SDK 访问。
 
-## 2. 运行时拓扑
+Provider API Key、OAuth 和其他凭据继续由 Pi Runtime 保存在本机 Pi 配置目录。
+
+## 2. 当前运行时拓扑
 
 ```text
-React Renderer
-  └─ Preload: window.pideck（能力受限、Zod 校验）
+Sandboxed React Renderer
+  └─ Preload: window.pideck
       └─ Electron Main
-          ├─ WindowLifecycle
-          ├─ IpcRouter
-          ├─ AppServices
-          └─ PiHostClient
-              └─ MessagePort
-                  └─ Electron Utility Process: PiHost
-                      ├─ PiAdapter
-                      ├─ SessionRegistry
-                      ├─ PermissionEngine
-                      ├─ WorkspaceService
-                      ├─ ResourceService
-                      └─ CliCompatRunner
-                          └─ Pi SDK / Pi CLI
+          ├─ BrowserWindow 生命周期
+          ├─ IPC handler 编排
+          └─ child_process.fork(PiHost)
+              └─ 系统 Node.js
+                  └─ @earendil-works/pi-coding-agent
 ```
 
-Main 进程只做桌面编排。PiHost 承载所有可能长时间运行的工作：模型请求、Agent Turn、扩展代码、Bash、会话读写、资源发现和包操作。PiHost 退出后，Main 保留窗口并显示“运行时已断开”，用户可以重启 PiHost 并从 Session File 恢复。
+当前实现使用普通 Node `child_process.fork` 和 `process.send/process.on("message")`，不是 Electron `utilityProcess`，也不是 MessagePort。这样可以让 Pi SDK 运行在满足 Node engines 的系统 Node 中，避免 Electron 内置 Node 与 Pi SDK/undici 的兼容问题。
 
-开发阶段 PiHost 会从本机全局 `pi` 命令定位 `@earendil-works/pi-coding-agent`；也可以通过 `PIDECK_PI_MODULE` 指定 SDK 的 `dist/index.js` 路径。打包阶段再把同版本 Pi SDK 固定进应用资源。
+### 2.1 Main
 
-## 3. Workspace 结构
+`apps/desktop/src/main/index.ts`
+
+Main 只负责：
+
+- 创建和销毁 BrowserWindow。
+- 启动、监听和停止 PiHost。
+- 在 Renderer IPC 与 PiHost 请求之间做编排。
+- 为请求设置超时，处理 Host 断开。
+- 通过系统浏览器打开经过协议校验的 HTTP(S) URL。
+
+Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
+
+### 2.2 Preload
+
+`apps/desktop/src/preload/index.ts`
+
+Preload 通过 `contextBridge` 暴露 capability-scoped 的 `window.pideck`。Renderer 只能使用 contracts 中声明的能力，不能获得原始 `ipcRenderer`、Node 对象或 Credential 对象。
+
+### 2.3 PiHost
+
+`apps/desktop/src/utility/pi-host/index.ts`
+
+PiHost 负责：
+
+- 定位并动态加载 Pi SDK。
+- 创建和缓存 `SessionManager`、`AgentSession` 和 `ModelRuntime`。
+- 读取/恢复 Pi Session。
+- 转发 Agent event、Approval event、Auth event。
+- 执行 Pi built-in tools、Bash、Provider 登录和会话操作。
+- 将跨进程数据转换成可 JSON 序列化的响应。
+
+当前审批实现是 PiHost 内的 `beforeToolCall` 适配：`read`、`grep`、`find`、`ls` 默认直接允许，其他工具通过 PiDeck 审批卡确认。当前仓库没有显式加载 `@gotgenes/pi-permission-system`；该包虽然存在于 npm，并提供 `allow/ask/deny` 与 `yoloMode`，不能在文档中声称它已经是 PiDeck 的实际运行时依赖，除非完成真实的 Pi Extension 加载和事件桥接。
+
+## 3. 当前仓库结构
 
 ```text
 PiDeck/
 ├─ apps/desktop/
 │  └─ src/
-│     ├─ main/                  # Electron Main
-│     ├─ preload/               # capability-scoped bridge
+│     ├─ main/index.ts              # Electron Main 与 IPC 编排
+│     ├─ preload/index.ts           # contextBridge
 │     ├─ renderer/
-│     │  ├─ app/                # 路由、布局、全局状态投影
-│     │  ├─ features/           # conversation/sessions/review/terminal
-│     │  ├─ command-palette/    # CLI 命令、快捷键、搜索
-│     │  ├─ resources/          # 资源管理器
-│     │  └─ settings/
-│     └─ utility/pi-host/       # Utility Process 入口
+│     │  ├─ App.tsx                 # 当前工作区、对话、设置和面板
+│     │  ├─ styles.css              # 当前 UI token 与布局样式
+│     │  ├─ i18n.ts                 # zh/en 文案
+│     │  ├─ ui.tsx                  # Icon、焦点管理、剪贴板等共享基元
+│     │  ├─ pi-capabilities.ts      # Pi 不可用时的独立命令 fallback
+│     │  ├─ main.tsx                # Renderer 入口
+│     │  └─ vite-env.d.ts
+│     └─ utility/pi-host/index.ts   # PiHost 入口
 ├─ packages/
-│  ├─ domain/                   # 纯领域对象和端口
-│  ├─ contracts/                # IPC DTO、事件、schemaVersion
-│  ├─ pi-adapter/               # 唯一依赖 Pi SDK 的包
-│  ├─ pi-host/                  # 运行时编排、崩溃恢复
-│  ├─ permission-engine/        # 风险分类和审批规则
-│  ├─ workspace-service/        # cwd、基线、diff、文件快照
-│  ├─ resource-service/         # extension/skill/prompt/theme/context/package
-│  ├─ cli-compat/               # Pi CLI 原语义兼容执行
-│  ├─ ui-system/                # 视觉 token、组件、字体、A11y
-│  ├─ i18n/                     # zh-CN/en 与 key 校验
-│  └─ testkit/                  # Mock、事件工厂、E2E fixture
-├─ resources/
+│  ├─ contracts/                    # Bridge、IPC command、runtime event 类型
+│  └─ domain/                       # Task、Project 等纯领域类型
 ├─ docs/
-└─ tests/
+├─ rules/
+└─ package.json
 ```
 
-依赖只能沿以下方向流动：
+目前尚未存在 `packages/pi-adapter`、`packages/pi-host`、`packages/permission-engine`、`packages/ui-system`、`packages/i18n` 等独立包。它们是未来拆分方向，不应在当前文档中被写成已存在模块。
+
+## 4. 依赖方向与边界
 
 ```text
-renderer → ui-system/i18n/contracts/domain
+renderer → contracts/domain
 preload  → contracts
-main     → contracts/domain/pi-host/services
-pi-host  → pi-adapter/permission-engine/workspace-service
-pi-adapter → @earendil-works/pi-coding-agent
-domain   → 无 Electron、React、Pi 依赖
+main     → contracts
+pi-host  → contracts + Pi SDK
 ```
 
-禁止规则：
+必须遵守：
 
-- Renderer 不得 import Pi SDK、Node builtin 或 Credential 类型。
-- Main 不得直接创建 `AgentSession`。
-- `pi-adapter` 不得 import React 或 Electron。
-- 跨进程只传 JSON 可序列化 DTO；不传类实例、函数、句柄和 AbortController。
-- 任何新 IPC 先定义在 `packages/contracts`，再实现 Handler 和 UI。
+- Renderer 不得 import Pi SDK、Node builtin 或凭据对象。
+- Main 不得直接创建 AgentSession。
+- PiHost 是当前唯一允许依赖 Pi SDK 的代码边界。
+- 跨进程消息只能传 JSON/structured-clone 可序列化数据。
+- 新增 IPC 必须先更新 `packages/contracts`，再实现 Main、Preload 和 Renderer。
+- Pi fallback 能力必须独立于 UI 组件，并标明权威来源仍为 Pi CLI/SDK。
 
-## 4. 核心端口
+## 5. 当前 Bridge 能力
 
-`packages/domain` 定义稳定端口，具体实现可替换：
+以 `packages/contracts/src/index.ts` 为准，当前已声明：
+
+- `runtime.status`
+- `projects.list`
+- `sessions.list/create/delete/messages/capabilities/tree/navigate/fork/compact/export`
+- `models.list`
+- `workspace.snapshot`
+- `terminal.execute`
+- `providers.list/login/logout/setApiKey/auth-response/open-auth-url`
+- `agent.prompt/abort/setThinkingLevel/setModel`
+- `approvals.resolve`
+- `events.subscribe`
+
+如果文档与 `packages/contracts` 不一致，以 contracts 和实现为准，文档必须在同一个变更中更新。
+
+## 6. 当前事件流
+
+PiHost 将以下事件发送到 Renderer：
 
 ```ts
-interface AgentSessionPort {
-  prompt(input: PromptInput): Promise<void>;
-  steer(input: PromptInput): Promise<void>;
-  followUp(input: PromptInput): Promise<void>;
-  abort(): Promise<void>;
-  compact(instructions?: string): Promise<void>;
-  retry(): Promise<void>;
-}
-
-interface SessionPort {
-  list(cwd?: string): Promise<TaskSummary[]>;
-  open(id: string): Promise<TaskSnapshot>;
-  fork(id: string, entryId: string): Promise<TaskSnapshot>;
-  clone(id: string): Promise<TaskSnapshot>;
-  navigateTree(id: string, entryId: string, options?: TreeNavigationOptions): Promise<void>;
-  export(id: string, format: "html" | "jsonl"): Promise<string>;
-}
-
-interface ResourcePort {
-  discover(cwd: string): Promise<ResourceCatalog>;
-  reload(): Promise<void>;
-  install(input: PackageInstallInput): Promise<void>;
-  remove(source: string): Promise<void>;
-  update(source?: string): Promise<void>;
-}
+{ type: "runtime.status", payload: "connected" | "starting" | "disconnected" }
+{ type: "agent.event", taskId, event }
+{ type: "approval.requested", taskId, requestId, event: { toolName, args } }
+{ type: "auth.event", requestId, event }
 ```
 
-PiAdapter 把 `ModelRuntime`、`AgentSession`、`SessionManager`、扩展 UI 和 Pi 工具转换成这些端口。Pi 的事件先归一化为 `PiDeckEvent`，Renderer 只订阅归一化事件。
+`agent.event` 当前覆盖 Agent start/end、turn start/end、message update/snapshot、tool execution start/update/end 等事件。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
 
-## 5. Pi CLI 覆盖策略
+## 7. Pi 能力映射
 
-### 原生 UI
+- Pi Session → 左侧会话列表与中央对话。
+- Pi ModelRuntime → Provider 设置、模型选择和思考等级。
+- Pi slash command / Prompt / Skill catalog → Composer 建议和命令面板。
+- Pi Agent event → 流式回复、工具过程、审批和运行状态。
+- Pi Session export/compact/tree → 会话操作和命令面板入口。
+- Pi workspace / git status → Files 与 Changes 面板。
 
-- Interactive TUI：三栏工作区、Composer、审阅区、终端。
-- Session：new、continue、resume、session、name、fork、clone、tree、import、export。
-- Agent：prompt、steer、follow-up、abort、compact、retry。
-- Model/Auth：provider、model、models、thinking、API Key、OAuth、offline；这是 Provider 能力，不是 PiDeck 账户体系。
-- Tools：Read、Bash、Edit、Write、Grep、Find、Ls、自定义工具、审批。
-- Resources：Extension、Skill、Prompt Template、Theme、Context File、Package。
+对于当前没有稳定 Bridge 或 UI 的能力，必须显示未实现或通过 Pi CLI 兼容通道提供，不能伪造成功状态。
 
-### 命令面板
+## 8. 运行时验证
 
-命令面板注册所有内置斜杠命令，并允许 Extension 注册 command、shortcut 和 CLI flag：
+修改 PiHost、contracts、Main、Preload 或 Provider/Session 相关能力后，至少执行：
 
-`/settings`、`/model`、`/scoped-models`、`/export`、`/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/fork`、`/clone`、`/tree`、`/trust`、`/login`、`/logout`、`/new`、`/compact`、`/resume`、`/reload`、`/quit`。
+```text
+runtime.status
+projects.list
+models.list
+providers.list
+sessions.create
+sessions.capabilities
+workspace.snapshot
+terminal.execute（仅无副作用命令）
+```
 
-其中 `/login` 和 `/logout` 只管理 Pi Provider 凭据；PiDeck 不会为自己创建登录态。`/share` 属于用户主动触发的 Pi CLI 能力，不等同于 PiDeck 同步，默认不在工作区常驻入口展示。
+同时运行：
 
-Extension 的 `select`、`confirm`、`input`、`editor`、`custom`、`setWidget`、`setStatus`、`setTitle` 等请求映射到桌面 Dialog、Overlay、Widget、Status Bar 和窗口标题。
-
-### 兼容通道
-
-以下能力保持 Pi 原始进程语义，不强行重做：
-
-- `--print/-p`、stdin、多条初始消息和 `@file`。
-- `--mode text/json/rpc`。
-- `--export`。
-- `auth print-api-key`、`auth print-bearer-token`。
-- `--system-prompt`、`--append-system-prompt`。
-- 任意 Extension 自定义 CLI Flag。
-- 尚未有专用界面的脚本化资源或包操作。
-
-兼容通道在 Utility Process 中运行，拥有独立的 stdout/stderr、退出码、取消和日志；用户可以在“兼容控制台”中查看原始输出，也可以复制为可执行 CLI 命令。
-
-## 6. 功能对齐验收
-
-CI 维护 `CapabilityCatalog`，来源包括：
-
-- Pi `--help` 与版本信息。
-- `packages/coding-agent/src/modes/interactive/slash-commands.ts` 的内置命令。
-- Pi 包管理器的 `install/remove/uninstall/update/list/config` 命令。
-- Extension API 的 command、shortcut、CLI flag 和 UI request 类型。
-
-每一项必须具备：
-
-1. 稳定的 capability ID。
-2. 原始 CLI/Extension 语义说明。
-3. 原生 UI、命令面板或兼容通道中的一个入口。
-4. 成功、取消、错误和权限拒绝测试。
-5. 中英文名称与帮助文本。
-
-任何未映射项都会让覆盖测试失败。这样“全部功能”不是口号，而是可持续验证的清单。
-
-## 7. 性能与故障隔离
-
-- Renderer 首屏不加载 Monaco、xterm、Shiki 和 Pi SDK。
-- PiHost 通过 MessagePort 批量发送事件；流式 Delta 按动画帧合并。
-- 单个任务崩溃不关闭窗口，不影响其他任务的只读状态。
-- Utility Process 重启后从 Session File 恢复任务，不重复提交未确认的 Prompt。
-- 终端和工具输出有上限，完整日志落盘并可打开。
-- 10,000 条消息使用虚拟列表；Session JSONL 不整体复制到多个 Store。
-
-## 8. 安全边界
-
-- `nodeIntegration: false`、`contextIsolation: true`、`sandbox: true`。
-- API Key、OAuth Token、Credential 只存在于 PiHost 或 Pi 的本机凭据存储，不进入 PiDeck Renderer，也不上传到 PiDeck 服务。
-- 所有工具调用先经过 PermissionEngine；高风险命令默认每次确认。
-- 路径检查包含规范化、真实路径、符号链接、Windows 盘符和大小写处理。
-- 外部 URL 只能通过白名单交给系统浏览器。
-- CLI 兼容通道也必须经过同一套项目可信度和审批策略。
+```bash
+npm run typecheck
+npm run build
+```

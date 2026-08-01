@@ -17,10 +17,22 @@ type Theme = "light" | "dark";
 type SuggestionMode = "slash" | "mention" | null;
 type WorkingPhase = "thinking" | "responding" | "tool" | null;
 type MessageLoad = { status: "idle" | "loading" | "ready" | "error"; error?: string };
+type ActivityStep = {
+  id: string;
+  kind: "thinking" | "tool";
+  label: string;
+  detail?: string;
+  args?: unknown;
+  result?: unknown;
+  startedAt: number;
+  endedAt?: number;
+  isError?: boolean;
+};
 type TaskUiState = {
   isSending: boolean;
   streamText: string;
   workingPhase: WorkingPhase;
+  activity: ActivityStep[];
   toolName?: string;
   approval?: { requestId: string; toolName: string; args?: unknown };
 };
@@ -93,6 +105,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [providerFocus, setProviderFocus] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalCommand, setTerminalCommand] = useState("");
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
@@ -136,9 +149,21 @@ export function App() {
 
   function patchTaskUi(taskId: string, patch: Partial<TaskUiState>) {
     setTaskUi((current) => {
-      const previous = current[taskId] ?? { isSending: false, streamText: "", workingPhase: null };
+      const previous = current[taskId] ?? { isSending: false, streamText: "", workingPhase: null, activity: [] };
       return { ...current, [taskId]: { ...previous, ...patch } };
     });
+  }
+
+  function updateActivity(taskId: string, update: (steps: ActivityStep[]) => ActivityStep[]) {
+    setTaskUi((current) => {
+      const previous = current[taskId] ?? { isSending: true, streamText: "", workingPhase: "thinking" as const, activity: [] };
+      return { ...current, [taskId]: { ...previous, activity: update(previous.activity) } };
+    });
+  }
+
+  function openProviderSettings(providerId?: string) {
+    setProviderFocus(providerId ?? null);
+    setSettingsOpen(true);
   }
 
   function showNotice(message: string) {
@@ -299,21 +324,39 @@ export function App() {
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
     if (event?.type === "agent_start") {
-      patchTaskUi(taskId, { isSending: true, workingPhase: "thinking", streamText: "", toolName: undefined });
+      patchTaskUi(taskId, { isSending: true, workingPhase: "thinking", streamText: "", toolName: undefined, activity: [] });
       setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: "running" } : task));
     } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
-    else if (event?.type === "message_update" && event.stream?.type === "text_delta" && event.stream.delta) {
+    else if (event?.type === "message_update" && event.stream?.type === "thinking_delta" && event.stream.delta) {
+      updateActivity(taskId, (steps) => {
+        const last = steps[steps.length - 1];
+        if (last?.kind === "thinking" && !last.endedAt) return [...steps.slice(0, -1), { ...last, detail: `${last.detail ?? ""}${event.stream.delta}` }];
+        return [...steps, { id: `${taskId}:thinking:${Date.now()}`, kind: "thinking", label: copy[language].executionThinking, detail: event.stream.delta, startedAt: Date.now() }];
+      });
+      patchTaskUi(taskId, { workingPhase: "thinking" });
+    } else if (event?.type === "message_update" && event.stream?.type === "text_delta" && event.stream.delta) {
+      updateActivity(taskId, (steps) => steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: Date.now() } : step));
       setTaskUi((current) => {
-        const previous = current[taskId] ?? { isSending: true, streamText: "", workingPhase: "responding" as const };
+        const previous = current[taskId] ?? { isSending: true, streamText: "", workingPhase: "responding" as const, activity: [] };
         return { ...current, [taskId]: { ...previous, isSending: true, workingPhase: "responding", streamText: previous.streamText + event.stream.delta, toolName: undefined } };
       });
-    } else if (event?.type === "tool_execution_start") patchTaskUi(taskId, { workingPhase: "tool", toolName: event.toolName });
-    else if (event?.type === "tool_execution_end") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
+    } else if (event?.type === "tool_execution_start") {
+      const startedAt = Date.now();
+      updateActivity(taskId, (steps) => [...steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: startedAt } : step), { id: event.toolCallId ?? `${taskId}:tool:${startedAt}`, kind: "tool", label: event.toolName ?? copy[language].toolResult, args: event.args, startedAt }]);
+      patchTaskUi(taskId, { workingPhase: "tool", toolName: event.toolName });
+    } else if (event?.type === "tool_execution_update") {
+      updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, result: event.partialResult } : step));
+    } else if (event?.type === "tool_execution_end") {
+      updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step));
+      patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
+    }
     else if (event?.type === "message.snapshot") {
       setMessagesByTask((current) => ({ ...current, [taskId]: (event.messages ?? []) as any[] }));
       setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
       patchTaskUi(taskId, { streamText: "" });
     } else if (event?.type === "agent_settled" || event?.type === "agent_end") {
+      const endedAt = Date.now();
+      updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt }));
       patchTaskUi(taskId, { isSending: false, workingPhase: null, streamText: "", toolName: undefined });
       void window.pideck.sessions.messages(taskId, projectCwd).then((next) => {
         setMessagesByTask((current) => ({ ...current, [taskId]: next as any[] }));
@@ -332,7 +375,7 @@ export function App() {
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); return; }
       if (modifier && event.key.toLowerCase() === "j") { event.preventDefault(); setTerminalOpen((current) => !current); return; }
       if (modifier && event.key.toLowerCase() === "n") { event.preventDefault(); void createTask(); return; }
-      if (modifier && event.key === ",") { event.preventDefault(); setSettingsOpen(true); return; }
+      if (modifier && event.key === ",") { event.preventDefault(); openProviderSettings(); return; }
       if (paletteOpen || settingsOpen || pendingDelete) return;
       const target = event.target;
       const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
@@ -399,10 +442,28 @@ export function App() {
     } finally { setDeletingTaskId(null); }
   }
 
+  async function handleBuiltinCommand(text: string): Promise<boolean> {
+    const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text);
+    if (!match) return false;
+    const command = match[1].toLowerCase();
+    const argument = match[2]?.trim() ?? "";
+    if (command === "login" || command === "logout") { openProviderSettings(argument || undefined); return true; }
+    if (command === "settings") { openProviderSettings(); return true; }
+    if (command === "model") { setModelMenuOpen(true); setThinkingMenuOpen(false); return true; }
+    if (command === "compact") { await compactSession(argument || undefined); return true; }
+    if (command === "export") { await exportSession(argument.toLowerCase() === "html" ? "html" : "jsonl"); return true; }
+    if (command === "new") { await createTask(); return true; }
+    if (command === "reload") { await loadInitialData(); return true; }
+    const knownUiCommands = new Set(["import", "share", "copy", "name", "session", "changelog", "hotkeys", "fork", "clone", "tree", "trust", "resume", "quit", "scoped-models"]);
+    if (knownUiCommands.has(command)) { showNotice(t.commandUnavailable(`/${command}`)); return true; }
+    return false;
+  }
+
   async function sendPrompt() {
     const text = composer.trim();
     if (!text) return;
     if (suggestionMode && suggestions.length > 0) { applySuggestion(suggestions[suggestionIndex] as any); return; }
+    if (await handleBuiltinCommand(text)) { setComposer(""); setSuggestionMode(null); return; }
     if (!activeModel?.authConfigured && !modelOptions.some((model) => model.authConfigured)) { showNotice(t.noModelAvailable); return; }
     const creating = !activeTask;
     const desiredModel = activeModel;
@@ -483,10 +544,10 @@ export function App() {
     finally { setTerminalRunning(false); }
   }
 
-  async function compactSession() {
+  async function compactSession(instructions?: string) {
     if (!activeTask) return showNotice(t.noSessions);
     try {
-      await window.pideck.sessions.compact(activeTask.id, undefined, projectCwd);
+      await window.pideck.sessions.compact(activeTask.id, instructions, projectCwd);
       const next = await window.pideck.sessions.messages(activeTask.id, projectCwd);
       setMessagesByTask((current) => ({ ...current, [activeTask.id]: next as any[] }));
       showNotice(t.contextCompacted);
@@ -511,7 +572,7 @@ export function App() {
         <button className="quiet-button" onClick={() => setPaletteOpen(true)}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
         <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
-        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => setSettingsOpen(true)}><Icon name="settings" /></button>
+        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="settings" /></button>
       </div>
     </header>
 
@@ -547,6 +608,7 @@ export function App() {
           {activeTask && messageLoad.status === "loading" && messages.length === 0 && <ConversationSkeleton label={t.loadingConversation} />}
           {activeTask && messageLoad.status === "error" && <div className="conversation-error" role="alert"><span><Icon name="alert" /> <strong>{t.conversationLoadFailed}</strong><small>{messageLoad.error}</small></span><button className="button ghost" onClick={() => setMessageReload((current) => current + 1)}>{t.retry}</button></div>}
           {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isSending && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
+          <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running={isSending} />
           <MessageTimeline messages={messages} language={language} />
           {streamText && <article className="message assistant-message live-message"><div className="message-meta"><span className="avatar pi-avatar">P</span><span>{t.pi}</span><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
@@ -571,11 +633,11 @@ export function App() {
     </div>
 
     {terminalOpen && <TerminalPanel language={language} cwd={projectCwd} output={terminalOutput} command={terminalCommand} running={terminalRunning} inspectorOpen={inspectorOpen} onCommand={setTerminalCommand} onExecute={() => void executeTerminal()} onClose={() => setTerminalOpen(false)} />}
-    {paletteOpen && <CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); setSettingsOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} />}
+    {paletteOpen && <CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} />}
     {notice && <div className="toast" role="status" aria-live="polite">{notice}</div>}
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
-    {settingsOpen && <ProviderSettings language={language} onClose={() => setSettingsOpen(false)} />}
+    {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} />}
   </div>;
 }
 
@@ -612,6 +674,33 @@ function MessageView({ message, language }: { message: any; language: Language }
     return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
   }
   return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`}><div className="message-meta"><span className={`avatar ${role === "user" ? "user-avatar" : "pi-avatar"}`}>{role === "user" ? t.you.slice(0, 1) : "P"}</span><span>{role === "user" ? t.you : t.pi}</span><span className="message-time">{formatTime(message.timestamp)}</span></div><div className="message-content"><MarkdownContent text={text} language={language} /></div></article>;
+}
+
+function activityValue(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string") return value;
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+}
+
+function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[]; language: Language; running: boolean }) {
+  if (!steps.length) return null;
+  const t = copy[language];
+  const thinkingCount = steps.filter((step) => step.kind === "thinking").length;
+  const toolCount = steps.filter((step) => step.kind === "tool").length;
+  const startedAt = Math.min(...steps.map((step) => step.startedAt));
+  const endedAt = running ? Date.now() : Math.max(...steps.map((step) => step.endedAt ?? step.startedAt));
+  const seconds = Math.max(0, (endedAt - startedAt) / 1000);
+  return <details className="execution-summary" open={false}>
+    <summary><Icon name="spark" size={13} /><span>{t.executionSummary(thinkingCount, toolCount, seconds)}</span><Icon name="chevron" size={12} /></summary>
+    <div className="execution-details">
+      {steps.map((step) => <div className={`execution-step ${step.isError ? "failed" : ""}`} key={step.id}>
+        <div className="execution-step-heading"><span className="execution-step-icon"><Icon name={step.kind === "thinking" ? "spark" : step.isError ? "alert" : "terminal"} size={13} /></span><strong>{step.kind === "thinking" ? t.executionThinking : step.label}</strong><small>{step.endedAt ? `${((step.endedAt - step.startedAt) / 1000).toFixed(1)}s` : t.working}</small></div>
+        {step.kind === "thinking" && step.detail && <pre>{step.detail}</pre>}
+        {step.kind === "tool" && step.args !== undefined && <div className="execution-value"><span>{t.executionArguments}</span><pre>{activityValue(step.args)}</pre></div>}
+        {step.kind === "tool" && step.result !== undefined && <div className="execution-value"><span>{t.executionResult}</span><pre>{activityValue(step.result)}</pre></div>}
+      </div>)}
+    </div>
+  </details>;
 }
 
 function MessageTimeline({ messages, language }: { messages: any[]; language: Language }) {
@@ -727,7 +816,7 @@ function ConfirmDialog({ language, task, busy, onCancel, onConfirm }: { language
   return <div className="dialog-backdrop"><div ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description"><span className="confirm-icon"><Icon name="alert" /></span><h2 id="delete-title">{t.deleteSessionTitle}</h2><p id="delete-description">{t.deleteSessionBody(task.title)}</p><div><button className="button ghost" disabled={busy} onClick={onCancel}>{t.cancel}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? t.deleting : t.deleteSession}</button></div></div></div>;
 }
 
-function ProviderSettings({ language, onClose }: { language: Language; onClose: () => void }) {
+function ProviderSettings({ language, focusProviderId, onClose }: { language: Language; focusProviderId: string | null; onClose: () => void }) {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [providerStates, setProviderStates] = useState<Record<string, ProviderSummary["authState"]>>({});
   const [busyProvider, setBusyProvider] = useState<string | null>(null);
@@ -767,6 +856,10 @@ function ProviderSettings({ language, onClose }: { language: Language; onClose: 
     finally { setLoading(false); }
   }
   useEffect(() => { void loadProviders(); }, []);
+  useEffect(() => {
+    if (!focusProviderId || !providers.length) return;
+    document.querySelector<HTMLElement>(`[data-provider-id="${CSS.escape(focusProviderId)}"]`)?.scrollIntoView({ block: "center" });
+  }, [focusProviderId, providers]);
   useEffect(() => window.pideck.events.subscribe((runtimeEvent) => {
     if (runtimeEvent.type !== "auth.event" || !runtimeEvent.requestId) return;
     const event = runtimeEvent.event as any;
@@ -800,7 +893,7 @@ function ProviderSettings({ language, onClose }: { language: Language; onClose: 
   }
 
   return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2><p>{t.providerAuthDescription}</p></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
-    <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : providers.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; return <div className={`provider-card ${expanded ? "expanded" : ""}`} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button ghost" disabled={busyProvider === provider.id} onClick={() => void logout(provider.id)}>{t.logout}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
+    <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : providers.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button ghost" disabled={busyProvider === provider.id} onClick={() => void logout(provider.id)}>{t.logout}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
     <div className="settings-footer"><span>{providers.length ? t.providerCount(providers.length) : ""}</span><button className="button ghost" onClick={onClose}>{t.done}</button></div>
     {authPrompt && <div className="auth-prompt-backdrop"><form className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p><label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type="password" value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label><div><button type="button" className="button ghost" onClick={() => void resolvePrompt("")}>{t.cancel}</button><button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button></div></form></div>}
   </section></div>;

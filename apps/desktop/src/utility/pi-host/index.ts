@@ -10,6 +10,7 @@ type PiSdk = {
   ModelRuntime: {
     create(options?: { allowModelNetwork?: boolean }): Promise<any>;
   };
+  parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
   SessionManager: {
     list(cwd: string): Promise<any[]>;
     create(cwd: string): {
@@ -490,9 +491,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string; text?: string; cwd?: string } | undefined;
         if (!payload?.taskId || !payload.text) throw new Error("taskId and text are required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const sdk = await loadPiSdk();
         const sessionName = session.sessionManager?.getSessionName?.();
         if (!titledSessions.has(payload.taskId) && (!sessionName || sessionName === "新建任务" || sessionName === "New task")) {
-          const title = payload.text.replace(/\s+/g, " ").trim().slice(0, 80);
+          const parsedSkill = sdk.parseSkillBlock?.(payload.text);
+          const skillCommand = /^\/skill:([^\s]+)/.exec(payload.text);
+          const titleSource = parsedSkill?.userMessage ?? (parsedSkill ? `Skill: ${parsedSkill.name}` : skillCommand ? `Skill: ${skillCommand[1]}` : payload.text);
+          const title = titleSource.replace(/\s+/g, " ").trim().slice(0, 80);
           if (title) session.sessionManager?.appendSessionInfo?.(title);
           titledSessions.add(payload.taskId);
         }

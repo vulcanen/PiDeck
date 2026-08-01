@@ -12,12 +12,14 @@ PiDeck 是为 [Pi Agent Harness](https://pi.dev) 设计的桌面界面端。
 - 直接接入 `@earendil-works/pi-coding-agent`
 - PiDeck 自身不提供账户登录与云同步；Pi Provider 的 API Key/OAuth 认证仍保留
 
-当前阶段为方案冻结，准备按模块实现与做 Pi CLI 功能覆盖验收。
+当前仓库已具备可运行的 Electron + React + PiHost 基线，功能状态以 `docs/pi-cli-feature-matrix.zh-CN.md` 为准；未接入能力会明确标记为计划。
 
 ## 文档
 
-- [PiDeck 产品与技术方案（全功能覆盖版）](docs/product-plan.zh-CN.md)
+- [PiDeck 产品与技术方案（当前基线与后续计划）](docs/product-plan.zh-CN.md)
 - [PiDeck 架构说明](docs/architecture.zh-CN.md)
+- [Pi CLI 功能矩阵](docs/pi-cli-feature-matrix.zh-CN.md)
+- [文档同步规则](rules/documentation-management.md)
 
 ## 本地开发
 
