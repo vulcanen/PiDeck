@@ -223,23 +223,16 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .conversation-skeleton i:nth-of-type(1) { width: 72%; }
 .conversation-skeleton i:nth-of-type(2) { width: 92%; }
 .conversation-skeleton i:nth-of-type(3) { width: 58%; }
-.message { max-width: 860px; margin: 0 auto 30px; }
-.message-meta { display: flex; align-items: center; gap: 8px; min-height: 25px; color: var(--muted); font-size: 11px; }
-.message-meta > span:nth-child(2) { color: var(--text); font-weight: 680; }
-.message-time { margin-left: 2px; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; font-size: 11px; font-weight: 750; }
-.user-avatar { background: var(--surface-strong); color: var(--muted); }
-.pi-avatar { background: var(--accent); color: #fff9f0; font-family: "PT Serif", serif; }
+.message { max-width: 920px; margin: 0 auto 30px; }
 .message-content { max-width: 760px; }
 .message-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0; }
 .message-images img { width: min(260px, 100%); max-height: 220px; object-fit: contain; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
-.user-message { max-width: min(78%, 700px); margin-left: auto; margin-right: max(0px, calc((100% - 860px) / 2)); padding: 14px 16px 15px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 16px 16px 6px 16px; background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
-.user-message .message-meta { justify-content: flex-end; }
+.user-message { max-width: min(78%, 700px); margin-left: auto; margin-right: max(0px, calc((100% - 920px) / 2)); padding: 9px 16px 10px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 16px 16px 6px 16px; background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
 .user-message .message-content { max-width: none; }
 .user-message .markdown-content { white-space: pre-wrap; }
 .assistant-message { padding: 3px 0 26px; border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent); }
-.assistant-message .message-content { padding-left: 32px; }
 .live-message { animation: message-arrive 420ms var(--motion) both; }
+.live-message-status { min-height: 20px; }
 .live-pill { display: inline-flex; align-items: center; gap: 5px; margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; }
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .markdown-content { color: var(--text); overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; }
@@ -290,8 +283,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .tool-message-heading strong { color: var(--text); }
 .tool-message-heading span:last-child { margin-left: auto; font-size: 10px; }
 .tool-message pre { max-height: 260px; margin: 9px 0 0; overflow: auto; white-space: pre-wrap; color: var(--muted); font: 11px/1.6 "JetBrains Mono", ui-monospace, monospace; }
-.working-indicator { display: flex; align-items: center; gap: 8px; max-width: 860px; margin: 8px auto 20px; padding-left: 32px; color: var(--muted); font-size: 12px; }
-.working-avatar { width: 24px; height: 24px; border-radius: 8px; font-size: 11px; }
+.working-indicator { display: flex; align-items: center; gap: 8px; max-width: 920px; margin: 8px auto 20px; color: var(--muted); font-size: 12px; }
 .working-dots { display: inline-flex; gap: 3px; }
 .working-dots span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: working-dot 1.2s var(--motion) infinite; }
 .working-dots span:nth-child(2) { animation-delay: .15s; }

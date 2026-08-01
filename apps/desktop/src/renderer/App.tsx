@@ -656,7 +656,7 @@ export function App() {
           {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isSending && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
           {isSending && <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running />}
           <MessageTimeline messages={messages} language={language} />
-          {streamText && <article className="message assistant-message live-message"><div className="message-meta"><span className="avatar pi-avatar">P</span><span>{t.pi}</span><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
+          {streamText && <article className="message assistant-message live-message"><div className="live-message-status"><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
           {liveApproval && <ApprovalCard approval={liveApproval} language={language} onResolve={async (decision) => {
             try { await window.pideck.approvals.resolve(liveApproval.requestId, decision); if (activeTask) { patchTaskUi(activeTask.id, { approval: undefined, workingPhase: decision === "allow-once" ? "thinking" : null }); setTasks((current) => current.map((task) => task.id === activeTask.id ? { ...task, state: decision === "allow-once" ? "running" : task.state } : task)); } }
@@ -720,7 +720,7 @@ function MessageView({ message, language }: { message: any; language: Language }
     const failed = Boolean(message?.isError);
     return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
   }
-  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`}><div className="message-meta"><span className={`avatar ${role === "user" ? "user-avatar" : "pi-avatar"}`}>{role === "user" ? t.you.slice(0, 1) : "P"}</span><span>{role === "user" ? t.you : t.pi}</span><span className="message-time">{formatTime(message.timestamp)}</span></div><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <img key={`${message.id ?? "image"}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} />)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></article>;
+  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`}><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <img key={`${message.id ?? "image"}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} />)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></article>;
 }
 
 function activityValue(value: unknown): string {
@@ -843,7 +843,7 @@ function PermissionSettings({ language, status, onStatus }: { language: Language
 function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
   const t = copy[language];
   const label = phase === "tool" ? toolName ? t.toolRunning(toolName) : t.toolStatus : phase === "responding" ? t.respondingStatus : t.thinkingStatus;
-  return <div className="working-indicator" role="status" aria-live="polite"><span className="working-avatar">P</span><span>{label}</span><span className="working-dots"><span /><span /><span /></span></div>;
+  return <div className="working-indicator" role="status" aria-live="polite"><span>{label}</span><span className="working-dots"><span /><span /><span /></span></div>;
 }
 
 function ApprovalCard({ approval, language, onResolve }: { approval: { toolName: string; args?: unknown }; language: Language; onResolve: (decision: "allow-once" | "deny") => Promise<void> }) {
