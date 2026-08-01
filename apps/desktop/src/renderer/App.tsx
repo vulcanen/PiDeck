@@ -55,6 +55,17 @@ function formatTime(value?: string | number) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function formatMessageTime(value: string | number | undefined, language: Language) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", {
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function reactNodeText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(reactNodeText).join("");
@@ -720,7 +731,8 @@ function MessageView({ message, language }: { message: any; language: Language }
     const failed = Boolean(message?.isError);
     return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
   }
-  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`}><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <img key={`${message.id ?? "image"}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} />)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></article>;
+  const messageTime = formatMessageTime(message.timestamp, language);
+  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <img key={`${message.id ?? "image"}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} />)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
 }
 
 function activityValue(value: unknown): string {

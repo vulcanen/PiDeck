@@ -223,14 +223,21 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .conversation-skeleton i:nth-of-type(1) { width: 72%; }
 .conversation-skeleton i:nth-of-type(2) { width: 92%; }
 .conversation-skeleton i:nth-of-type(3) { width: 58%; }
-.message { max-width: 920px; margin: 0 auto 30px; }
+.message { display: flex; max-width: 920px; flex-direction: column; margin: 0 auto 30px; outline: none; }
+.message-bubble { min-width: 0; }
+.message-hover-meta { display: flex; min-height: 20px; align-items: center; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; visibility: hidden; opacity: 0; transform: translateY(-3px); transition: opacity 160ms var(--motion), transform 160ms var(--motion), visibility 160ms var(--motion); }
+.message:hover .message-hover-meta, .message:focus .message-hover-meta { visibility: visible; opacity: 1; transform: translateY(0); }
+.message:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 5px; border-radius: 8px; }
 .message-content { max-width: 760px; }
 .message-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0; }
 .message-images img { width: min(260px, 100%); max-height: 220px; object-fit: contain; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
-.user-message { max-width: min(78%, 700px); margin-left: auto; margin-right: max(0px, calc((100% - 920px) / 2)); padding: 9px 16px 10px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 16px 16px 6px 16px; background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
+.user-message { align-items: flex-end; margin-right: max(0px, calc((100% - 920px) / 2)); }
+.user-message .message-bubble { max-width: min(78%, 700px); padding: 9px 16px 10px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 16px 16px 6px 16px; background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
 .user-message .message-content { max-width: none; }
+.user-message .message-hover-meta { align-self: flex-end; padding-right: 4px; }
 .user-message .markdown-content { white-space: pre-wrap; }
 .assistant-message { padding: 3px 0 26px; border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent); }
+.assistant-message .message-hover-meta { justify-content: flex-start; }
 .live-message { animation: message-arrive 420ms var(--motion) both; }
 .live-message-status { min-height: 20px; }
 .live-pill { display: inline-flex; align-items: center; gap: 5px; margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; }
