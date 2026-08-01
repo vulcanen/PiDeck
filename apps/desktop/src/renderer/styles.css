@@ -343,6 +343,8 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .chip.subtle { background: transparent; border: 1px solid var(--line); font-family: "JetBrains Mono", monospace; }
 .model-chip { max-width: min(300px, 42vw); background: transparent; }
 .model-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-chip > .context-ring-wrap { overflow: visible; white-space: normal; }
+.context-total { color: var(--text); font: 700 11px "JetBrains Mono", monospace; }
 .context-ring-wrap { position: relative; display: inline-flex; flex: 0 0 auto; outline: none; }
 .context-ring { position: relative; display: grid; place-items: center; width: 25px; height: 25px; color: var(--muted); font: 8px "JetBrains Mono", monospace; }
 .context-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
