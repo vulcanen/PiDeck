@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { PiDeckRuntimeEvent, PideckBridge } from "@pideck/contracts";
+import type { PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage } from "@pideck/contracts";
 
 const bridge: PideckBridge = {
   runtime: {
@@ -39,7 +39,7 @@ const bridge: PideckBridge = {
     openAuthUrl: (url: string) => ipcRenderer.invoke("providers:open-auth-url", url),
   },
   agent: {
-    prompt: (taskId: string, text: string, cwd?: string) => ipcRenderer.invoke("agent:prompt", taskId, text, cwd),
+    prompt: (taskId: string, text: string, cwd?: string, images?: PromptImage[]) => ipcRenderer.invoke("agent:prompt", taskId, text, cwd, images),
     abort: (taskId: string) => ipcRenderer.invoke("agent:abort", taskId),
     setThinkingLevel: (taskId: string, level: string, cwd?: string) => ipcRenderer.invoke("agent:set-thinking-level", taskId, level, cwd),
     setModel: (taskId: string, providerId: string, modelId: string, cwd?: string) => ipcRenderer.invoke("agent:set-model", taskId, providerId, modelId, cwd),
@@ -53,6 +53,10 @@ const bridge: PideckBridge = {
   },
   approvals: {
     resolve: (requestId: string, decision: "allow-once" | "deny") => ipcRenderer.invoke("approval:resolve", requestId, decision),
+  },
+  permissions: {
+    status: () => ipcRenderer.invoke("permissions:status"),
+    setMode: (mode: PermissionMode) => ipcRenderer.invoke("permissions:set-mode", mode),
   },
 };
 

@@ -63,7 +63,7 @@ PiHost 负责：
 - 执行 Pi built-in tools、Bash、Provider 登录和会话操作。
 - 将跨进程数据转换成可 JSON 序列化的响应。
 
-当前审批实现是 PiHost 内的 `beforeToolCall` 适配：`read`、`grep`、`find`、`ls` 默认直接允许，其他工具通过 PiDeck 审批卡确认。当前仓库没有显式加载 `@gotgenes/pi-permission-system`；该包虽然存在于 npm，并提供 `allow/ask/deny` 与 `yoloMode`，不能在文档中声称它已经是 PiDeck 的实际运行时依赖，除非完成真实的 Pi Extension 加载和事件桥接。
+当前 PiHost 会通过 Pi Extension 机制加载 `@gotgenes/pi-permission-system`（若运行时资源可用），并将其 `allow/ask/deny`、`yoloMode` 和审批 UI 请求桥接到桌面。PiDeck 只保留兼容 fallback：当 Extension 不可加载时，才使用 `beforeToolCall` 的安全工具直通与审批卡。
 
 ## 3. 当前仓库结构
 

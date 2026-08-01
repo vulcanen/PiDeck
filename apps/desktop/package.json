@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@gotgenes/pi-permission-system": "^24.0.0",
     "@pideck/contracts": "0.1.0",
     "@pideck/domain": "0.1.0",
     "@vitejs/plugin-react": "^6.0.5",

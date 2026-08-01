@@ -130,16 +130,16 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 
 ### 7.2 `@gotgenes/pi-permission-system` 现状
 
-`@gotgenes/pi-permission-system` 确实是 npm 上存在的 Pi Extension，当前版本为 `24.0.0`，支持：
+PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。桌面端提供以下模式：
 
-- `allow`：静默允许。
-- `ask`：进入用户审批。
-- `deny`：阻止操作。
-- `yoloMode`：将 `ask` 自动批准。
+- `allow`：静默允许工具执行。
+- `ask`：执行前由 Pi 权限系统请求审批。
+- `deny`：阻止工具执行。
+- `yolo`：开启插件 `yoloMode`，自动批准 `ask`，用于全自动执行。
 
-但截至当前代码基线，PiDeck 没有加载该 Extension，也没有桥接其 `permissions:ui_prompt`、`permissions:decision` 事件。因此当前审批来源仍是 PiDeck 自己的 `beforeToolCall` 适配，不能把两者混用。
+设置变更写入插件的全局 Pi 配置，并重建 AgentSession。Extension 不可加载时，PiHost 才回退到内置 `beforeToolCall` 审批适配。
 
-后续接入该插件时必须：
+接入约束：
 
 1. 在 PiHost 中通过 Pi Extension 机制加载真实包。
 2. 让插件配置继续使用其 Pi 配置目录和 schema。
@@ -154,12 +154,10 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 
 - Session tree 可视化导航、克隆和分支选择器。
 - Steering/Follow-up 队列模式。
-- 图片附件和多模态输入。
 - Extension UI request 的完整映射。
 - Pi Package install/remove/update/config 管理器。
 - Print、JSON、RPC、stdin、Auth Print 兼容通道。
 - Monaco Diff、任务级基线和逐块审阅。
-- `@gotgenes/pi-permission-system` 的真实加载和权限级别切换。
 - 10,000 条消息虚拟列表。
 
 ## 9. 技术与安全约束

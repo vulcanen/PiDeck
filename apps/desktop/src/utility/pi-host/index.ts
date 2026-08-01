@@ -1,6 +1,6 @@
-import type { PiHostRequest, PiHostResponse } from "@pideck/contracts";
+import type { PermissionMode, PiHostRequest, PiHostResponse } from "@pideck/contracts";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +10,8 @@ type PiSdk = {
   ModelRuntime: {
     create(options?: { allowModelNetwork?: boolean }): Promise<any>;
   };
+  DefaultResourceLoader?: new (options: { cwd: string; agentDir: string; additionalExtensionPaths?: string[] }) => any;
+  getAgentDir?: () => string;
   parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
   SessionManager: {
     list(cwd: string): Promise<any[]>;
@@ -21,7 +23,7 @@ type PiSdk = {
     open(path: string): any;
     inMemory(cwd?: string): any;
   };
-  createAgentSession(options: { cwd: string; sessionManager: any; modelRuntime: any }): Promise<{ session: any }>;
+  createAgentSession(options: { cwd: string; sessionManager: any; modelRuntime: any; resourceLoader?: any }): Promise<{ session: any }>;
 };
 
 let sdkPromise: Promise<PiSdk> | undefined;
@@ -40,6 +42,64 @@ const agentSessionPromises = new Map<string, Promise<any>>();
 const capabilitySessions = new Map<string, any>();
 const authWaiters = new Map<string, (value: string) => void>();
 const approvalWaiters = new Map<string, (allow: boolean) => void>();
+let permissionMode: PermissionMode = "ask";
+
+function permissionConfigPath(): string {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+  return path.join(agentDir, "extensions", "pi-permission-system", "config.json");
+}
+
+function loadPermissionMode() {
+  try {
+    const config = JSON.parse(readFileSync(permissionConfigPath(), "utf8")) as { yoloMode?: boolean; permission?: Record<string, unknown> };
+    if (config.yoloMode) return "yolo" as const;
+    const fallback = config.permission?.["*"];
+    if (fallback === "allow" || fallback === "ask" || fallback === "deny") return fallback;
+  } catch {
+    // Use PiDeck's safe ask default when no plugin config exists.
+  }
+  return "ask" as const;
+}
+
+function permissionStatus() {
+  return {
+    mode: permissionMode,
+    source: existsSync(path.resolve(process.cwd(), "node_modules/@gotgenes/pi-permission-system/src/index.ts")) ? "pi-permission-system" : "pideck-fallback",
+    configPath: permissionConfigPath(),
+  } as const;
+}
+
+function persistPermissionMode(mode: PermissionMode) {
+  const configPath = permissionConfigPath();
+  let config: Record<string, unknown> = {};
+  try { if (existsSync(configPath)) config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>; } catch { config = {}; }
+  const policy = mode === "yolo" ? "ask" : mode;
+  config.permission = { ...(typeof config.permission === "object" && config.permission ? config.permission : {}), "*": policy };
+  config.yoloMode = mode === "yolo";
+  mkdirSync(path.dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\\n`, "utf8");
+}
+
+async function setPermissionMode(mode: PermissionMode) {
+  permissionMode = mode;
+  for (const resolve of approvalWaiters.values()) resolve(false);
+  approvalWaiters.clear();
+  for (const session of agentSessions.values()) { if (session?.isStreaming) await session.abort().catch(() => undefined); session?.dispose?.(); }
+  agentSessions.clear();
+  capabilitySessions.clear();
+  persistPermissionMode(mode);
+  return permissionStatus();
+}
+
+function resolvePermissionExtensionPath(): string | undefined {
+  const candidates = [
+    process.env.PIDECK_PERMISSION_EXTENSION,
+    path.resolve(process.cwd(), "node_modules/@gotgenes/pi-permission-system/src/index.ts"),
+    path.resolve(process.cwd(), "apps/desktop/node_modules/@gotgenes/pi-permission-system/src/index.ts"),
+    path.resolve(__dirname, "../../../node_modules/@gotgenes/pi-permission-system/src/index.ts"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  return candidates.find((candidate) => existsSync(candidate));
+}
 
 function resolveWorkspaceCwd(): string {
   if (process.env.PIDECK_WORKSPACE_CWD) return process.env.PIDECK_WORKSPACE_CWD;
@@ -102,6 +162,8 @@ async function getModelRuntime() {
   return modelRuntimePromise;
 }
 
+permissionMode = loadPermissionMode();
+
 function send(response: PiHostResponse) {
   parentPort?.postMessage(response);
   process.send?.(response);
@@ -121,6 +183,43 @@ function emitApproval(requestId: string, taskId: string, toolName: string, args:
   const message = { type: "approval.requested", requestId, taskId, event: { toolName, args: jsonSafe(args) } };
   parentPort?.postMessage(message);
   process.send?.(message);
+}
+
+function createPermissionUi(taskId: string) {
+  return {
+    select: (title: string, options: string[]) => new Promise<string | undefined>((resolve) => {
+      const requestId = `${taskId}:permission:${Date.now()}`;
+      emitApproval(requestId, taskId, "permission-system", { title, options });
+      approvalWaiters.set(requestId, (allowed) => resolve(allowed ? options[0] : options[options.length - 1]));
+    }),
+    confirm: async () => false,
+    input: async () => undefined,
+    notify: (message: string) => emit(taskId, { type: "permission.notice", message }),
+    onTerminalInput: () => () => undefined,
+    setStatus: () => undefined,
+    setWorkingMessage: () => undefined,
+    setWorkingVisible: () => undefined,
+    setWorkingIndicator: () => undefined,
+    setHiddenThinkingLabel: () => undefined,
+    setWidget: () => undefined,
+    setFooter: () => undefined,
+    setHeader: () => undefined,
+    setTitle: () => undefined,
+    custom: async () => undefined,
+    pasteToEditor: () => undefined,
+    setEditorText: () => undefined,
+    getEditorText: () => "",
+    editor: async () => undefined,
+    addAutocompleteProvider: () => undefined,
+    setEditorComponent: () => undefined,
+    getEditorComponent: () => undefined,
+    theme: undefined,
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: false }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => undefined,
+  };
 }
 
 function jsonSafe<T>(value: T): T {
@@ -262,14 +361,26 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       manager = sessionPath ? sdk.SessionManager.open(sessionPath) : sdk.SessionManager.create(cwd);
       sessionManagers.set(taskId, manager);
     }
+    const permissionExtensionPath = resolvePermissionExtensionPath();
+    const resourceLoader = sdk.DefaultResourceLoader && permissionExtensionPath
+      ? new sdk.DefaultResourceLoader({ cwd, agentDir: sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent"), additionalExtensionPaths: [permissionExtensionPath] })
+      : undefined;
+    await resourceLoader?.reload?.();
     const { session } = await sdk.createAgentSession({
       cwd,
       sessionManager: manager,
       modelRuntime: await getModelRuntime(),
+      resourceLoader,
     });
+    const permissionExtensionLoaded = Boolean(permissionExtensionPath && session.extensionRunner?.getRegisteredCommands?.().some((command: any) => (command.invocationName ?? command.name) === "permission-system"));
+    if (permissionExtensionLoaded) {
+      await session.bindExtensions?.({ uiContext: createPermissionUi(taskId) });
+    }
     const previousBeforeToolCall = session.agent.beforeToolCall;
     session.agent.beforeToolCall = async (context: any, signal?: AbortSignal) => {
       const toolName = context.toolCall?.name ?? "unknown";
+      if (permissionMode === "deny") return { block: true, reason: "PiDeck 权限模式已禁止工具调用。" };
+      if (permissionMode === "allow" || permissionMode === "yolo" || permissionExtensionLoaded) return previousBeforeToolCall?.(context, signal);
       const safeTools = new Set(["read", "grep", "find", "ls"]);
       if (safeTools.has(toolName)) return previousBeforeToolCall?.(context, signal);
       const requestId = `${taskId}:${context.toolCall?.id ?? Date.now()}`;
@@ -425,6 +536,7 @@ async function handle(request: PiHostRequest): Promise<void> {
             slashCommands: slash.builtins,
             prompts: slash.prompts,
             skills: slash.skills,
+            contextUsage: jsonSafe(session.getContextUsage?.()),
           },
         });
         return;
@@ -488,20 +600,21 @@ async function handle(request: PiHostRequest): Promise<void> {
         return;
       }
       case "agent.prompt": {
-        const payload = request.payload as { taskId?: string; text?: string; cwd?: string } | undefined;
-        if (!payload?.taskId || !payload.text) throw new Error("taskId and text are required");
+        const payload = request.payload as { taskId?: string; text?: string; cwd?: string; images?: Array<{ data: string; mimeType: string }> } | undefined;
+        if (!payload?.taskId || (!payload.text && !payload.images?.length)) throw new Error("taskId and text or images are required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         const sdk = await loadPiSdk();
         const sessionName = session.sessionManager?.getSessionName?.();
         if (!titledSessions.has(payload.taskId) && (!sessionName || sessionName === "新建任务" || sessionName === "New task")) {
-          const parsedSkill = sdk.parseSkillBlock?.(payload.text);
-          const skillCommand = /^\/skill:([^\s]+)/.exec(payload.text);
-          const titleSource = parsedSkill?.userMessage ?? (parsedSkill ? `Skill: ${parsedSkill.name}` : skillCommand ? `Skill: ${skillCommand[1]}` : payload.text);
+          const promptText = payload.text ?? "";
+          const parsedSkill = sdk.parseSkillBlock?.(promptText);
+          const skillCommand = /^\/skill:([^\s]+)/.exec(promptText);
+          const titleSource = parsedSkill?.userMessage ?? (parsedSkill ? `Skill: ${parsedSkill.name}` : skillCommand ? `Skill: ${skillCommand[1]}` : promptText);
           const title = titleSource.replace(/\s+/g, " ").trim().slice(0, 80);
           if (title) session.sessionManager?.appendSessionInfo?.(title);
           titledSessions.add(payload.taskId);
         }
-        await session.prompt(payload.text, { source: "interactive" });
+        await session.prompt(payload.text ?? "", { source: "interactive", images: payload.images });
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -509,10 +622,9 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
         const sessionPath = sessionFiles.get(payload.taskId);
-        if (!sessionPath) throw new Error("Session file not found");
         const session = agentSessions.get(payload.taskId);
         if (session?.isStreaming) await session.abort();
-        await unlink(sessionPath);
+        if (sessionPath && existsSync(sessionPath)) await unlink(sessionPath);
         sessionFiles.delete(payload.taskId);
         titledSessions.delete(payload.taskId);
         sessionManagers.delete(payload.taskId);
@@ -627,6 +739,15 @@ async function handle(request: PiHostRequest): Promise<void> {
         authWaiters.delete(payload.requestId);
         resolve(payload.value);
         send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "permissions.status":
+        send({ id: request.id, ok: true, result: permissionStatus() });
+        return;
+      case "permissions.setMode": {
+        const payload = request.payload as { mode?: PermissionMode } | undefined;
+        if (!payload?.mode || !["ask", "allow", "deny", "yolo"].includes(payload.mode)) throw new Error("Invalid permission mode");
+        send({ id: request.id, ok: true, result: await setPermissionMode(payload.mode) });
         return;
       }
       case "approval.resolve": {

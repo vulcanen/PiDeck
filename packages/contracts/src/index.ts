@@ -3,6 +3,24 @@ import type { ProjectSummary, TaskSummary } from "@pideck/domain";
 export const IPC_VERSION = 1 as const;
 
 export type AuthMethod = "api-key" | "oauth";
+export type PermissionMode = "ask" | "allow" | "deny" | "yolo";
+
+export interface PermissionStatus {
+  mode: PermissionMode;
+  source: "pi-permission-system" | "pideck-fallback";
+  configPath?: string;
+}
+
+export interface PromptImage {
+  data: string;
+  mimeType: string;
+}
+
+export interface ContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
 
 export interface ProviderSummary {
   id: string;
@@ -29,6 +47,7 @@ export interface SessionCapabilities {
   slashCommands: Array<{ name: string; description?: string; argumentHint?: string }>;
   prompts: Array<{ name: string; description?: string }>;
   skills: Array<{ name: string; description?: string }>;
+  contextUsage?: ContextUsage;
 }
 
 export interface WorkspaceFile {
@@ -89,7 +108,7 @@ export interface PideckBridge {
     openAuthUrl(url: string): Promise<void>;
   };
   agent: {
-    prompt(taskId: string, text: string, cwd?: string): Promise<void>;
+    prompt(taskId: string, text: string, cwd?: string, images?: PromptImage[]): Promise<void>;
     abort(taskId: string): Promise<void>;
     setThinkingLevel(taskId: string, level: string, cwd?: string): Promise<void>;
     setModel(taskId: string, providerId: string, modelId: string, cwd?: string): Promise<void>;
@@ -99,6 +118,10 @@ export interface PideckBridge {
   };
   approvals: {
     resolve(requestId: string, decision: "allow-once" | "deny"): Promise<void>;
+  };
+  permissions: {
+    status(): Promise<PermissionStatus>;
+    setMode(mode: PermissionMode): Promise<PermissionStatus>;
   };
 }
 
@@ -135,7 +158,9 @@ export type PiHostCommand =
   | "agent.abort"
   | "agent.setThinkingLevel"
   | "agent.setModel"
-  | "approval.resolve";
+  | "approval.resolve"
+  | "permissions.status"
+  | "permissions.setMode";
 
 export interface PiHostRequest {
   id: string;

@@ -130,11 +130,13 @@ function registerIpcHandlers() {
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) auth URLs can be opened");
     await shell.openExternal(parsed.toString());
   });
-  ipcMain.handle("agent:prompt", (_event, taskId: string, text: string, cwd?: string) => requestHost("agent.prompt", { taskId, text, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>) => requestHost("agent.prompt", { taskId, text, cwd: cwd ?? process.cwd(), images }));
   ipcMain.handle("agent:abort", (_event, taskId: string) => requestHost("agent.abort", { taskId }));
   ipcMain.handle("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("approval:resolve", (_event, requestId: string, decision: "allow-once" | "deny") => requestHost("approval.resolve", { requestId, decision }));
+  ipcMain.handle("permissions:status", () => requestHost("permissions.status"));
+  ipcMain.handle("permissions:set-mode", (_event, mode: "ask" | "allow" | "deny" | "yolo") => requestHost("permissions.setMode", { mode }));
 }
 
 function createWindow() {

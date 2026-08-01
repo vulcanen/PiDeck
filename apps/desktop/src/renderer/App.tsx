@@ -1,7 +1,10 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import type {
   AuthMethod,
+  ContextUsage,
   ModelSummary,
+  PermissionMode,
+  PermissionStatus,
   ProviderSummary,
   SessionCapabilities,
   WorkspaceChange,
@@ -37,6 +40,7 @@ type TaskUiState = {
   approval?: { requestId: string; toolName: string; args?: unknown };
 };
 type AuthPromptState = { requestId: string; message: string; placeholder: string; value: string };
+type ImageAttachment = { id: string; data: string; mimeType: string; name: string };
 
 function textFromMessage(message: any): string {
   if (typeof message?.content === "string") return message.content;
@@ -102,6 +106,7 @@ export function App() {
   const [messageReload, setMessageReload] = useState(0);
   const [taskUi, setTaskUi] = useState<Record<string, TaskUiState>>({});
   const [composer, setComposer] = useState("");
+  const [composerImages, setComposerImages] = useState<ImageAttachment[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -116,6 +121,8 @@ export function App() {
   const [capabilities, setCapabilities] = useState<SessionCapabilities | null>(null);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [activeModel, setActiveModel] = useState<ModelSummary | null>(null);
+  const [contextUsage, setContextUsage] = useState<ContextUsage | undefined>(undefined);
+  const [permissionStatus, setPermissionStatus] = useState<PermissionStatus | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState("off");
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(["off"]);
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
@@ -201,6 +208,7 @@ export function App() {
         setCapabilities(capabilitiesResult.value);
         setThinkingLevel(capabilitiesResult.value.thinkingLevel);
         setThinkingLevels(capabilitiesResult.value.thinkingLevels);
+        setContextUsage(capabilitiesResult.value.contextUsage);
         setActiveModel(capabilitiesResult.value.model?.authConfigured ? capabilitiesResult.value.model : modelsResult.status === "fulfilled" ? modelsResult.value.find((model) => model.authConfigured) ?? null : null);
       } else showNotice(`Pi capabilities: ${capabilitiesResult.reason instanceof Error ? capabilitiesResult.reason.message : String(capabilitiesResult.reason)}`);
       setActiveTask((current) => current ?? remoteTasks[0] ?? null);
@@ -274,6 +282,7 @@ export function App() {
         setActiveModel(next.model?.authConfigured ? next.model : models.find((model) => model.authConfigured) ?? null);
         setThinkingLevel(next.thinkingLevel);
         setThinkingLevels(next.thinkingLevels);
+        setContextUsage(next.contextUsage);
       }).catch((error) => !cancelled && showNotice(error instanceof Error ? error.message : String(error)));
       return () => { cancelled = true; };
     }
@@ -296,6 +305,7 @@ export function App() {
         setActiveModel(next.model?.authConfigured ? next.model : models.find((model) => model.authConfigured) ?? null);
         setThinkingLevel(next.thinkingLevel);
         setThinkingLevels(next.thinkingLevels);
+        setContextUsage(next.contextUsage);
       } else {
         const fallback = models.find((model) => model.authConfigured) ?? null;
         setActiveModel(fallback);
@@ -362,12 +372,13 @@ export function App() {
         setMessagesByTask((current) => ({ ...current, [taskId]: next as any[] }));
         setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
       }).catch((error) => setMessageLoads((current) => ({ ...current, [taskId]: { status: "error", error: error instanceof Error ? error.message : String(error) } })));
+      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
       void refreshWorkspace();
       setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: "idle", updatedAt: new Date().toISOString() } : task));
     }
   }), [projectCwd, language]);
 
-  useEffect(() => { void window.pideck.runtime.status().then(setRuntimeStatus).catch(() => setRuntimeStatus("disconnected")); }, []);
+  useEffect(() => { void window.pideck.runtime.status().then(setRuntimeStatus).catch(() => setRuntimeStatus("disconnected")); void window.pideck.permissions.status().then(setPermissionStatus).catch(() => undefined); }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -461,18 +472,19 @@ export function App() {
 
   async function sendPrompt() {
     const text = composer.trim();
-    if (!text) return;
+    if (!text && !composerImages.length) return;
     if (suggestionMode && suggestions.length > 0) { applySuggestion(suggestions[suggestionIndex] as any); return; }
     if (await handleBuiltinCommand(text)) { setComposer(""); setSuggestionMode(null); return; }
     if (!activeModel?.authConfigured && !modelOptions.some((model) => model.authConfigured)) { showNotice(t.noModelAvailable); return; }
     const creating = !activeTask;
     const desiredModel = activeModel;
     const desiredThinking = thinkingLevel;
+    const images = composerImages;
     const task = activeTask ?? await createTask();
     if (!task || taskUi[task.id]?.isSending) return;
     const optimisticId = `local-${Date.now()}`;
-    setComposer(""); setSuggestionMode(null);
-    setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: text, timestamp: new Date().toISOString() }] }));
+    setComposer(""); setComposerImages([]); setSuggestionMode(null);
+    setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
     patchTaskUi(task.id, { isSending: true, workingPhase: "thinking", streamText: "" });
     const taskTitle = text.replace(/\s+/g, " ").trim().slice(0, 80);
@@ -482,7 +494,7 @@ export function App() {
     try {
       if (creating && desiredModel) await window.pideck.agent.setModel(task.id, desiredModel.providerId, desiredModel.id, projectCwd);
       if (creating && desiredThinking !== "off") await window.pideck.agent.setThinkingLevel(task.id, desiredThinking, projectCwd);
-      await window.pideck.agent.prompt(task.id, text, projectCwd);
+      await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })));
     } catch (error) {
       patchTaskUi(task.id, { isSending: false, workingPhase: null });
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
@@ -495,6 +507,24 @@ export function App() {
     if (!activeTask) return;
     try { await window.pideck.agent.abort(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, workingPhase: null, streamText: "" }); }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+  }
+
+  function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const imageItems = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith("image/"));
+    if (!imageItems.length) return;
+    event.preventDefault();
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        const match = /^data:([^;]+);base64,(.+)$/.exec(result);
+        if (!match) return;
+        setComposerImages((current) => [...current, { id: `${Date.now()}-${Math.random()}`, data: match[2], mimeType: match[1], name: file.name || "pasted-image" }]);
+      };
+      reader.readAsDataURL(file);
+    }
   }
 
   function updateComposer(value: string) {
@@ -572,7 +602,7 @@ export function App() {
         <button className="quiet-button" onClick={() => setPaletteOpen(true)}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
         <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
-        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="settings" /></button>
+        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="key" /></button>
       </div>
     </header>
 
@@ -622,7 +652,7 @@ export function App() {
           if (suggestionMode && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setSuggestionIndex((current) => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))); return; }
           if (event.key === "Escape") { setSuggestionMode(null); return; }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendPrompt(); }
-        }} onSend={() => void (isSending ? abortActive() : sendPrompt())} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} />
+        }} onSend={() => void (isSending ? abortActive() : sendPrompt())} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} />
       </main>
 
       {inspectorOpen && <button className="inspector-backdrop" aria-label={t.closeInspector} onClick={() => setInspectorOpen(false)} />}
@@ -633,11 +663,11 @@ export function App() {
     </div>
 
     {terminalOpen && <TerminalPanel language={language} cwd={projectCwd} output={terminalOutput} command={terminalCommand} running={terminalRunning} inspectorOpen={inspectorOpen} onCommand={setTerminalCommand} onExecute={() => void executeTerminal()} onClose={() => setTerminalOpen(false)} />}
-    {paletteOpen && <CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} />}
+    {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
     {notice && <div className="toast" role="status" aria-live="polite">{notice}</div>}
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
-    {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} />}
+    {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} permissionStatus={permissionStatus} onPermissionStatus={setPermissionStatus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} />}
   </div>;
 }
 
@@ -660,12 +690,13 @@ function StateMark({ state, language }: { state: TaskSummary["state"]; language:
 
 function TaskRow({ task, active, language, onClick, onContextMenu, onMenu }: { task: TaskSummary; active: boolean; language: Language; onClick: () => void; onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void; onMenu: (rect: DOMRect) => void }) {
   const t = copy[language];
-  return <div className={`task-row ${active ? "active" : ""}`} onContextMenu={onContextMenu}><button className="task-main" onClick={onClick} aria-current={active ? "page" : undefined}><StateMark state={task.state} language={language} /><span className="task-copy"><strong>{task.title}</strong><small>{formatTime(task.updatedAt)}</small></span>{task.unread && <span className="unread-dot" title={t.unread} />}</button><button className="task-more" aria-label={t.moreActions} title={t.moreActions} onClick={(event) => { event.stopPropagation(); onMenu(event.currentTarget.getBoundingClientRect()); }}><Icon name="more" size={14} /></button></div>;
+  return <div className={`task-row ${active ? "active" : ""}`} onContextMenu={onContextMenu}><button className="task-main" onClick={onClick} aria-current={active ? "page" : undefined}><span className="task-copy"><strong>{task.title}</strong><small>{formatTime(task.updatedAt)}</small></span>{task.state === "running" && <span className="task-working-spinner" role="img" aria-label={t.sessionState.running} title={t.sessionState.running} />}{task.state === "waiting-approval" && <span className="task-approval-mark" role="img" aria-label={t.sessionState.approval} title={t.sessionState.approval}>!</span>}{task.unread && <span className="unread-dot" title={t.unread} />}</button><button className="task-more" aria-label={t.moreActions} title={t.moreActions} onClick={(event) => { event.stopPropagation(); onMenu(event.currentTarget.getBoundingClientRect()); }}><Icon name="more" size={14} /></button></div>;
 }
 
 function MessageView({ message, language }: { message: any; language: Language }) {
   const text = textFromMessage(message);
-  if (!text && message?.role !== "toolResult") return null;
+  const images = Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === "image" && part.data && part.mimeType) : [];
+  if (!text && !images.length && message?.role !== "toolResult") return null;
   const t = copy[language];
   const role = message?.role === "user" ? "user" : message?.role === "toolResult" ? "tool" : "assistant";
   if (role === "tool") {
@@ -673,7 +704,7 @@ function MessageView({ message, language }: { message: any; language: Language }
     const failed = Boolean(message?.isError);
     return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
   }
-  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`}><div className="message-meta"><span className={`avatar ${role === "user" ? "user-avatar" : "pi-avatar"}`}>{role === "user" ? t.you.slice(0, 1) : "P"}</span><span>{role === "user" ? t.you : t.pi}</span><span className="message-time">{formatTime(message.timestamp)}</span></div><div className="message-content"><MarkdownContent text={text} language={language} /></div></article>;
+  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`}><div className="message-meta"><span className={`avatar ${role === "user" ? "user-avatar" : "pi-avatar"}`}>{role === "user" ? t.you.slice(0, 1) : "P"}</span><span>{role === "user" ? t.you : t.pi}</span><span className="message-time">{formatTime(message.timestamp)}</span></div><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <img key={`${message.id ?? "image"}-${index}`} src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} />)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></article>;
 }
 
 function activityValue(value: unknown): string {
@@ -756,6 +787,43 @@ function MessageTimeline({ messages, language }: { messages: any[]; language: La
   return <>{items.map((item) => item.type === "execution" ? <ExecutionSummary key={`execution-${item.index}`} steps={item.steps} language={language} running={false} /> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} />)}</>;
 }
 
+function formatTokenCount(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
+function ContextRing({ usage, language }: { usage?: ContextUsage; language: Language }) {
+  const t = copy[language];
+  const percent = usage?.percent === null || usage?.percent === undefined ? 0 : Math.max(0, Math.min(100, usage.percent));
+  const circumference = 2 * Math.PI * 8;
+  const dash = circumference * percent / 100;
+  return <span className="context-ring-wrap" tabIndex={0} aria-label={t.contextUsage}>
+    <span className="context-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle className="context-ring-track" cx="10" cy="10" r="8" /><circle className="context-ring-progress" cx="10" cy="10" r="8" strokeDasharray={`${dash} ${circumference - dash}`} /></svg><span>{usage?.percent === null || usage?.percent === undefined ? "—" : `${Math.round(percent)}%`}</span></span>
+    <span className="context-tooltip" role="tooltip"><strong>{t.contextUsage}</strong><span>{t.contextUsed}: {formatTokenCount(usage?.tokens)} tokens</span><span>{t.contextWindow}: {formatTokenCount(usage?.contextWindow)} tokens</span></span>
+  </span>;
+}
+
+function PermissionSettings({ language, status, onStatus }: { language: Language; status: PermissionStatus | null; onStatus: (status: PermissionStatus) => void }) {
+  const t = copy[language];
+  const modes: Array<{ id: PermissionMode; label: string; description: string }> = [
+    { id: "ask", label: t.permissionModeAsk, description: t.permissionModeAskDescription },
+    { id: "allow", label: t.permissionModeAllow, description: t.permissionModeAllowDescription },
+    { id: "deny", label: t.permissionModeDeny, description: t.permissionModeDenyDescription },
+    { id: "yolo", label: t.permissionModeYolo, description: t.permissionModeYoloDescription },
+  ];
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function changeMode(mode: PermissionMode) {
+    setBusy(true); setError(null);
+    try { onStatus(await window.pideck.permissions.setMode(mode)); }
+    catch (nextError) { setError(nextError instanceof Error ? nextError.message : String(nextError)); }
+    finally { setBusy(false); }
+  }
+  return <section className="permission-settings" aria-labelledby="permission-title"><div className="permission-heading"><div><h3 id="permission-title">{t.permissionSettings}</h3><p>{t.permissionSettingsDescription}</p></div>{status && <small>{t.permissionSource(status.source)}</small>}</div><div className="permission-modes" role="radiogroup" aria-label={t.permissionSettings}>{modes.map((mode) => <button key={mode.id} type="button" role="radio" aria-checked={status?.mode === mode.id} disabled={busy} className={status?.mode === mode.id ? "selected" : ""} onClick={() => void changeMode(mode.id)}><span className={`permission-mode-dot ${mode.id}`} /><span><strong>{mode.label}</strong><small>{mode.description}</small></span><Icon name="check" size={13} /></button>)}</div>{error && <div className="field-error" role="alert">{error}</div>}</section>;
+}
+
 function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
   const t = copy[language];
   const label = phase === "tool" ? toolName ? t.toolRunning(toolName) : t.toolStatus : phase === "responding" ? t.respondingStatus : t.thinkingStatus;
@@ -774,10 +842,16 @@ function ApprovalCard({ approval, language, onResolve }: { approval: { toolName:
   return <div className="approval-card" role="alert"><div className="approval-top"><div className="approval-title"><span className="approval-icon"><Icon name="terminal" size={15} /></span><div><strong>{t.approval}</strong><small>{t.approvalRequest(approval.toolName)}</small></div></div><span className="risk-label">{approval.toolName.toUpperCase()}</span></div><div className="command-preview"><span className="prompt-symbol">$</span><code>{JSON.stringify(approval.args ?? {}, null, 2)}</code></div>{error && <div className="inline-error" role="alert">{error}</div>}<div className="approval-actions"><button className="button primary" disabled={resolving} onClick={() => void resolve("allow-once")}><Icon name="check" size={14} />{t.approve}</button><button className="button ghost" disabled={resolving} onClick={() => void resolve("deny")}><Icon name="x" size={14} />{t.reject}</button><span className="approval-scope">{resolving ? t.loading : t.approvalScope}</span></div></div>;
 }
 
-function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
+function highlightComposerText(value: string): ReactNode[] {
+  const parts = value.split(/(\/@?[^\s]+|@[\w./\\-]+)/g);
+  return parts.map((part, index) => /^\//.test(part) ? <mark className="composer-token command-token" key={index}>{part}</mark> : /^@/.test(part) ? <mark className="composer-token mention-token" key={index}>{part}</mark> : <span key={index}>{part}</span>);
+}
+
+function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
   const t = copy[props.language];
   const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const [modelQuery, setModelQuery] = useState("");
   const filteredModels = props.modelOptions.filter((model) => `${model.providerName} ${model.name}`.toLowerCase().includes(modelQuery.toLowerCase()));
   useEffect(() => { suggestionRefs.current[props.suggestionIndex]?.scrollIntoView({ block: "nearest" }); }, [props.suggestionIndex, props.suggestions.length, props.suggestionMode]);
@@ -790,9 +864,9 @@ function Composer(props: { value: string; onChange: (value: string) => void; onK
   useEffect(() => { if (!props.modelMenuOpen) setModelQuery(""); }, [props.modelMenuOpen]);
   return <div className="composer-wrap"><div className="composer-shell">
     {props.suggestionMode && props.suggestions.length > 0 && <div className="suggestion-popover" role="listbox" id="composer-suggestions" aria-label={props.suggestionMode === "mention" ? t.files : t.command}>{props.suggestions.map((item, index) => <button ref={(element) => { suggestionRefs.current[index] = element; }} key={item.name ?? item.path} type="button" role="option" aria-selected={index === props.suggestionIndex} className={index === props.suggestionIndex ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => props.onSuggestion(item)}><span className="suggestion-symbol">{props.suggestionMode === "mention" ? "@" : "/"}</span><span><strong>{item.name ?? item.path}</strong><small>{item.description ?? item.path}</small></span></button>)}</div>}
-    <div className="composer"><textarea ref={textareaRef} autoFocus value={props.value} onChange={(event) => props.onChange(event.target.value)} onKeyDown={props.onKeyDown} placeholder={t.ask} rows={2} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /><div className="composer-footer"><div className="composer-tools">
+    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /><button type="button" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><div ref={highlightRef} className="composer-highlight" aria-hidden="true">{props.value ? highlightComposerText(props.value) : <span className="composer-placeholder">{t.ask}</span>}</div><textarea ref={textareaRef} autoFocus value={props.value} onChange={(event) => props.onChange(event.target.value)} onPaste={props.onPaste} onScroll={(event) => { if (highlightRef.current) highlightRef.current.scrollTop = event.currentTarget.scrollTop; }} onKeyDown={props.onKeyDown} placeholder="" rows={2} aria-label={t.ask} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
       <div className="menu-anchor"><button className="chip" aria-haspopup="menu" aria-expanded={props.thinkingMenuOpen} onClick={props.onThinkingMenu}><Icon name="spark" size={14} /><span>{props.thinkingLevel}</span><Icon name="chevron" size={13} /></button>{props.thinkingMenuOpen && <div className="inline-menu" role="menu" aria-label={t.chooseThinking}><strong>{t.chooseThinking}</strong>{props.thinkingLevels.map((level) => <button role="menuitemradio" aria-checked={level === props.thinkingLevel} key={level} className={level === props.thinkingLevel ? "active" : ""} onClick={() => props.onThinking(level)}>{level}</button>)}</div>}</div>
-      <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
+      <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRing usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
       <button className="chip subtle" aria-label={t.mentionLabel} title={t.mentionLabel} onClick={() => props.onChange(`${props.value}${props.value ? " " : ""}@`)}><Icon name="plus" size={14} />@</button>
       <button className="chip subtle terminal-trigger" onClick={props.onTerminal}><Icon name="terminal" size={13} />{t.terminal}</button>
     </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !props.value.trim()} aria-label={props.isSending ? t.stop : t.send} onClick={props.onSend}><Icon name={props.isSending ? "stop" : "send"} size={16} /></button></div></div>
@@ -823,6 +897,16 @@ function TerminalPanel({ language, cwd, output, command, running, inspectorOpen,
   return <section className={`terminal-float ${inspectorOpen ? "with-inspector" : ""}`} role="dialog" aria-modal="false" aria-label={t.terminal}><div className="terminal-float-header"><span><Icon name="terminal" size={14} />{t.terminal}</span><small>{cwd} · {t.terminalRuntime}</small><button className="icon-button" onClick={onClose} aria-label={t.closeTerminal}><Icon name="x" size={14} /></button></div><div ref={outputRef} className="terminal-output" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>{output.length === 0 ? <div className="terminal-muted">{t.terminalEmpty}</div> : output.map((line, index) => <pre className="terminal-line" key={`${index}-${line.slice(0, 20)}`}>{line}</pre>)}</div><form className="terminal-input-row" onSubmit={(event) => { event.preventDefault(); onExecute(); }}><span className="terminal-green">›</span><input ref={inputRef} value={command} onChange={(event) => onCommand(event.target.value)} placeholder={t.terminalPlaceholder} aria-label={t.terminalPlaceholder} disabled={running} /><span className="terminal-running">{running ? "…" : ""}</span></form></section>;
 }
 
+class CommandPaletteBoundary extends Component<{ children: ReactNode; language: Language; onClose: () => void }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(error: unknown) { return { error: error instanceof Error ? error.message : String(error) }; }
+  componentDidCatch(error: unknown, info: ErrorInfo) { console.error("Command palette render failed", error, info.componentStack); }
+  render() {
+    if (this.state.error) { const t = copy[this.props.language]; return <div className="palette-backdrop"><div className="command-palette palette-error" role="alert"><strong>{t.commandPanelError}</strong><button className="button ghost" onClick={this.props.onClose}>{t.retry}</button></div></div>; }
+    return this.props.children;
+  }
+}
+
 function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNewTask, onTerminal, onSettings, onCompact, onExport }: { language: Language; commands: Array<{ name: string; description?: string; source?: string }>; shortcut: (key: string) => string; onCommand: (command: { name: string }) => void; onClose: () => void; onNewTask: () => void; onTerminal: () => void; onSettings: () => void; onCompact?: () => void; onExport?: (format: "jsonl" | "html") => void }) {
   const t = copy[language];
   const [query, setQuery] = useState("");
@@ -833,11 +917,12 @@ function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNe
   const quickItems = [
     { id: "new-task", label: t.newTask, description: shortcut("N"), action: onNewTask, icon: "plus" },
     { id: "terminal", label: t.terminal, description: shortcut("J"), action: onTerminal, icon: "terminal" },
-    { id: "provider", label: t.provider, description: shortcut(","), action: onSettings, icon: "settings" },
+    { id: "provider", label: t.provider, description: shortcut(","), action: onSettings, icon: "key" },
     ...(onCompact ? [{ id: "compact", label: t.compactContext, description: "", action: onCompact, icon: "spark" }] : []),
     ...(onExport ? [{ id: "export-jsonl", label: t.exportJsonl, description: "", action: () => onExport("jsonl"), icon: "file" }, { id: "export-html", label: t.exportHtml, description: "", action: () => onExport("html"), icon: "file" }] : []),
   ];
-  const filteredCommands = commands.filter((command) => `${command.name} ${command.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
+  const safeCommands = (commands ?? []).filter((command) => command && typeof command.name === "string");
+  const filteredCommands = safeCommands.filter((command) => `${command.name} ${command.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const filteredQuick = quickItems.filter((item) => `${item.label} ${item.description}`.toLowerCase().includes(query.toLowerCase()));
   const items = [...filteredQuick, ...filteredCommands.map((command) => ({ id: `command:${command.name}`, label: `/${command.name}`, description: command.description ?? t.piCommand, action: () => onCommand(command), icon: "command" }))];
   useEffect(() => setSelectedIndex(0), [query]);
@@ -857,7 +942,7 @@ function ConfirmDialog({ language, task, busy, onCancel, onConfirm }: { language
   return <div className="dialog-backdrop"><div ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description"><span className="confirm-icon"><Icon name="alert" /></span><h2 id="delete-title">{t.deleteSessionTitle}</h2><p id="delete-description">{t.deleteSessionBody(task.title)}</p><div><button className="button ghost" disabled={busy} onClick={onCancel}>{t.cancel}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? t.deleting : t.deleteSession}</button></div></div></div>;
 }
 
-function ProviderSettings({ language, focusProviderId, onClose }: { language: Language; focusProviderId: string | null; onClose: () => void }) {
+function ProviderSettings({ language, focusProviderId, permissionStatus, onPermissionStatus, onClose }: { language: Language; focusProviderId: string | null; permissionStatus: PermissionStatus | null; onPermissionStatus: (status: PermissionStatus) => void; onClose: () => void }) {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [providerStates, setProviderStates] = useState<Record<string, ProviderSummary["authState"]>>({});
   const [busyProvider, setBusyProvider] = useState<string | null>(null);
@@ -933,7 +1018,7 @@ function ProviderSettings({ language, focusProviderId, onClose }: { language: La
     finally { setBusyProvider(null); }
   }
 
-  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2><p>{t.providerAuthDescription}</p></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
+  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2><p>{t.providerAuthDescription}</p></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div><PermissionSettings language={language} status={permissionStatus} onStatus={onPermissionStatus} />{authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
     <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : providers.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button ghost" disabled={busyProvider === provider.id} onClick={() => void logout(provider.id)}>{t.logout}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
     <div className="settings-footer"><span>{providers.length ? t.providerCount(providers.length) : ""}</span><button className="button ghost" onClick={onClose}>{t.done}</button></div>
     {authPrompt && <div className="auth-prompt-backdrop"><form className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p><label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type="password" value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label><div><button type="button" className="button ghost" onClick={() => void resolvePrompt("")}>{t.cancel}</button><button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button></div></form></div>}

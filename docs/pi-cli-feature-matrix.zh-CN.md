@@ -41,25 +41,24 @@
 
 ## 权限与审批边界
 
-当前代码的审批适配位于 `apps/desktop/src/utility/pi-host/index.ts`：
+当前 PiHost 优先通过 Pi Extension 机制加载 `@gotgenes/pi-permission-system`：
 
-- `read`、`grep`、`find`、`ls` 默认直接允许。
-- 其他工具进入 PiDeck 审批卡。
-- 拒绝会通过 Pi Agent 的 `beforeToolCall` 返回阻止结果。
+- `allow`：自动允许工具执行。
+- `ask`：由 Pi 权限系统产生审批请求，再由 PiDeck 审批卡响应。
+- `deny`：阻止工具执行。
+- `yoloMode`：自动批准 `ask`，用于全自动执行。
 
-`@gotgenes/pi-permission-system` 确实是 npm 上存在的 Pi Extension，当前版本提供 `allow`、`ask`、`deny` 和 `yoloMode`。但当前 PiDeck 代码没有加载该包，也没有桥接它的 `permissions:ui_prompt` / `permissions:decision` 事件。因此在完成真实 Extension 加载和配置读写前，不能把它写成当前审批来源，也不能把 PiDeck 自定义审批规则与该插件混为一谈。
+PiDeck 设置页提供权限级别切换，并写入插件的 Pi 配置文件。切换后会重建 Pi Session，确保新策略生效。Extension 不可加载时才回退到 PiHost `beforeToolCall` 适配。
 
 ## 尚未接入
 
 以下能力目前只有 PiHost/SDK 类型或产品计划，不能在当前 UI 中宣称已完成：
 
 - Session tree 可视化、树导航、克隆、分支选择器。
-- 图片附件和多模态输入。
 - Steering / Follow-up 队列模式切换。
 - Extension UI request 的完整桌面映射。
 - Pi Package install/remove/update/config 管理器。
 - Print、JSON、RPC、stdin、Auth Print 等 CLI 兼容通道。
 - 完整 Monaco Diff、任务基线 diff、逐块审阅。
-- `@gotgenes/pi-permission-system` 的真实配置加载、`allow/ask/deny` 切换和审批事件桥接。
 
 新增能力必须先更新 `packages/contracts`，再更新 PiHost、Preload、Renderer 和本文矩阵。

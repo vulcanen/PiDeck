@@ -177,7 +177,9 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .state-mark.completed { border: 1px solid var(--green); color: var(--green); }
 .state-mark.failed { border: 1px solid var(--red); color: var(--red); font-size: 13px; font-weight: 800; }
 .state-mark.idle { border: 1px solid var(--line-strong); }
-.unread-dot { width: 7px; height: 7px; margin: 5px 0 0 auto; flex: 0 0 auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.unread-dot { width: 7px; height: 7px; margin: 5px 0 0 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.task-working-spinner { width: 13px; height: 13px; margin-left: auto; flex: 0 0 auto; border: 1.5px solid color-mix(in srgb, var(--accent) 24%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: task-spin 800ms linear infinite; }
+.task-approval-mark { display: grid; place-items: center; width: 15px; height: 15px; margin-left: auto; flex: 0 0 auto; border-radius: 50%; background: var(--amber); color: white; font: 700 10px/1 sans-serif; }
 .empty-sidebar { display: grid; gap: 5px; padding: 24px 9px; color: var(--muted); font-size: 12px; }
 .empty-sidebar span { color: var(--faint); font-size: 11px; line-height: 1.55; }
 .sidebar-skeleton { display: grid; gap: 7px; padding: 5px; }
@@ -226,6 +228,8 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .user-avatar { background: var(--surface-strong); color: var(--muted); }
 .pi-avatar { background: var(--accent); color: #fff9f0; font-family: "PT Serif", serif; }
 .message-content { max-width: 760px; }
+.message-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0; }
+.message-images img { width: min(260px, 100%); max-height: 220px; object-fit: contain; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
 .user-message { max-width: min(78%, 700px); margin-left: auto; margin-right: max(0px, calc((100% - 860px) / 2)); padding: 14px 16px 15px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 16px 16px 6px 16px; background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
 .user-message .message-meta { justify-content: flex-end; }
 .user-message .message-content { max-width: none; }
@@ -319,7 +323,17 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .composer-shell { position: relative; max-width: 860px; margin: auto; }
 .composer { padding: 11px 12px 9px; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--surface); box-shadow: 0 7px 24px rgba(75, 60, 40, .07); transition: border-color 180ms var(--motion), box-shadow 180ms var(--motion); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent), 0 8px 28px rgba(75, 60, 40, .08); }
-.composer textarea { display: block; width: 100%; min-height: 52px; max-height: 168px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; }
+.composer-attachments { display: flex; gap: 8px; padding: 2px 2px 9px; overflow-x: auto; }
+.composer-attachment { position: relative; width: 58px; height: 58px; flex: 0 0 auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-muted); }
+.composer-attachment img { width: 100%; height: 100%; object-fit: cover; }
+.composer-attachment button { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: color-mix(in srgb, var(--text) 78%, transparent); color: var(--canvas); }
+.composer-editor { position: relative; min-height: 52px; max-height: 168px; overflow: hidden; }
+.composer-highlight, .composer-editor textarea { width: 100%; min-height: 52px; max-height: 168px; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; }
+.composer-highlight { position: absolute; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
+.composer-editor textarea { position: relative; display: block; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: transparent; caret-color: var(--text); }
+.composer-placeholder { color: var(--faint); }
+.composer-token { padding: 1px 3px; border-radius: 4px; color: var(--accent); background: var(--accent-soft); font: inherit; }
+.mention-token { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
 .composer textarea::placeholder { color: var(--faint); }
 .composer-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; margin-top: 7px; }
 .composer-tools { display: flex; align-items: center; min-width: 0; gap: 5px; }
@@ -329,6 +343,15 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .chip.subtle { background: transparent; border: 1px solid var(--line); font-family: "JetBrains Mono", monospace; }
 .model-chip { max-width: min(300px, 42vw); background: transparent; }
 .model-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-ring-wrap { position: relative; display: inline-flex; flex: 0 0 auto; outline: none; }
+.context-ring { position: relative; display: grid; place-items: center; width: 25px; height: 25px; color: var(--muted); font: 8px "JetBrains Mono", monospace; }
+.context-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.context-ring circle { fill: none; stroke-width: 2; }
+.context-ring-track { stroke: var(--line-strong); }
+.context-ring-progress { stroke: var(--accent); stroke-linecap: round; }
+.context-tooltip { position: absolute; right: 0; bottom: calc(100% + 10px); z-index: var(--layer-popover); display: grid; min-width: 180px; gap: 5px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--muted); box-shadow: var(--shadow); font-size: 10px; opacity: 0; pointer-events: none; transform: translateY(3px); transition: opacity 160ms var(--motion), transform 160ms var(--motion); }
+.context-tooltip strong { color: var(--text); font-size: 11px; }
+.context-ring-wrap:hover .context-tooltip, .context-ring-wrap:focus-visible .context-tooltip { opacity: 1; transform: translateY(0); }
 .model-provider { color: var(--text); font-weight: 680; }
 .composer-hint { color: var(--faint); font-size: 10px; white-space: nowrap; }
 .send-button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: #fffaf5; transition: background 180ms var(--motion), transform 180ms var(--motion); }
@@ -415,6 +438,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .palette-backdrop, .dialog-backdrop, .settings-backdrop, .auth-prompt-backdrop { position: fixed; inset: 0; background: rgba(31, 29, 25, .28); backdrop-filter: blur(4px); }
 .palette-backdrop { z-index: var(--layer-modal); display: grid; place-items: start center; padding-top: clamp(70px, 11vh, 110px); }
 .command-palette { width: min(520px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); animation: dialog-in 220ms var(--motion) both; }
+.palette-error { display: grid; gap: 14px; padding: 20px; color: var(--text); }
 .palette-search { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 15px; border-bottom: 1px solid var(--line); color: var(--muted); }
 .palette-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 14px; }
 .palette-search input::placeholder { color: var(--faint); }
@@ -444,6 +468,23 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .locality-note, .auth-notice, .auth-error { margin: 14px 28px 0; padding: 10px 11px; border-radius: 8px; font-size: 11px; line-height: 1.5; }
 .locality-note { display: flex; align-items: center; gap: 8px; border: 1px solid color-mix(in srgb, var(--green) 30%, var(--line)); background: color-mix(in srgb, var(--green) 8%, transparent); color: var(--muted); }
 .locality-note .status-dot { color: var(--green); }
+.permission-settings { margin: 14px 28px 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.permission-heading { display: flex; justify-content: space-between; gap: 12px; }
+.permission-heading h3 { margin: 0; color: var(--text); font-size: 12px; }
+.permission-heading p { max-width: 430px; margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.permission-heading small { color: var(--faint); font-size: 10px; white-space: nowrap; }
+.permission-modes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 11px; }
+.permission-modes button { display: flex; align-items: flex-start; gap: 7px; min-height: 58px; padding: 8px; border: 1px solid transparent; border-radius: 8px; background: var(--surface); color: var(--muted); text-align: left; }
+.permission-modes button:hover, .permission-modes button.selected { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); color: var(--text); }
+.permission-modes button > span:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
+.permission-modes strong { font-size: 10px; }
+.permission-modes small { color: var(--faint); font-size: 9px; line-height: 1.35; }
+.permission-modes button > svg { margin-left: auto; opacity: 0; }
+.permission-modes button.selected > svg { color: var(--accent); opacity: 1; }
+.permission-mode-dot { width: 8px; height: 8px; margin-top: 3px; flex: 0 0 auto; border-radius: 50%; background: var(--amber); }
+.permission-mode-dot.allow { background: var(--green); }
+.permission-mode-dot.deny { background: var(--red); }
+.permission-mode-dot.yolo { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .auth-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid color-mix(in srgb, var(--blue) 36%, var(--line)); background: color-mix(in srgb, var(--blue) 8%, transparent); color: var(--muted); }
 .auth-error { display: grid; max-height: 190px; overflow: auto; gap: 10px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line)); background: color-mix(in srgb, var(--red) 8%, transparent); color: var(--red); }
 .auth-error-copy { max-height: 116px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -485,6 +526,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .auth-prompt > div { display: flex; justify-content: flex-end; gap: 8px; }
 
 @keyframes state-pulse { 0%, 100% { opacity: .45; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes task-spin { to { transform: rotate(360deg); } }
 @keyframes skeleton { from { background-position: 100% 0; } to { background-position: -120% 0; } }
 @keyframes working-dot { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
 @keyframes message-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -527,7 +569,8 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
   .api-key-controls { display: flex; flex-wrap: wrap; }
   .api-key-controls input { flex: 1 1 100%; }
   .settings-header, .settings-footer { padding-right: 18px; padding-left: 18px; }
-  .locality-note, .auth-notice, .auth-error { margin-right: 18px; margin-left: 18px; }
+  .locality-note, .auth-notice, .auth-error, .permission-settings { margin-right: 18px; margin-left: 18px; }
+  .permission-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-list { padding-right: 14px; padding-left: 14px; }
 }
 
