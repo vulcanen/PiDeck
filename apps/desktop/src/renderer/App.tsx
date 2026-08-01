@@ -608,7 +608,7 @@ export function App() {
           {activeTask && messageLoad.status === "loading" && messages.length === 0 && <ConversationSkeleton label={t.loadingConversation} />}
           {activeTask && messageLoad.status === "error" && <div className="conversation-error" role="alert"><span><Icon name="alert" /> <strong>{t.conversationLoadFailed}</strong><small>{messageLoad.error}</small></span><button className="button ghost" onClick={() => setMessageReload((current) => current + 1)}>{t.retry}</button></div>}
           {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isSending && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
-          <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running={isSending} />
+          <ExecutionSummary steps={activeTaskUi?.activity?.length ? activeTaskUi.activity : activityFromMessages(messages, language)} language={language} running={isSending} />
           <MessageTimeline messages={messages} language={language} />
           {streamText && <article className="message assistant-message live-message"><div className="message-meta"><span className="avatar pi-avatar">P</span><span>{t.pi}</span><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
@@ -682,6 +682,34 @@ function activityValue(value: unknown): string {
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
+function activityFromMessages(messages: any[], language: Language): ActivityStep[] {
+  const steps: ActivityStep[] = [];
+  const toolSteps = new Map<string, ActivityStep>();
+  for (const message of messages) {
+    const timestamp = typeof message?.timestamp === "number" ? message.timestamp : Date.parse(message?.timestamp ?? "") || Date.now();
+    if (message?.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (part?.type === "thinking" && part.thinking) steps.push({ id: `${message.id ?? timestamp}:thinking:${steps.length}`, kind: "thinking", label: copy[language].executionThinking, detail: part.thinking, startedAt: timestamp, endedAt: timestamp });
+        if (part?.type === "toolCall" || part?.type === "tool_call") {
+          const step = { id: part.id ?? part.toolCallId ?? `${message.id ?? timestamp}:tool:${steps.length}`, kind: "tool" as const, label: part.name ?? part.toolName ?? copy[language].toolResult, args: part.arguments ?? part.args ?? {}, startedAt: timestamp };
+          steps.push(step);
+          toolSteps.set(step.id, step);
+        }
+      }
+    }
+    if (message?.role === "toolResult") {
+      const toolId = message.toolCallId ?? message.tool_call_id;
+      const step = toolSteps.get(toolId);
+      if (step) {
+        step.result = textFromMessage(message);
+        step.endedAt = timestamp;
+        step.isError = Boolean(message.isError);
+      }
+    }
+  }
+  return steps;
+}
+
 function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[]; language: Language; running: boolean }) {
   if (!steps.length) return null;
   const t = copy[language];
@@ -704,15 +732,7 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
 }
 
 function MessageTimeline({ messages, language }: { messages: any[]; language: Language }) {
-  const items: Array<{ type: "message"; message: any; index: number } | { type: "tools"; messages: any[]; index: number }> = [];
-  for (const [index, message] of messages.entries()) {
-    if (message?.role === "toolResult") {
-      const previous = items[items.length - 1];
-      if (previous?.type === "tools") previous.messages.push(message);
-      else items.push({ type: "tools", messages: [message], index });
-    } else items.push({ type: "message", message, index });
-  }
-  return <>{items.map((item) => item.type === "tools" ? <details className="tool-group" key={`tools-${item.index}`}><summary className="tool-group-header"><Icon name="terminal" size={13} /><span>{copy[language].toolProcess}</span><small>{copy[language].toolsSummary(item.messages.length, item.messages.filter((message) => message?.isError).length)}</small><Icon name="chevron" size={12} /></summary>{item.messages.map((message, index) => <MessageView key={message.id ?? `tool-${item.index}-${index}`} message={message} language={language} />)}</details> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} />)}</>;
+  return <>{messages.map((message, index) => message?.role === "toolResult" ? null : <MessageView key={message.id ?? `${message.role}-${index}`} message={message} language={language} />)}</>;
 }
 
 function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
