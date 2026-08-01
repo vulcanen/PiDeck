@@ -469,11 +469,12 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .palette-search { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 15px; border-bottom: 1px solid var(--line); color: var(--muted); }
 .palette-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 14px; }
 .palette-search input::placeholder { color: var(--faint); }
-.palette-group { display: grid; max-height: min(540px, calc(100vh - 190px)); overflow-y: auto; gap: 3px; padding: 12px 8px 10px; }
+.palette-group { display: grid; min-width: 0; max-height: min(540px, calc(100vh - 190px)); overflow-x: hidden; overflow-y: auto; gap: 3px; padding: 12px 8px 10px; }
 .palette-group > span { padding: 2px 8px 8px; color: var(--faint); font: 700 10px "JetBrains Mono", monospace; letter-spacing: .09em; text-transform: uppercase; }
-.palette-group button { display: flex; align-items: center; gap: 10px; min-height: 39px; padding: 0 10px; border-radius: 8px; background: transparent; color: var(--text); font-size: 12px; text-align: left; }
+.palette-group button { display: flex; align-items: center; width: 100%; min-width: 0; gap: 10px; min-height: 39px; padding: 0 10px; border-radius: 8px; background: transparent; color: var(--text); font-size: 12px; text-align: left; }
 .palette-group button:hover, .palette-group button.selected { background: var(--surface-muted); }
-.palette-group button small { overflow: hidden; margin-left: auto; max-width: 52%; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.palette-group button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-group button small { min-width: 0; flex: 0 1 42%; overflow: hidden; margin-left: 10px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .palette-empty { padding: 20px 10px 24px; color: var(--muted); font-size: 12px; }
 .toast { position: fixed; right: 22px; bottom: 24px; z-index: var(--layer-toast); max-width: min(380px, calc(100vw - 44px)); padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--text); color: var(--canvas); box-shadow: var(--shadow); font-size: 12px; animation: toast-in 240ms var(--motion) both; }
 .task-context-menu { position: fixed; z-index: var(--layer-modal); min-width: 166px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
