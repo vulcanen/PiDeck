@@ -20,6 +20,7 @@ export const icons: Record<string, string> = {
   check: "m3 8 3 3 5-6",
   x: "m4 4 8 8M12 4l-8 8",
   folder: "M2.5 4.5h4l1.3 1.5h5.7v6.5h-11z",
+  folderOpen: "M2.5 5V4h4l1.3 1.5H13M2.5 6.5h11l-1.4 6H2.5z",
   more: "M4 8h.01M8 8h.01M12 8h.01",
   copy: "M5 5h7v8H5zM3 11H2.5V3h7v.5",
   alert: "M8 2.5 14 13H2zM8 6v3.5M8 11.5h.01",
@@ -30,10 +31,11 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round"><path d={icons[name] ?? icons.file} /></svg>;
 }
 
-export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () => void) {
+export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () => void, enabled = true) {
   const escapeRef = useRef(onEscape);
   useEffect(() => { escapeRef.current = onEscape; }, [onEscape]);
   useEffect(() => {
+    if (!enabled) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const root = ref.current;
     const focusable = () => Array.from(root?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex='-1'])") ?? []);
@@ -58,7 +60,7 @@ export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () 
       document.removeEventListener("keydown", onKeyDown, true);
       window.requestAnimationFrame(() => previous?.focus());
     };
-  }, [ref]);
+  }, [enabled, ref]);
 }
 
 export async function copyText(value: string): Promise<boolean> {

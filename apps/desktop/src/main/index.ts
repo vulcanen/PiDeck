@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { execFileSync, fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contracts";
 
@@ -16,6 +17,36 @@ const pending = new Map<string, {
   reject: (reason?: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
 }>();
+
+function projectRegistryPath(): string {
+  return path.join(app.getPath("userData"), "projects.json");
+}
+
+function readProjectRegistry(): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(projectRegistryPath(), "utf8")) as { cwds?: unknown };
+    return Array.isArray(parsed.cwds) ? parsed.cwds.filter((cwd): cwd is string => typeof cwd === "string" && cwd.length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeProjectRegistry(cwds: string[]): void {
+  const seen = new Set<string>();
+  const normalizedCwds = cwds.map((cwd) => path.resolve(cwd)).filter((cwd) => {
+    const key = process.platform === "win32" ? cwd.toLowerCase() : cwd;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const registryPath = projectRegistryPath();
+  mkdirSync(path.dirname(registryPath), { recursive: true });
+  writeFileSync(registryPath, `${JSON.stringify({ cwds: normalizedCwds }, null, 2)}\n`, "utf8");
+}
+
+function rememberProjectCwd(cwd: string): void {
+  writeProjectRegistry([cwd, ...readProjectRegistry()]);
+}
 
 const menuCopy = {
   zh: {
@@ -39,6 +70,7 @@ const menuCopy = {
     zoomOut: "缩小",
     toggleFullscreen: "切换全屏",
     minimize: "最小化",
+    chooseProjectFolder: "选择项目文件夹",
   },
   en: {
     file: "File",
@@ -61,6 +93,7 @@ const menuCopy = {
     zoomOut: "Zoom Out",
     toggleFullscreen: "Toggle Full Screen",
     minimize: "Minimize",
+    chooseProjectFolder: "Choose project folder",
   },
 } satisfies Record<AppLanguage, Record<string, string>>;
 
@@ -208,7 +241,25 @@ function registerIpcHandlers() {
     return currentLanguage;
   });
   ipcMain.handle("runtime:status", () => hostStatus);
-  ipcMain.handle("projects:list", () => requestHost("projects.list"));
+  ipcMain.handle("projects:list", async (_event, preferredCwd?: string) => {
+    const knownCwds = readProjectRegistry();
+    if (preferredCwd) knownCwds.push(preferredCwd);
+    const projects = await requestHost("projects.list", { knownCwds }) as Array<{ cwd: string }>;
+    writeProjectRegistry(projects.map((project) => project.cwd));
+    return projects;
+  });
+  ipcMain.handle("projects:choose-directory", async () => {
+    if (!hostWindow) return null;
+    const result = await dialog.showOpenDialog(hostWindow, {
+      title: menuCopy[currentLanguage].chooseProjectFolder,
+      properties: ["openDirectory", "createDirectory"],
+    });
+    const cwd = result.canceled ? undefined : result.filePaths[0];
+    if (!cwd) return null;
+    const sessions = await requestHost("sessions.list", { cwd }) as unknown[];
+    rememberProjectCwd(cwd);
+    return { id: cwd, cwd, name: path.basename(cwd) || cwd, taskCount: sessions.length };
+  });
   ipcMain.handle("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: projectId }));
   ipcMain.handle("sessions:create", (_event, input?: { cwd?: string; name?: string }) => requestHost("sessions.create", input));
   ipcMain.handle("sessions:delete", (_event, taskId: string, cwd?: string) => requestHost("sessions.delete", { taskId, cwd }));
@@ -245,10 +296,11 @@ function createWindow() {
   const window = new BrowserWindow({
     width: 1480,
     height: 940,
-    minWidth: 960,
-    minHeight: 640,
+    minWidth: 375,
+    minHeight: 520,
     backgroundColor: "#f7f6f1",
     titleBarStyle: "hiddenInset",
+    ...(process.platform === "darwin" ? { trafficLightPosition: { x: 14, y: 17 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,

@@ -12,7 +12,6 @@ PiDeck 是 `@earendil-works/pi-coding-agent` 的桌面 UI 适配层。它不重�
 
 明确不做：
 
-- PiDeck 账户、云端登录、云端工作区、团队协作和会话同步。
 - 第二套 Agent、模型目录、凭据存储或消息数据库。
 - 未经 Pi SDK/CLI 支持的业务能力。
 
@@ -60,7 +59,7 @@ packages/
 当前已支持：
 
 1. 启动 PiHost 并显示 Runtime 状态。
-2. 自动发现当前项目和 Pi Session。
+2. 自动发现 Pi Session 所属项目，并记住用户手动添加的项目目录。
 3. 创建、切换、删除本地 Session。
 4. 读取和显示 Session 消息。
 5. 选择已认证 Provider/Model 和思考等级。

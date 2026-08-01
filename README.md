@@ -10,7 +10,7 @@ PiDeck 是为 [Pi Agent Harness](https://pi.dev) 设计的桌面界面端。
 - MiSans 为界面主字体
 - 中文、英文双语
 - 直接接入 `@earendil-works/pi-coding-agent`
-- PiDeck 自身不提供账户登录与云同步；Pi Provider 的 API Key/OAuth 认证仍保留
+- Pi Provider 的 API Key/OAuth 认证由 Pi Runtime 管理
 
 当前仓库已具备可运行的 Electron + React + PiHost 基线，功能状态以 `docs/pi-cli-feature-matrix.zh-CN.md` 为准；未接入能力会明确标记为计划。
 

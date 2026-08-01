@@ -2,7 +2,7 @@
 
 PiDeck 的唯一产品边界是：把 `@earendil-works/pi-coding-agent`（Pi CLI）的既有能力映射到桌面 UI。
 
-不要在本项目中优先添加 Pi CLI 没有的产品能力、云端服务、账号体系或第二套 Agent 实现。任何 UI 能力都必须能追溯到 Pi CLI / Pi SDK 的真实 API、事件或资源。
+不要在本项目中优先添加 Pi CLI 没有的产品能力或第二套 Agent 实现。任何 UI 能力都必须能追溯到 Pi CLI / Pi SDK 的真实 API、事件或资源。
 
 ## 开发前必读规则
 

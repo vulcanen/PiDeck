@@ -80,7 +80,8 @@ export interface PideckBridge {
     status(): Promise<"connected" | "starting" | "disconnected">;
   };
   projects: {
-    list(): Promise<ProjectSummary[]>;
+    list(preferredCwd?: string): Promise<ProjectSummary[]>;
+    chooseDirectory(): Promise<ProjectSummary | null>;
   };
   sessions: {
     list(projectId?: string): Promise<TaskSummary[]>;

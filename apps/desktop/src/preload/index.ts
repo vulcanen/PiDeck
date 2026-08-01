@@ -9,7 +9,8 @@ const bridge: PideckBridge = {
     status: () => ipcRenderer.invoke("runtime:status"),
   },
   projects: {
-    list: () => ipcRenderer.invoke("projects:list"),
+    list: (preferredCwd?: string) => ipcRenderer.invoke("projects:list", preferredCwd),
+    chooseDirectory: () => ipcRenderer.invoke("projects:choose-directory"),
   },
   sessions: {
     list: (projectId?: string) => ipcRenderer.invoke("sessions:list", projectId),

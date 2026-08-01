@@ -9,7 +9,6 @@ PiDeck 是 `@earendil-works/pi-coding-agent` 的桌面适配层：Renderer 负�
 
 PiDeck 不提供：
 
-- PiDeck 账户、云端登录、云端会话同步或团队工作区。
 - 第二套 Agent、模型目录、凭据存储或会话数据库。
 - Renderer 侧的 Node.js、文件系统、Shell 或 Pi SDK 访问。
 
@@ -41,8 +40,9 @@ Main 只负责：
 - 在 Renderer IPC 与 PiHost 请求之间做编排。
 - 为请求设置超时，处理 Host 断开。
 - 通过系统浏览器打开经过协议校验的 HTTP(S) URL。
+- 在 Electron `userData/projects.json` 中记录项目目录引用及其显示顺序。
 
-Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
+项目目录清单只保存 `cwd`，不保存 Session 或工作区内容。Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
 
 ### 2.2 Preload
 
@@ -115,7 +115,7 @@ pi-host  → contracts + Pi SDK
 以 `packages/contracts/src/index.ts` 为准，当前已声明：
 
 - `runtime.status`
-- `projects.list`
+- `projects.list/chooseDirectory`
 - `sessions.list/create/delete/messages/capabilities/tree/navigate/fork/compact/export`
 - `models.list`
 - `workspace.snapshot`
@@ -142,7 +142,7 @@ PiHost 将以下事件发送到 Renderer：
 
 ## 7. Pi 能力映射
 
-- Pi Session → 左侧会话列表与中央对话。
+- Pi Session / `cwd` → 左侧项目树、项目内会话列表与中央对话。
 - Pi ModelRuntime → Provider 设置、模型选择和思考等级。
 - Pi slash command / Prompt / Skill catalog → Composer 建议和命令面板。
 - Pi Agent event → 流式回复、工具过程、审批和运行状态。

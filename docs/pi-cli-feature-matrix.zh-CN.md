@@ -7,13 +7,13 @@
 
 | Pi 能力 | PiDeck 入口 | 当前实现 |
 | --- | --- | --- |
-| 项目发现 | 启动时自动加载工作区 | `projects.list` |
-| 会话列表 | 左侧 Sessions | `SessionManager.list(cwd)` |
+| 项目发现与切换 | 左侧项目树聚合本机项目，并记住空项目与列表顺序 | `SessionManager.listAll()` + Main 有序 `cwd` 清单 → `projects.list` |
+| 会话列表 | 展开当前项目后按最近更新时间倒序显示会话 | `SessionManager.list(cwd)` / `updatedAt` |
 | 新建会话 | New task / 空状态按钮 | `SessionManager.create(cwd)` |
 | 会话消息 | 中央对话线程 | `AgentSession.messages` |
 | 会话删除 | 会话更多菜单 | `sessions.delete` |
-| Provider 列表 | Provider 设置 | `ModelRuntime.getProviders()`、`listCredentials()` |
-| API Key / OAuth | Provider 设置 | `ModelRuntime.login()`、Pi auth 回调 |
+| Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
+| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调 |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
 | 思考等级 | Composer Thinking 菜单 | `AgentSession.getAvailableThinkingLevels()` |
 | Pi slash command catalog | `/` 建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command |

@@ -15,6 +15,7 @@ type PiSdk = {
   parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
   SessionManager: {
     list(cwd: string): Promise<any[]>;
+    listAll(): Promise<any[]>;
     create(cwd: string): {
       appendSessionInfo(name: string): void;
       getSessionId(): string;
@@ -538,9 +539,61 @@ async function handle(request: PiHostRequest): Promise<void> {
         send({ id: request.id, ok: true, result: "connected" });
         return;
       case "projects.list": {
-        const cwd = resolveWorkspaceCwd();
-        const sessions = await (await loadPiSdk()).SessionManager.list(cwd);
-        send({ id: request.id, ok: true, result: [{ id: cwd, cwd, name: path.basename(cwd), taskCount: sessions.length }] });
+        const currentCwd = path.resolve(resolveWorkspaceCwd());
+        const knownCwds = typeof request.payload === "object" && request.payload && "knownCwds" in request.payload && Array.isArray(request.payload.knownCwds)
+          ? request.payload.knownCwds.filter((cwd): cwd is string => typeof cwd === "string" && existsSync(cwd)).map((cwd) => path.resolve(cwd))
+          : [];
+        const sessions = await (await loadPiSdk()).SessionManager.listAll();
+        const projects = new Map<string, { id: string; cwd: string; name: string; taskCount: number; updatedAt: number }>();
+        for (const session of sessions) {
+          if (typeof session?.cwd !== "string" || !session.cwd || !existsSync(session.cwd)) continue;
+          const cwd = path.resolve(session.cwd);
+          const key = process.platform === "win32" ? cwd.toLowerCase() : cwd;
+          const existing = projects.get(key);
+          const modified = new Date(session.modified ?? 0).getTime();
+          if (existing) {
+            existing.taskCount += 1;
+            existing.updatedAt = Math.max(existing.updatedAt, modified);
+          } else {
+            projects.set(key, {
+              id: cwd,
+              cwd,
+              name: path.basename(cwd) || cwd,
+              taskCount: 1,
+              updatedAt: modified,
+            });
+          }
+        }
+        const currentKey = process.platform === "win32" ? currentCwd.toLowerCase() : currentCwd;
+        if (!projects.has(currentKey)) {
+          projects.set(currentKey, {
+            id: currentCwd,
+            cwd: currentCwd,
+            name: path.basename(currentCwd) || currentCwd,
+            taskCount: 0,
+            updatedAt: Date.now(),
+          });
+        }
+        for (const [index, cwd] of knownCwds.entries()) {
+          const key = process.platform === "win32" ? cwd.toLowerCase() : cwd;
+          const existing = projects.get(key);
+          const updatedAt = Date.now() + knownCwds.length - index;
+          if (existing) existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
+          else projects.set(key, {
+            id: cwd,
+            cwd,
+            name: path.basename(cwd) || cwd,
+            taskCount: 0,
+            updatedAt,
+          });
+        }
+        send({
+          id: request.id,
+          ok: true,
+          result: [...projects.values()]
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .map(({ updatedAt: _updatedAt, ...project }) => project),
+        });
         return;
       }
       case "sessions.list": {
