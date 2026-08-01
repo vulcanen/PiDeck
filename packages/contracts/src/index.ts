@@ -126,7 +126,7 @@ export interface PideckBridge {
 }
 
 export interface PiDeckRuntimeEvent {
-  type: "agent.event" | "runtime.status" | "auth.event" | "approval.requested";
+  type: "agent.event" | "runtime.status" | "auth.event" | "approval.requested" | "approval.resolved";
   taskId?: string;
   requestId?: string;
   event?: unknown;

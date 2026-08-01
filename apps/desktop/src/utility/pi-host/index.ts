@@ -89,7 +89,13 @@ async function setPermissionMode(mode: PermissionMode) {
   // aborting or disposing the running AgentSession. Idle sessions are lazily
   // rebuilt by ensureAgentSession on the next prompt.
   if (mode === "allow" || mode === "yolo" || mode === "deny") {
-    for (const resolve of approvalWaiters.values()) resolve(mode !== "deny");
+    const decision = mode === "deny" ? "deny" : "allow-once";
+    for (const [requestId, resolve] of approvalWaiters.entries()) {
+      resolve(decision === "allow-once");
+      const separator = requestId.indexOf(":");
+      const taskId = separator > 0 ? requestId.slice(0, separator) : requestId;
+      emit(taskId, { type: "approval.resolved", requestId, decision, source: "permission-mode" });
+    }
     approvalWaiters.clear();
   }
   capabilitySessions.clear();
@@ -792,7 +798,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { requestId?: string; decision?: "allow-once" | "deny" } | undefined;
         if (!payload?.requestId || !payload.decision) throw new Error("requestId and decision are required");
         const resolve = approvalWaiters.get(payload.requestId);
-        if (!resolve) throw new Error("Approval request is no longer active");
+        // A permission-level switch may have already resolved this request.
+        // Treat a late UI click as an idempotent no-op instead of surfacing a
+        // remote-method error for a decision that was already applied.
+        if (!resolve) {
+          send({ id: request.id, ok: true, result: undefined });
+          return;
+        }
         approvalWaiters.delete(payload.requestId);
         resolve(payload.decision === "allow-once");
         send({ id: request.id, ok: true, result: undefined });

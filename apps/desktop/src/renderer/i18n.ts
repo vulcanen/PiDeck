@@ -134,6 +134,9 @@ export const copy = {
     workspaceSummaryOnly: "Pi Runtime 当前提供文件状态摘要，不提供完整 diff 内容。",
     copyPath: "复制路径",
     copied: "已复制",
+    copyImage: "复制图片",
+    copiedImage: "图片已复制",
+    copyImageFailed: "复制图片失败",
     moreActions: "更多操作",
     unread: "未读",
     sessionState: {
@@ -296,6 +299,9 @@ export const copy = {
     workspaceSummaryOnly: "Pi Runtime currently exposes file status summaries, not full diff content.",
     copyPath: "Copy path",
     copied: "Copied",
+    copyImage: "Copy image",
+    copiedImage: "Image copied",
+    copyImageFailed: "Could not copy image",
     moreActions: "More actions",
     unread: "Unread",
     sessionState: {

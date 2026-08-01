@@ -477,7 +477,9 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .palette-group button small { min-width: 0; flex: 0 1 42%; overflow: hidden; margin-left: 10px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .palette-empty { padding: 20px 10px 24px; color: var(--muted); font-size: 12px; }
 .toast { position: fixed; right: 22px; bottom: 24px; z-index: var(--layer-toast); max-width: min(380px, calc(100vw - 44px)); padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--text); color: var(--canvas); box-shadow: var(--shadow); font-size: 12px; animation: toast-in 240ms var(--motion) both; }
-.task-context-menu { position: fixed; z-index: var(--layer-modal); min-width: 166px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
+.task-context-menu, .image-context-menu { position: fixed; z-index: var(--layer-modal); min-width: 166px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
+.image-context-menu button { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 34px; padding: 7px 10px; border-radius: 7px; background: transparent; color: var(--text); font-size: 12px; text-align: left; }
+.image-context-menu button:hover { background: var(--surface-muted); }
 .task-context-menu button { display: block; width: 100%; min-height: 34px; padding: 7px 10px; border-radius: 7px; background: transparent; color: var(--red); font-size: 12px; text-align: left; }
 .task-context-menu button:hover { background: color-mix(in srgb, var(--red) 8%, var(--surface-muted)); }
 .dialog-backdrop { z-index: var(--layer-modal); display: grid; place-items: center; padding: 20px; }

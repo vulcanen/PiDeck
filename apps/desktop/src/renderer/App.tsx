@@ -43,6 +43,7 @@ type AuthPromptState = { requestId: string; message: string; placeholder: string
 type ImageAttachment = { id: string; data: string; mimeType: string; name: string };
 type SentImageMessage = { text: string; images: ImageAttachment[] };
 type PreviewImage = { src: string; alt: string };
+type ImageContextMenuState = { x: number; y: number; image: PreviewImage };
 
 function textFromMessage(message: any): string {
   if (typeof message?.content === "string") return message.content;
@@ -66,6 +67,15 @@ function formatMessageTime(value: string | number | undefined, language: Languag
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+async function copyImageToClipboard(src: string): Promise<boolean> {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") return false;
+  try {
+    const blob = await fetch(src).then((response) => response.blob());
+    await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+    return true;
+  } catch { return false; }
 }
 
 function reactNodeText(node: ReactNode): string {
@@ -153,6 +163,7 @@ export function App() {
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [runtimeStatus, setRuntimeStatus] = useState<"connected" | "starting" | "disconnected">("starting");
   const [contextMenu, setContextMenu] = useState<{ task: TaskSummary; x: number; y: number } | null>(null);
+  const [imageContextMenu, setImageContextMenu] = useState<ImageContextMenuState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TaskSummary | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -204,6 +215,13 @@ export function App() {
   function openProviderSettings(providerId?: string) {
     setProviderFocus(providerId ?? null);
     setSettingsOpen(true);
+  }
+
+  function handlePermissionStatus(status: PermissionStatus) {
+    setPermissionStatus(status);
+    if (status.mode === "ask") return;
+    setTaskUi((current) => Object.fromEntries(Object.entries(current).map(([taskId, state]) => [taskId, state.approval ? { ...state, approval: undefined, workingPhase: state.isSending ? "thinking" as const : state.workingPhase } : state])));
+    setTasks((current) => current.map((task) => task.state === "waiting-approval" ? { ...task, state: "running" } : task));
   }
 
   function showNotice(message: string) {
@@ -374,6 +392,12 @@ export function App() {
       setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: "waiting-approval" } : task));
       return;
     }
+    if (runtimeEvent.type === "approval.resolved" && runtimeEvent.requestId) {
+      const event = runtimeEvent.event as { decision?: "allow-once" | "deny" } | undefined;
+      patchTaskUi(taskId, { approval: undefined, workingPhase: event?.decision === "allow-once" ? "thinking" : null });
+      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: event?.decision === "allow-once" ? "running" : task.state } : task));
+      return;
+    }
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
     if (event?.type === "agent_start") {
@@ -436,18 +460,18 @@ export function App() {
       if (event.key === "/" && !typing && !paletteOpen && !settingsOpen && !pendingDelete) { event.preventDefault(); searchInputRef.current?.focus(); return; }
       if (event.key === "Escape") {
         if (paletteOpen || settingsOpen || pendingDelete) return;
-        if (thinkingMenuOpen || modelMenuOpen || suggestionMode || contextMenu) {
-          setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); return;
+        if (thinkingMenuOpen || modelMenuOpen || suggestionMode || contextMenu || imageContextMenu) {
+          setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); setImageContextMenu(null); return;
         }
         if (terminalOpen) setTerminalOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [paletteOpen, settingsOpen, pendingDelete, thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, terminalOpen, projectCwd, language]);
+  }, [paletteOpen, settingsOpen, pendingDelete, thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, imageContextMenu, terminalOpen, projectCwd, language]);
 
   useEffect(() => {
-    const close = () => setContextMenu(null);
+    const close = () => { setContextMenu(null); setImageContextMenu(null); };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
     return () => { window.removeEventListener("click", close); window.removeEventListener("blur", close); };
@@ -640,6 +664,12 @@ export function App() {
     setContextMenu({ task, x: Math.max(8, Math.min(x, window.innerWidth - 174)), y: Math.max(8, Math.min(y, window.innerHeight - 58)) });
   }
 
+  function openImageContextMenu(event: React.MouseEvent, image: PreviewImage) {
+    event.preventDefault();
+    setContextMenu(null);
+    setImageContextMenu({ image, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 174)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 58)) });
+  }
+
   return <div className={`app-shell ${theme}`}>
     <a className="skip-link" href="#main-content">{t.skipToContent}</a>
     <header className="titlebar">
@@ -686,7 +716,7 @@ export function App() {
           {activeTask && messageLoad.status === "error" && <div className="conversation-error" role="alert"><span><Icon name="alert" /> <strong>{t.conversationLoadFailed}</strong><small>{messageLoad.error}</small></span><button className="button ghost" onClick={() => setMessageReload((current) => current + 1)}>{t.retry}</button></div>}
           {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isSending && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
           {isSending && <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running />}
-          <MessageTimeline messages={messages} language={language} onPreviewImage={(image) => setPreviewImage(image)} />
+          <MessageTimeline messages={messages} language={language} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
           {streamText && <article className="message assistant-message live-message"><div className="live-message-status"><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
           {liveApproval && <ApprovalCard approval={liveApproval} language={language} onResolve={async (decision) => {
@@ -699,8 +729,8 @@ export function App() {
           if (suggestionMode && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setSuggestionIndex((current) => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))); return; }
           if (event.key === "Escape") { setSuggestionMode(null); return; }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendPrompt(); }
-        }} onSend={() => void (isSending ? abortActive() : sendPrompt())} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} commandNames={paletteCommands.map((command) => command.name)} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} onPreviewImage={(image) => setPreviewImage(image)} />
-        <PermissionLevelControl language={language} status={permissionStatus} onStatus={setPermissionStatus} />
+        }} onSend={() => void (isSending ? abortActive() : sendPrompt())} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} commandNames={paletteCommands.map((command) => command.name)} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
+        <PermissionLevelControl language={language} status={permissionStatus} onStatus={handlePermissionStatus} />
       </main>
 
       {inspectorOpen && <button className="inspector-backdrop" aria-label={t.closeInspector} onClick={() => setInspectorOpen(false)} />}
@@ -716,7 +746,8 @@ export function App() {
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
     {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} />}
-    {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} />}
+    {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
+    {imageContextMenu && <ImageContextMenu language={language} x={imageContextMenu.x} y={imageContextMenu.y} onCopy={async () => { const copied = await copyImageToClipboard(imageContextMenu.image.src); setImageContextMenu(null); showNotice(copied ? t.copiedImage : t.copyImageFailed); }} />}
   </div>;
 }
 
@@ -742,7 +773,7 @@ function TaskRow({ task, active, language, onClick, onContextMenu, onMenu }: { t
   return <div className={`task-row ${active ? "active" : ""}`} onContextMenu={onContextMenu}><button className="task-main" onClick={onClick} aria-current={active ? "page" : undefined}><span className="task-copy"><strong>{task.title}</strong><small>{formatTime(task.updatedAt)}</small></span>{task.state === "running" && <span className="task-working-spinner" role="img" aria-label={t.sessionState.running} title={t.sessionState.running} />}{task.state === "waiting-approval" && <span className="task-approval-mark" role="img" aria-label={t.sessionState.approval} title={t.sessionState.approval}>!</span>}{task.unread && <span className="unread-dot" title={t.unread} />}</button><button className="task-more" aria-label={t.moreActions} title={t.moreActions} onClick={(event) => { event.stopPropagation(); onMenu(event.currentTarget.getBoundingClientRect()); }}><Icon name="more" size={14} /></button></div>;
 }
 
-function MessageView({ message, language, onPreviewImage }: { message: any; language: Language; onPreviewImage: (image: PreviewImage) => void }) {
+function MessageView({ message, language, onPreviewImage, onContextMenuImage }: { message: any; language: Language; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
   const text = textFromMessage(message);
   const images = Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === "image" && part.data && part.mimeType) : [];
   if (!text && !images.length && message?.role !== "toolResult") return null;
@@ -754,7 +785,7 @@ function MessageView({ message, language, onPreviewImage }: { message: any; lang
     return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
   }
   const messageTime = formatMessageTime(message.timestamp, language);
-  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <button type="button" className="image-preview-trigger" key={`${message.id ?? "image"}-${index}`} aria-label={t.imagePreview} onClick={() => onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} /></button>)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
+  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <button type="button" className="image-preview-trigger" key={`${message.id ?? "image"}-${index}`} aria-label={t.imagePreview} onClick={() => onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })} onContextMenu={(event) => onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} /></button>)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
 }
 
 function activityValue(value: unknown): string {
@@ -812,7 +843,7 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
   </details>;
 }
 
-function MessageTimeline({ messages, language, onPreviewImage }: { messages: any[]; language: Language; onPreviewImage: (image: PreviewImage) => void }) {
+function MessageTimeline({ messages, language, onPreviewImage, onContextMenuImage }: { messages: any[]; language: Language; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
   const items: Array<{ type: "message"; message: any; index: number } | { type: "execution"; steps: ActivityStep[]; index: number }> = [];
   let turn: any[] = [];
   const flushTurn = () => {
@@ -834,7 +865,7 @@ function MessageTimeline({ messages, language, onPreviewImage }: { messages: any
     turn.push(message);
   }
   flushTurn();
-  return <>{items.map((item) => item.type === "execution" ? <ExecutionSummary key={`execution-${item.index}`} steps={item.steps} language={language} running={false} /> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} onPreviewImage={onPreviewImage} />)}</>;
+  return <>{items.map((item) => item.type === "execution" ? <ExecutionSummary key={`execution-${item.index}`} steps={item.steps} language={language} running={false} /> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />)}</>;
 }
 
 function formatTokenCount(value: number | null | undefined): string {
@@ -920,7 +951,7 @@ function highlightComposerText(value: string, commandNames: string[]): ReactNode
   return result;
 }
 
-function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
+function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
   const t = copy[props.language];
   const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -937,7 +968,7 @@ function Composer(props: { value: string; onChange: (value: string) => void; onK
   useEffect(() => { if (!props.modelMenuOpen) setModelQuery(""); }, [props.modelMenuOpen]);
   return <div className="composer-wrap"><div className="composer-shell">
     {props.suggestionMode && props.suggestions.length > 0 && <div className="suggestion-popover" role="listbox" id="composer-suggestions" aria-label={props.suggestionMode === "mention" ? t.files : t.command}>{props.suggestions.map((item, index) => <button ref={(element) => { suggestionRefs.current[index] = element; }} key={item.name ?? item.path} type="button" role="option" aria-selected={index === props.suggestionIndex} className={index === props.suggestionIndex ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => props.onSuggestion(item)}><span className="suggestion-symbol">{props.suggestionMode === "mention" ? "@" : "/"}</span><span><strong>{item.name ?? item.path}</strong><small>{item.description ?? item.path}</small></span></button>)}</div>}
-    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><div ref={highlightRef} className="composer-highlight" aria-hidden="true">{props.value ? highlightComposerText(props.value, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</div><textarea ref={textareaRef} autoFocus value={props.value} onChange={(event) => props.onChange(event.target.value)} onPaste={props.onPaste} onScroll={(event) => { if (highlightRef.current) highlightRef.current.scrollTop = event.currentTarget.scrollTop; }} onKeyDown={props.onKeyDown} placeholder="" rows={2} aria-label={t.ask} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
+    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })} onContextMenu={(event) => props.onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><div ref={highlightRef} className="composer-highlight" aria-hidden="true">{props.value ? highlightComposerText(props.value, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</div><textarea ref={textareaRef} autoFocus value={props.value} onChange={(event) => props.onChange(event.target.value)} onPaste={props.onPaste} onScroll={(event) => { if (highlightRef.current) highlightRef.current.scrollTop = event.currentTarget.scrollTop; }} onKeyDown={props.onKeyDown} placeholder="" rows={2} aria-label={t.ask} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
       <div className="menu-anchor"><button className="chip" aria-haspopup="menu" aria-expanded={props.thinkingMenuOpen} onClick={props.onThinkingMenu}><Icon name="spark" size={14} /><span>{props.thinkingLevel}</span><Icon name="chevron" size={13} /></button>{props.thinkingMenuOpen && <div className="inline-menu" role="menu" aria-label={t.chooseThinking}><strong>{t.chooseThinking}</strong>{props.thinkingLevels.map((level) => <button role="menuitemradio" aria-checked={level === props.thinkingLevel} key={level} className={level === props.thinkingLevel ? "active" : ""} onClick={() => props.onThinking(level)}>{level}</button>)}</div>}</div>
       <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRing usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
       <button className="chip subtle" aria-label={t.mentionLabel} title={t.mentionLabel} onClick={() => props.onChange(`${props.value}${props.value ? " " : ""}@`)}><Icon name="plus" size={14} />@</button>
@@ -1008,11 +1039,16 @@ function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNe
   return <div className="palette-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="command-palette" role="dialog" aria-modal="true" aria-label={t.command}><div className="palette-search"><Icon name="search" /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} placeholder={t.searchCommands} aria-label={t.searchCommands} /><kbd>ESC</kbd></div><div className="palette-group"><span>{query ? t.results : t.quickActions}</span>{items.length === 0 ? <div className="palette-empty">{t.noMatchingCommands}</div> : items.map((item, index) => <button ref={(element) => { itemRefs.current[index] = element; }} key={item.id} className={index === selectedIndex ? "selected" : ""} onMouseEnter={() => setSelectedIndex(index)} onClick={item.action}><Icon name={item.icon} /><span>{item.label}</span><small>{item.description}</small></button>)}</div></div></div>;
 }
 
-function ImagePreview({ image, language, onClose }: { image: PreviewImage; language: Language; onClose: () => void }) {
+function ImagePreview({ image, language, onClose, onContextMenuImage }: { image: PreviewImage; language: Language; onClose: () => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose);
-  return <div className="image-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="image-preview-dialog" role="dialog" aria-modal="true" aria-label={t.imagePreview}><button type="button" className="icon-button image-preview-close" onClick={onClose} aria-label={t.closeImagePreview} title={t.closeImagePreview}><Icon name="x" /></button><img src={image.src} alt={image.alt} /></div></div>;
+  return <div className="image-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="image-preview-dialog" role="dialog" aria-modal="true" aria-label={t.imagePreview}><button type="button" className="icon-button image-preview-close" onClick={onClose} aria-label={t.closeImagePreview} title={t.closeImagePreview}><Icon name="x" /></button><img src={image.src} alt={image.alt} onContextMenu={(event) => onContextMenuImage(event, image)} /></div></div>;
+}
+
+function ImageContextMenu({ language, x, y, onCopy }: { language: Language; x: number; y: number; onCopy: () => void }) {
+  const t = copy[language];
+  return <div className="image-context-menu" role="menu" style={{ left: x, top: y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={onCopy}><Icon name="copy" size={13} />{t.copyImage}</button></div>;
 }
 
 function ConfirmDialog({ language, task, busy, onCancel, onConfirm }: { language: Language; task: TaskSummary; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
