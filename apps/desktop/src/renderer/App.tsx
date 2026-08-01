@@ -608,7 +608,7 @@ export function App() {
           {activeTask && messageLoad.status === "loading" && messages.length === 0 && <ConversationSkeleton label={t.loadingConversation} />}
           {activeTask && messageLoad.status === "error" && <div className="conversation-error" role="alert"><span><Icon name="alert" /> <strong>{t.conversationLoadFailed}</strong><small>{messageLoad.error}</small></span><button className="button ghost" onClick={() => setMessageReload((current) => current + 1)}>{t.retry}</button></div>}
           {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isSending && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
-          <ExecutionSummary steps={activeTaskUi?.activity?.length ? activeTaskUi.activity : activityFromMessages(messages, language)} language={language} running={isSending} />
+          {isSending && <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running />}
           <MessageTimeline messages={messages} language={language} />
           {streamText && <article className="message assistant-message live-message"><div className="message-meta"><span className="avatar pi-avatar">P</span><span>{t.pi}</span><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
@@ -732,7 +732,28 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
 }
 
 function MessageTimeline({ messages, language }: { messages: any[]; language: Language }) {
-  return <>{messages.map((message, index) => message?.role === "toolResult" ? null : <MessageView key={message.id ?? `${message.role}-${index}`} message={message} language={language} />)}</>;
+  const items: Array<{ type: "message"; message: any; index: number } | { type: "execution"; steps: ActivityStep[]; index: number }> = [];
+  let turn: any[] = [];
+  const flushTurn = () => {
+    if (!turn.length) return;
+    const steps = activityFromMessages(turn, language);
+    if (!steps.length) {
+      for (const [index, message] of turn.entries()) if (message?.role !== "toolResult") items.push({ type: "message", message, index: items.length + index });
+      turn = [];
+      return;
+    }
+    const userMessage = turn.find((message) => message?.role === "user");
+    if (userMessage) items.push({ type: "message", message: userMessage, index: items.length });
+    items.push({ type: "execution", steps, index: items.length });
+    for (const message of turn) if (message?.role === "assistant" && textFromMessage(message)) items.push({ type: "message", message, index: items.length });
+    turn = [];
+  };
+  for (const message of messages) {
+    if (message?.role === "user" && turn.length) flushTurn();
+    turn.push(message);
+  }
+  flushTurn();
+  return <>{items.map((item) => item.type === "execution" ? <ExecutionSummary key={`execution-${item.index}`} steps={item.steps} language={language} running={false} /> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} />)}</>;
 }
 
 function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
