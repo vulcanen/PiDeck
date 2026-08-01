@@ -112,9 +112,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   transition: background 180ms var(--motion), color 180ms var(--motion), transform 180ms var(--motion);
 }
 .quiet-button { padding: 0 10px; font-size: 12px; }
-.permission-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 9px; border-radius: 8px; background: color-mix(in srgb, var(--accent-soft) 42%, transparent); color: var(--accent); font-size: 11px; font-weight: 650; transition: background 180ms var(--motion), color 180ms var(--motion), transform 180ms var(--motion); }
-.quiet-button:hover, .icon-button:hover, .lang-button:hover, .permission-button:hover { background: var(--surface-strong); color: var(--text); }
-.quiet-button:active, .icon-button:active, .lang-button:active, .permission-button:active { transform: scale(.97); }
+.quiet-button:hover, .icon-button:hover, .lang-button:hover { background: var(--surface-strong); color: var(--text); }
+.quiet-button:active, .icon-button:active, .lang-button:active { transform: scale(.97); }
 kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monospace; }
 .quiet-button kbd { margin-left: 5px; }
 .icon-button { width: 36px; min-height: 36px; padding: 0; }
@@ -326,6 +325,19 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .button.danger { background: var(--red); color: white; }
 .button.danger:hover { background: color-mix(in srgb, var(--red) 85%, black); }
 .composer-wrap { flex: 0 0 auto; padding: 0 32px 20px; }
+.permission-level-wrap { position: relative; display: flex; max-width: 860px; margin: -12px auto 12px; align-items: center; }
+.permission-level-button { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 0 8px; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; transition: background 160ms var(--motion), color 160ms var(--motion); }
+.permission-level-button:hover, .permission-level-button[aria-expanded="true"] { background: var(--surface-muted); color: var(--text); }
+.permission-level-button .permission-mode-dot { width: 7px; height: 7px; margin: 0; }
+.permission-level-menu { position: absolute; bottom: calc(100% + 5px); left: 0; z-index: var(--layer-popover); display: grid; min-width: 220px; gap: 2px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
+.permission-level-menu > button { display: flex; align-items: flex-start; gap: 7px; min-height: 42px; padding: 7px 8px; border-radius: 7px; background: transparent; color: var(--muted); text-align: left; }
+.permission-level-menu > button:hover, .permission-level-menu > button.selected { background: var(--surface-muted); color: var(--text); }
+.permission-level-menu > button > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
+.permission-level-menu strong { font-size: 11px; }
+.permission-level-menu small { color: var(--faint); font-size: 9px; line-height: 1.35; }
+.permission-level-menu > button > svg { margin-left: auto; opacity: 0; }
+.permission-level-menu > button.selected > svg { color: var(--accent); opacity: 1; }
+.permission-level-error { margin-left: 8px; color: var(--red); font-size: 10px; }
 .composer-shell { position: relative; max-width: 860px; margin: auto; }
 .composer { padding: 11px 12px 9px; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--surface); box-shadow: 0 7px 24px rgba(75, 60, 40, .07); transition: border-color 180ms var(--motion), box-shadow 180ms var(--motion); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent), 0 8px 28px rgba(75, 60, 40, .08); }
@@ -560,8 +572,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 
 @media (max-width: 760px) {
   .titlebar { padding-left: 10px; }
-  .brand-divider, .brand-lockup .eyebrow, .quiet-button > svg, .quiet-button, .permission-button span { display: none; }
-  .permission-button { width: 36px; padding: 0; }
+  .brand-divider, .brand-lockup .eyebrow, .quiet-button > svg, .quiet-button { display: none; }
   .workspace-grid, .workspace-grid.inspector-collapsed { grid-template-columns: 210px minmax(0, 1fr) 0; }
   .conversation-header { padding-right: 18px; padding-left: 18px; }
   .conversation-scroll { padding-right: 18px; padding-left: 18px; }

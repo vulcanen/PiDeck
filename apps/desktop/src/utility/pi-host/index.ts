@@ -43,6 +43,8 @@ const capabilitySessions = new Map<string, any>();
 const authWaiters = new Map<string, (value: string) => void>();
 const approvalWaiters = new Map<string, (allow: boolean) => void>();
 let permissionMode: PermissionMode = "ask";
+let permissionRevision = 0;
+const agentSessionRevisions = new Map<string, number>();
 
 function permissionConfigPath(): string {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
@@ -82,10 +84,14 @@ function persistPermissionMode(mode: PermissionMode) {
 
 async function setPermissionMode(mode: PermissionMode) {
   permissionMode = mode;
-  for (const resolve of approvalWaiters.values()) resolve(false);
-  approvalWaiters.clear();
-  for (const session of agentSessions.values()) { if (session?.isStreaming) await session.abort().catch(() => undefined); session?.dispose?.(); }
-  agentSessions.clear();
+  permissionRevision += 1;
+  // Apply a changed policy to an approval that is already waiting without
+  // aborting or disposing the running AgentSession. Idle sessions are lazily
+  // rebuilt by ensureAgentSession on the next prompt.
+  if (mode === "allow" || mode === "yolo" || mode === "deny") {
+    for (const resolve of approvalWaiters.values()) resolve(mode !== "deny");
+    approvalWaiters.clear();
+  }
   capabilitySessions.clear();
   persistPermissionMode(mode);
   return permissionStatus();
@@ -368,10 +374,19 @@ function sessionModelLabel(sessionInfo: any, sdk: PiSdk): string {
 
 async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   const existing = agentSessions.get(taskId);
-  if (existing) return existing;
+  if (existing) {
+    const sessionRevision = agentSessionRevisions.get(taskId);
+    if (sessionRevision === permissionRevision || existing.isStreaming) return existing;
+    // Do not interrupt an active turn. Once idle, recreate against the new
+    // extension configuration while keeping the same Pi SessionManager/file.
+    existing.dispose?.();
+    agentSessions.delete(taskId);
+    agentSessionRevisions.delete(taskId);
+  }
   const pending = agentSessionPromises.get(taskId);
   if (pending) return pending;
 
+  const creationRevision = permissionRevision;
   const creation = (async () => {
     const sdk = await loadPiSdk();
     let manager = sessionManagers.get(taskId);
@@ -399,7 +414,10 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     session.agent.beforeToolCall = async (context: any, signal?: AbortSignal) => {
       const toolName = context.toolCall?.name ?? "unknown";
       if (permissionMode === "deny") return { block: true, reason: "PiDeck 权限模式已禁止工具调用。" };
-      if (permissionMode === "allow" || permissionMode === "yolo" || permissionExtensionLoaded) return previousBeforeToolCall?.(context, signal);
+      // Explicit allow/yolo modes override the extension's previously loaded
+      // config immediately; do not wait for a session rebuild to allow tools.
+      if (permissionMode === "allow" || permissionMode === "yolo") return undefined;
+      if (permissionExtensionLoaded) return previousBeforeToolCall?.(context, signal);
       const safeTools = new Set(["read", "grep", "find", "ls"]);
       if (safeTools.has(toolName)) return previousBeforeToolCall?.(context, signal);
       const requestId = `${taskId}:${context.toolCall?.id ?? Date.now()}`;
@@ -415,6 +433,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       }
     });
     agentSessions.set(taskId, session);
+    agentSessionRevisions.set(taskId, creationRevision);
     return session;
   })();
   agentSessionPromises.set(taskId, creation);
