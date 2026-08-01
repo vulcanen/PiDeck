@@ -122,26 +122,45 @@ function resolveWorkspaceCwd(): string {
 }
 
 function resolvePiModule(): string {
-  if (process.env.PIDECK_PI_MODULE) return process.env.PIDECK_PI_MODULE;
+  if (process.env.PIDECK_PI_MODULE && existsSync(process.env.PIDECK_PI_MODULE)) return process.env.PIDECK_PI_MODULE;
   const candidates: string[] = [];
+  const addRoot = (root: string) => {
+    const normalized = root.trim().replace(/^['\"]|['\"]$/g, "");
+    if (!normalized) return;
+    candidates.push(path.join(normalized, "@earendil-works", "pi-coding-agent", "dist", "index.js"));
+    candidates.push(path.join(normalized, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"));
+  };
+  const addExecutable = (executable: string) => {
+    const clean = executable.trim();
+    if (!clean) return;
+    addRoot(path.dirname(clean));
+    if (process.platform === "win32" && existsSync(`${clean}.cmd`)) addRoot(path.dirname(`${clean}.cmd`));
+    try {
+      const shim = readFileSync(existsSync(clean) ? clean : `${clean}.cmd`, "utf8");
+      const match = /([A-Za-z]:[^\"\r\n]*@earendil-works[\\/]pi-coding-agent[\\/]dist[\\/]index\.js)/i.exec(shim);
+      if (match) candidates.push(match[1].replaceAll("\\\\", path.sep));
+    } catch {
+      // A shell shim is optional; the prefix candidates are sufficient.
+    }
+  };
   try {
     const executable = process.platform === "win32"
-      ? execFileSync("where.exe", ["pi"], { encoding: "utf8" }).split(/\r?\n/)[0].trim()
+      ? execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "where.exe"), ["pi"], { encoding: "utf8" }).split(/\r?\n/).find(Boolean) ?? ""
       : execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
-    if (executable) candidates.push(path.join(path.dirname(executable), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"));
+    addExecutable(executable);
   } catch {
-    // Fall through to npm's global prefix and the current process paths.
+    // Continue with PATH and npm-prefix discovery.
   }
-  try {
-    const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
-    if (npmRoot) candidates.push(path.join(npmRoot, "@earendil-works", "pi-coding-agent", "dist", "index.js"));
-  } catch {
-    // npm is optional when PiDeck is launched from a packaged bundle.
+  for (const bin of (process.env.PATH ?? "").split(path.delimiter)) if (bin) addRoot(path.join(bin, "node_modules"));
+  for (const prefix of [process.env.PIDECK_PI_GLOBAL_ROOT, process.env.npm_config_prefix, process.env.NPM_CONFIG_PREFIX, process.env.APPDATA ? path.join(process.env.APPDATA, "npm") : "", process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "npm") : ""]) if (prefix) addRoot(prefix);
+  for (const npmCommand of process.platform === "win32" ? ["npm.cmd", "npm"] : ["npm"]) {
+    try { addRoot(execFileSync(npmCommand, ["root", "-g"], { encoding: "utf8" })); } catch { /* npm is optional in packaged builds */ }
   }
-  candidates.push(path.resolve(process.cwd(), "node_modules/@earendil-works/pi-coding-agent/dist/index.js"));
+  addRoot(path.resolve(process.cwd(), "node_modules"));
+  addRoot(path.resolve(__dirname, "../../../node_modules"));
   const resolved = candidates.find((candidate) => existsSync(candidate));
   if (!resolved) {
-    throw new Error("Could not locate Pi SDK. Set PIDECK_PI_MODULE to @earendil-works/pi-coding-agent/dist/index.js.");
+    throw new Error(`Could not locate Pi SDK. Set PIDECK_PI_MODULE to @earendil-works/pi-coding-agent/dist/index.js. Searched ${candidates.length} locations.`);
   }
   return resolved;
 }
