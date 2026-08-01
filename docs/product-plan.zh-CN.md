@@ -137,7 +137,7 @@ PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Ex
 - `deny`：阻止工具执行。
 - `yolo`：开启插件 `yoloMode`，自动批准 `ask`，用于全自动执行。
 
-设置变更写入插件的全局 Pi 配置，并重建 AgentSession。Extension 不可加载时，PiHost 才回退到内置 `beforeToolCall` 审批适配。
+设置变更写入插件的全局 Pi 配置，并显示在输入框下方的当前权限等级控件中。切换不会中断正在运行的 Agent；空闲 Session 会在下一次提示前按新策略惰性重建。Extension 不可加载时，PiHost 才回退到内置 `beforeToolCall` 审批适配。
 
 接入约束：
 

@@ -48,7 +48,7 @@
 - `deny`：阻止工具执行。
 - `yoloMode`：自动批准 `ask`，用于全自动执行。
 
-PiDeck 设置页提供权限级别切换，并写入插件的 Pi 配置文件。切换后会重建 Pi Session，确保新策略生效。Extension 不可加载时才回退到 PiHost `beforeToolCall` 适配。
+PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 配置文件。切换不会中断正在运行的 Agent；空闲 Session 会在下一次提示前按新策略惰性重建。Extension 不可加载时才回退到 PiHost `beforeToolCall` 适配。
 
 ## 尚未接入
 
