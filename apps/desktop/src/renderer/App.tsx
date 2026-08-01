@@ -102,6 +102,7 @@ export function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [activeTask, setActiveTask] = useState<TaskSummary | null>(null);
   const [messagesByTask, setMessagesByTask] = useState<Record<string, any[]>>({});
+  const [sentImagesByTask, setSentImagesByTask] = useState<Record<string, { text: string; images: ImageAttachment[] }>>({});
   const [messageLoads, setMessageLoads] = useState<Record<string, MessageLoad>>({});
   const [messageReload, setMessageReload] = useState(0);
   const [taskUi, setTaskUi] = useState<Record<string, TaskUiState>>({});
@@ -151,7 +152,18 @@ export function App() {
   const streamText = activeTaskUi?.streamText ?? "";
   const workingPhase = activeTaskUi?.workingPhase ?? null;
   const liveApproval = activeTaskUi?.approval;
-  const messages = activeTask ? messagesByTask[activeTask.id] ?? [] : [];
+  const rawMessages = activeTask ? messagesByTask[activeTask.id] ?? [] : [];
+  const messages = useMemo(() => {
+    if (!activeTask) return rawMessages;
+    const sent = sentImagesByTask[activeTask.id];
+    if (!sent?.images.length) return rawMessages;
+    let attached = false;
+    return rawMessages.map((message) => {
+      if (attached || message?.role !== "user" || textFromMessage(message).trim() !== sent.text || (Array.isArray(message.content) && message.content.some((part: any) => part?.type === "image"))) return message;
+      attached = true;
+      return { ...message, content: [{ type: "text", text: sent.text }, ...sent.images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] };
+    });
+  }, [activeTask, rawMessages, sentImagesByTask]);
   const messageLoad = activeTask ? messageLoads[activeTask.id] ?? { status: "idle" as const } : { status: "idle" as const };
 
   function patchTaskUi(taskId: string, patch: Partial<TaskUiState>) {
@@ -444,6 +456,7 @@ export function App() {
       await removeSession(task.id, projectCwd);
       setTasks((current) => current.filter((item) => item.id !== task.id));
       setMessagesByTask((current) => { const next = { ...current }; delete next[task.id]; return next; });
+      setSentImagesByTask((current) => { const next = { ...current }; delete next[task.id]; return next; });
       setTaskUi((current) => { const next = { ...current }; delete next[task.id]; return next; });
       setPendingDelete(null);
       if (activeTask?.id === task.id) setActiveTask(null);
@@ -484,6 +497,7 @@ export function App() {
     if (!task || taskUi[task.id]?.isSending) return;
     const optimisticId = `local-${Date.now()}`;
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
+    if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: { text, images } }));
     setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
     patchTaskUi(task.id, { isSending: true, workingPhase: "thinking", streamText: "" });
@@ -603,6 +617,7 @@ export function App() {
         <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
         <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="key" /></button>
+        <button className="icon-button" title={t.permissionSettings} aria-label={t.permissionSettings} onClick={() => openProviderSettings()}><Icon name="shield" /></button>
       </div>
     </header>
 
@@ -643,7 +658,7 @@ export function App() {
           {streamText && <article className="message assistant-message live-message"><div className="message-meta"><span className="avatar pi-avatar">P</span><span>{t.pi}</span><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
           {liveApproval && <ApprovalCard approval={liveApproval} language={language} onResolve={async (decision) => {
-            try { await window.pideck.approvals.resolve(liveApproval.requestId, decision); if (activeTask) patchTaskUi(activeTask.id, { approval: undefined, workingPhase: "thinking" }); }
+            try { await window.pideck.approvals.resolve(liveApproval.requestId, decision); if (activeTask) { patchTaskUi(activeTask.id, { approval: undefined, workingPhase: decision === "allow-once" ? "thinking" : null }); setTasks((current) => current.map((task) => task.id === activeTask.id ? { ...task, state: decision === "allow-once" ? "running" : task.state } : task)); } }
             catch (error) { showNotice(error instanceof Error ? error.message : String(error)); throw error; }
           }} />}
         </div>
