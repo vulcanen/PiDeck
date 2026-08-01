@@ -41,6 +41,7 @@ type TaskUiState = {
 };
 type AuthPromptState = { requestId: string; message: string; placeholder: string; value: string };
 type ImageAttachment = { id: string; data: string; mimeType: string; name: string };
+type SentImageMessage = { text: string; images: ImageAttachment[] };
 type PreviewImage = { src: string; alt: string };
 
 function textFromMessage(message: any): string {
@@ -114,7 +115,13 @@ export function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [activeTask, setActiveTask] = useState<TaskSummary | null>(null);
   const [messagesByTask, setMessagesByTask] = useState<Record<string, any[]>>({});
-  const [sentImagesByTask, setSentImagesByTask] = useState<Record<string, { text: string; images: ImageAttachment[] }>>({});
+  const [sentImagesByTask, setSentImagesByTask] = useState<Record<string, SentImageMessage[]>>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("pideck.sent-images.v1") ?? "null");
+      if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
+      return Object.fromEntries(Object.entries(stored).filter(([, value]) => Array.isArray(value))) as Record<string, SentImageMessage[]>;
+    } catch { return {}; }
+  });
   const [messageLoads, setMessageLoads] = useState<Record<string, MessageLoad>>({});
   const [messageReload, setMessageReload] = useState(0);
   const [taskUi, setTaskUi] = useState<Record<string, TaskUiState>>({});
@@ -168,12 +175,13 @@ export function App() {
   const rawMessages = activeTask ? messagesByTask[activeTask.id] ?? [] : [];
   const messages = useMemo(() => {
     if (!activeTask) return rawMessages;
-    const sent = sentImagesByTask[activeTask.id];
-    if (!sent?.images.length) return rawMessages;
-    let attached = false;
+    const pendingImages = [...(sentImagesByTask[activeTask.id] ?? [])];
+    if (!pendingImages.length) return rawMessages;
     return rawMessages.map((message) => {
-      if (attached || message?.role !== "user" || textFromMessage(message).trim() !== sent.text || (Array.isArray(message.content) && message.content.some((part: any) => part?.type === "image"))) return message;
-      attached = true;
+      if (message?.role !== "user" || (Array.isArray(message.content) && message.content.some((part: any) => part?.type === "image"))) return message;
+      const matchIndex = pendingImages.findIndex((sent) => textFromMessage(message).trim() === sent.text);
+      if (matchIndex < 0) return message;
+      const sent = pendingImages.splice(matchIndex, 1)[0];
       return { ...message, content: [{ type: "text", text: sent.text }, ...sent.images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] };
     });
   }, [activeTask, rawMessages, sentImagesByTask]);
@@ -246,6 +254,10 @@ export function App() {
 
   useEffect(() => { localStorage.setItem("pideck.language", language); document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; }, [language]);
   useEffect(() => { localStorage.setItem("pideck.theme", theme); document.documentElement.style.colorScheme = theme; }, [theme]);
+  useEffect(() => {
+    try { localStorage.setItem("pideck.sent-images.v1", JSON.stringify(sentImagesByTask)); }
+    catch { /* Image history is a UI fallback; Pi remains the authoritative session store. */ }
+  }, [sentImagesByTask]);
   useEffect(() => () => { if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current); }, []);
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
@@ -510,7 +522,7 @@ export function App() {
     if (!task || taskUi[task.id]?.isSending) return;
     const optimisticId = `local-${Date.now()}`;
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
-    if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: { text, images } }));
+    if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { text, images }] }));
     setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
     patchTaskUi(task.id, { isSending: true, workingPhase: "thinking", streamText: "" });
@@ -525,6 +537,7 @@ export function App() {
     } catch (error) {
       patchTaskUi(task.id, { isSending: false, workingPhase: null });
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
+      if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
       setTasks((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
       showNotice(error instanceof Error ? error.message : String(error));
     }
@@ -631,7 +644,7 @@ export function App() {
         <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
         <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="key" /></button>
-        <button className="icon-button" title={t.permissionSettings} aria-label={t.permissionSettings} onClick={() => openProviderSettings()}><Icon name="shield" /></button>
+        <button className="permission-button" title={t.permissionSettings} aria-label={t.permissionSettings} onClick={() => openProviderSettings()}><Icon name="shield" /><span>{t.permissionSettings}</span></button>
       </div>
     </header>
 
@@ -967,8 +980,8 @@ function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNe
     ...(onCompact ? [{ id: "compact", label: t.compactContext, description: "", action: onCompact, icon: "spark" }] : []),
     ...(onExport ? [{ id: "export-jsonl", label: t.exportJsonl, description: "", action: () => onExport("jsonl"), icon: "file" }, { id: "export-html", label: t.exportHtml, description: "", action: () => onExport("html"), icon: "file" }] : []),
   ];
-  const safeCommands = (commands ?? []).filter((command) => command && typeof command.name === "string");
-  const filteredCommands = safeCommands.filter((command) => `${command.name} ${command.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
+  const safeCommands = (Array.isArray(commands) ? commands : []).filter((command) => command && typeof command.name === "string").map((command) => ({ ...command, description: typeof command.description === "string" ? command.description : "" }));
+  const filteredCommands = safeCommands.filter((command) => `${command.name} ${command.description}`.toLowerCase().includes(query.toLowerCase()));
   const filteredQuick = quickItems.filter((item) => `${item.label} ${item.description}`.toLowerCase().includes(query.toLowerCase()));
   const items = [...filteredQuick, ...filteredCommands.map((command) => ({ id: `command:${command.name}`, label: `/${command.name}`, description: command.description ?? t.piCommand, action: () => onCommand(command), icon: "command" }))];
   useEffect(() => setSelectedIndex(0), [query]);

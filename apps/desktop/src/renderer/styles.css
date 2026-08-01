@@ -112,8 +112,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   transition: background 180ms var(--motion), color 180ms var(--motion), transform 180ms var(--motion);
 }
 .quiet-button { padding: 0 10px; font-size: 12px; }
-.quiet-button:hover, .icon-button:hover, .lang-button:hover { background: var(--surface-strong); color: var(--text); }
-.quiet-button:active, .icon-button:active, .lang-button:active { transform: scale(.97); }
+.permission-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 9px; border-radius: 8px; background: color-mix(in srgb, var(--accent-soft) 42%, transparent); color: var(--accent); font-size: 11px; font-weight: 650; transition: background 180ms var(--motion), color 180ms var(--motion), transform 180ms var(--motion); }
+.quiet-button:hover, .icon-button:hover, .lang-button:hover, .permission-button:hover { background: var(--surface-strong); color: var(--text); }
+.quiet-button:active, .icon-button:active, .lang-button:active, .permission-button:active { transform: scale(.97); }
 kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monospace; }
 .quiet-button kbd { margin-left: 5px; }
 .icon-button { width: 36px; min-height: 36px; padding: 0; }
@@ -339,7 +340,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .composer-highlight { position: absolute; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
 .composer-editor textarea { position: relative; display: block; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: transparent; caret-color: var(--text); }
 .composer-placeholder { color: var(--faint); }
-.composer-token { padding: 1px 3px; border-radius: 4px; color: var(--accent); background: var(--accent-soft); font: inherit; }
+.composer-token { border-radius: 4px; color: var(--accent); background: var(--accent-soft); font: inherit; }
 .mention-token { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
 .composer textarea::placeholder { color: var(--faint); }
 .composer-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; margin-top: 7px; }
@@ -559,7 +560,8 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 
 @media (max-width: 760px) {
   .titlebar { padding-left: 10px; }
-  .brand-divider, .brand-lockup .eyebrow, .quiet-button > svg, .quiet-button { display: none; }
+  .brand-divider, .brand-lockup .eyebrow, .quiet-button > svg, .quiet-button, .permission-button span { display: none; }
+  .permission-button { width: 36px; padding: 0; }
   .workspace-grid, .workspace-grid.inspector-collapsed { grid-template-columns: 210px minmax(0, 1fr) 0; }
   .conversation-header { padding-right: 18px; padding-left: 18px; }
   .conversation-scroll { padding-right: 18px; padding-left: 18px; }
