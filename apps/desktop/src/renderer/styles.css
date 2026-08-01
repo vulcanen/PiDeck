@@ -230,7 +230,9 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .message:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 5px; border-radius: 8px; }
 .message-content { max-width: 760px; }
 .message-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 9px 0; }
-.message-images img { width: min(260px, 100%); max-height: 220px; object-fit: contain; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+.image-preview-trigger { display: block; max-width: min(260px, 100%); padding: 0; border: 0; border-radius: 9px; background: transparent; line-height: 0; }
+.message-images img { display: block; width: min(260px, 100%); max-height: 220px; object-fit: contain; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); transition: border-color 160ms var(--motion), opacity 160ms var(--motion); }
+.image-preview-trigger:hover img, .image-preview-trigger:focus-visible img { border-color: var(--accent); opacity: .86; }
 .user-message { align-items: flex-end; margin-right: max(0px, calc((100% - 920px) / 2)); }
 .user-message .message-bubble { max-width: min(78%, 700px); padding: 9px 16px 10px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 16px 16px 6px 16px; background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
 .user-message .message-content { max-width: none; }
@@ -328,8 +330,10 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent), 0 8px 28px rgba(75, 60, 40, .08); }
 .composer-attachments { display: flex; gap: 8px; padding: 2px 2px 9px; overflow-x: auto; }
 .composer-attachment { position: relative; width: 58px; height: 58px; flex: 0 0 auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-muted); }
-.composer-attachment img { width: 100%; height: 100%; object-fit: cover; }
-.composer-attachment button { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: color-mix(in srgb, var(--text) 78%, transparent); color: var(--canvas); }
+.composer-image-preview { display: block; width: 100%; height: 100%; padding: 0; background: transparent; line-height: 0; }
+.composer-attachment img { width: 100%; height: 100%; object-fit: cover; transition: opacity 160ms var(--motion); }
+.composer-image-preview:hover img, .composer-image-preview:focus-visible img { opacity: .78; }
+.composer-remove-image { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: color-mix(in srgb, var(--text) 78%, transparent); color: var(--canvas); }
 .composer-editor { position: relative; min-height: 52px; max-height: 168px; overflow: hidden; }
 .composer-highlight, .composer-editor textarea { width: 100%; min-height: 52px; max-height: 168px; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; }
 .composer-highlight { position: absolute; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
@@ -441,7 +445,11 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .terminal-running { color: var(--accent); }
 
 /* Palettes, dialogs and notifications */
-.palette-backdrop, .dialog-backdrop, .settings-backdrop, .auth-prompt-backdrop { position: fixed; inset: 0; background: rgba(31, 29, 25, .28); backdrop-filter: blur(4px); }
+.palette-backdrop, .dialog-backdrop, .settings-backdrop, .auth-prompt-backdrop, .image-preview-backdrop { position: fixed; inset: 0; background: rgba(31, 29, 25, .28); backdrop-filter: blur(4px); }
+.image-preview-backdrop { z-index: var(--layer-modal); display: grid; place-items: center; padding: 28px; }
+.image-preview-dialog { position: relative; display: grid; place-items: center; max-width: min(1100px, 100%); max-height: min(820px, 100%); }
+.image-preview-dialog img { display: block; max-width: 100%; max-height: min(820px, calc(100dvh - 56px)); object-fit: contain; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
+.image-preview-close { position: absolute; top: -14px; right: -14px; z-index: 1; background: var(--surface); box-shadow: var(--shadow); }
 .palette-backdrop { z-index: var(--layer-modal); display: grid; place-items: start center; padding-top: clamp(70px, 11vh, 110px); }
 .command-palette { width: min(520px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); animation: dialog-in 220ms var(--motion) both; }
 .palette-error { display: grid; gap: 14px; padding: 20px; color: var(--text); }
