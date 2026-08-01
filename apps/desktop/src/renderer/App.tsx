@@ -293,18 +293,24 @@ export function App() {
   const modelOptions = useMemo(() => [...models].filter((model) => model.authConfigured).sort((a, b) => a.providerName.localeCompare(b.providerName) || a.name.localeCompare(b.name)), [models]);
   const suggestions = useMemo(() => {
     if (suggestionMode === "mention") return (workspace?.files ?? []).filter((file) => file.kind === "file" && file.path.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
+    const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
+    const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
+    const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
     const slashItems = [
-      ...(capabilities?.slashCommands?.length ? capabilities.slashCommands : fallbackSlashCommands),
-      ...(capabilities?.prompts ?? []).map((item) => ({ name: item.name, description: item.description })),
-      ...(capabilities?.skills ?? []).map((item) => ({ name: item.name, description: item.description })),
+      ...slashCommands,
+      ...prompts.map((item) => ({ name: item.name, description: item.description })),
+      ...skills.map((item) => ({ name: item.name, description: item.description })),
     ];
     return slashItems.filter((item) => item.name.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
   }, [capabilities, suggestionMode, suggestionQuery, workspace]);
   const paletteCommands = useMemo(() => {
+    const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
+    const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
+    const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
     const commands = [
-      ...(capabilities?.slashCommands?.length ? capabilities.slashCommands : fallbackSlashCommands),
-      ...(capabilities?.prompts ?? []).map((item) => ({ name: item.name, description: item.description, source: "prompt" })),
-      ...(capabilities?.skills ?? []).map((item) => ({ name: item.name, description: item.description, source: "skill" })),
+      ...slashCommands,
+      ...prompts.map((item) => ({ name: item.name, description: item.description, source: "prompt" })),
+      ...skills.map((item) => ({ name: item.name, description: item.description, source: "skill" })),
     ];
     return Array.from(new Map(commands.map((command) => [command.name, command])).values());
   }, [capabilities]);
@@ -985,7 +991,7 @@ function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNe
   const filteredQuick = quickItems.filter((item) => `${item.label} ${item.description}`.toLowerCase().includes(query.toLowerCase()));
   const items = [...filteredQuick, ...filteredCommands.map((command) => ({ id: `command:${command.name}`, label: `/${command.name}`, description: command.description ?? t.piCommand, action: () => onCommand(command), icon: "command" }))];
   useEffect(() => setSelectedIndex(0), [query]);
-  useEffect(() => itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" }), [selectedIndex]);
+  useEffect(() => { const item = itemRefs.current[selectedIndex]; item?.scrollIntoView?.({ block: "nearest" }); }, [selectedIndex]);
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") { event.preventDefault(); setSelectedIndex((current) => Math.min(items.length - 1, current + 1)); }
     if (event.key === "ArrowUp") { event.preventDefault(); setSelectedIndex((current) => Math.max(0, current - 1)); }
