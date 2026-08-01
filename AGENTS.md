@@ -10,6 +10,7 @@ PiDeck 的唯一产品边界是：把 `@earendil-works/pi-coding-agent`（Pi CLI
 - [依赖升级与运行时兼容](rules/dependency-management.md)
 - [Electron/PiHost 通信与验证](rules/runtime-compatibility.md)
 - [文档同步规则](rules/documentation-management.md)
+- [UI/UX 开发规范](rules/ui-ux-standards.zh-CN.md)
 
 ## 运行环境
 

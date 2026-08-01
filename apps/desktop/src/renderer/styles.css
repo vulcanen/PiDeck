@@ -13,6 +13,8 @@ body { margin: 0; overflow: hidden; }
 button, input, textarea { font: inherit; }
 button { color: inherit; border: 0; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
+.skip-link { position: fixed; top: 8px; left: 8px; z-index: var(--layer-toast); padding: 8px 11px; border-radius: 7px; background: var(--text); color: var(--canvas); font-size: 11px; transform: translateY(-140%); transition: transform 160ms var(--motion); }
+.skip-link:focus-visible { transform: translateY(0); }
 button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent, #b45a3c);
   outline-offset: 2px;
@@ -114,7 +116,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .quiet-button:active, .icon-button:active, .lang-button:active { transform: scale(.97); }
 kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monospace; }
 .quiet-button kbd { margin-left: 5px; }
-.icon-button { width: 34px; padding: 0; }
+.icon-button { width: 36px; min-height: 36px; padding: 0; }
 .lang-button { min-width: 34px; padding: 0 7px; font-size: 11px; font-weight: 700; }
 
 /* Workspace and sidebar */
@@ -155,6 +157,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 }
 .search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
 .search-box input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
+.search-box:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 .search-box input::placeholder { color: var(--faint); }
 .sidebar-scroll { min-height: 0; flex: 1; overflow: auto; padding: 0 9px; }
 .section-label { display: flex; align-items: center; gap: 7px; padding: 8px 7px 7px; color: var(--faint); font-size: 10px; font-weight: 750; letter-spacing: .11em; text-transform: uppercase; }
@@ -167,7 +170,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .task-copy { display: grid; min-width: 0; gap: 4px; }
 .task-copy strong { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .task-copy small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.task-more { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; background: transparent; color: var(--muted); opacity: 0; transform: translateY(-50%); transition: opacity 160ms var(--motion), background 160ms var(--motion); }
+.task-more { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 7px; background: transparent; color: var(--muted); opacity: 0; transform: translateY(-50%); transition: opacity 160ms var(--motion), background 160ms var(--motion); }
 .task-row:hover .task-more, .task-row:focus-within .task-more { opacity: 1; }
 .task-more:hover { background: var(--surface-strong); color: var(--text); }
 .state-mark { position: relative; display: grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; flex: 0 0 auto; border-radius: 50%; }
@@ -178,7 +181,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .state-mark.failed { border: 1px solid var(--red); color: var(--red); font-size: 13px; font-weight: 800; }
 .state-mark.idle { border: 1px solid var(--line-strong); }
 .unread-dot { width: 7px; height: 7px; margin: 5px 0 0 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-.task-working-spinner { width: 13px; height: 13px; margin-left: auto; flex: 0 0 auto; border: 1.5px solid color-mix(in srgb, var(--accent) 24%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: task-spin 800ms linear infinite; }
+.task-working-spinner { width: 13px; height: 13px; margin-left: auto; flex: 0 0 auto; border: 1.5px solid color-mix(in srgb, var(--accent) 24%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: task-spin 800ms cubic-bezier(.4, 0, .6, 1) infinite; }
 .task-approval-mark { display: grid; place-items: center; width: 15px; height: 15px; margin-left: auto; flex: 0 0 auto; border-radius: 50%; background: var(--amber); color: white; font: 700 10px/1 sans-serif; }
 .empty-sidebar { display: grid; gap: 5px; padding: 24px 9px; color: var(--muted); font-size: 12px; }
 .empty-sidebar span { color: var(--faint); font-size: 11px; line-height: 1.55; }
@@ -331,6 +334,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .composer-highlight, .composer-editor textarea { width: 100%; min-height: 52px; max-height: 168px; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; }
 .composer-highlight { position: absolute; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
 .composer-editor textarea { position: relative; display: block; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: transparent; caret-color: var(--text); }
+.composer-editor:focus-within { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); border-radius: 5px; }
 .composer-placeholder { color: var(--faint); }
 .composer-token { padding: 1px 3px; border-radius: 4px; color: var(--accent); background: var(--accent-soft); font: inherit; }
 .mention-token { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
@@ -372,6 +376,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .model-menu > button:not(.active) > svg { opacity: 0; }
 .model-search { display: flex; align-items: center; gap: 7px; min-height: 36px; margin-bottom: 4px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--muted); }
 .model-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 11px; }
+.model-search:focus-within { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
 .menu-empty { padding: 14px 8px; color: var(--muted); font-size: 11px; }
 .suggestion-popover { right: 0; bottom: calc(100% + 9px); left: 0; display: grid; max-height: 300px; padding: 6px; }
 .suggestion-popover button { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 7px 8px; border-radius: 8px; background: transparent; text-align: left; }

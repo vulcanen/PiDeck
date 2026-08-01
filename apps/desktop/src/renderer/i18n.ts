@@ -3,6 +3,7 @@ export type Language = "zh" | "en";
 export const copy = {
   zh: {
     workspace: "工作台",
+    skipToContent: "跳转到主要内容",
     newTask: "新建任务",
     search: "搜索会话",
     sessions: "会话",
@@ -104,6 +105,7 @@ export const copy = {
     contextUsage: "上下文使用量",
     contextUsed: "已使用",
     contextWindow: "上下文上限",
+    tokenUnit: "tokens",
     contextUnknown: "尚无上下文用量数据",
     attachImage: "粘贴图片",
     removeImage: "移除图片",
@@ -161,6 +163,7 @@ export const copy = {
   },
   en: {
     workspace: "Workspace",
+    skipToContent: "Skip to main content",
     newTask: "New task",
     search: "Search sessions",
     sessions: "Sessions",
@@ -262,6 +265,7 @@ export const copy = {
     contextUsage: "Context usage",
     contextUsed: "Used",
     contextWindow: "Context window",
+    tokenUnit: "tokens",
     contextUnknown: "Context usage is not available yet",
     attachImage: "Paste image",
     removeImage: "Remove image",

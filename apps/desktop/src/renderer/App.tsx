@@ -609,6 +609,7 @@ export function App() {
   }
 
   return <div className={`app-shell ${theme}`}>
+    <a className="skip-link" href="#main-content">{t.skipToContent}</a>
     <header className="titlebar">
       <div className="brand-lockup"><span className="brand-mark">P</span><span className="brand-name">PiDeck</span><span className="brand-divider" /><span className="eyebrow">{t.workspace}</span></div>
       <div className="window-drag" />
@@ -638,7 +639,7 @@ export function App() {
         </div>
       </aside>
 
-      <main className="main-column" id="main-content">
+      <main className="main-column" id="main-content" tabIndex={-1}>
         <div className="conversation-header">
           <div className="conversation-title"><div className="breadcrumb"><span>PiDeck</span><span>/</span><span>{activeTask?.title ?? t.conversation}</span></div><h1>{activeTask?.title ?? t.conversation}</h1></div>
           <div className="conversation-actions">
@@ -816,7 +817,7 @@ function ContextRing({ usage, language }: { usage?: ContextUsage; language: Lang
   const dash = circumference * percent / 100;
   return <span className="context-ring-wrap" tabIndex={0} aria-label={t.contextUsage}>
     <span className="context-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle className="context-ring-track" cx="10" cy="10" r="8" /><circle className="context-ring-progress" cx="10" cy="10" r="8" strokeDasharray={`${dash} ${circumference - dash}`} /></svg><span>{usage?.percent === null || usage?.percent === undefined ? "—" : `${Math.round(percent)}%`}</span></span>
-    <span className="context-tooltip" role="tooltip"><strong>{t.contextUsage}</strong><span className="context-total">{formatTokenCount(usage?.tokens)} / {formatTokenCount(usage?.contextWindow)} tokens</span><span>{t.contextUsed}: {formatTokenCount(usage?.tokens)} tokens</span><span>{t.contextWindow}: {formatTokenCount(usage?.contextWindow)} tokens</span></span>
+    <span className="context-tooltip" role="tooltip"><strong>{t.contextUsage}</strong><span className="context-total">{formatTokenCount(usage?.tokens)} / {formatTokenCount(usage?.contextWindow)} {t.tokenUnit}</span><span>{t.contextUsed}: {formatTokenCount(usage?.tokens)} {t.tokenUnit}</span><span>{t.contextWindow}: {formatTokenCount(usage?.contextWindow)} {t.tokenUnit}</span></span>
   </span>;
 }
 
@@ -899,7 +900,7 @@ function Composer(props: { value: string; onChange: (value: string) => void; onK
       <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRing usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
       <button className="chip subtle" aria-label={t.mentionLabel} title={t.mentionLabel} onClick={() => props.onChange(`${props.value}${props.value ? " " : ""}@`)}><Icon name="plus" size={14} />@</button>
       <button className="chip subtle terminal-trigger" onClick={props.onTerminal}><Icon name="terminal" size={13} />{t.terminal}</button>
-    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !props.value.trim()} aria-label={props.isSending ? t.stop : t.send} onClick={props.onSend}><Icon name={props.isSending ? "stop" : "send"} size={16} /></button></div></div>
+    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !props.value.trim() && props.attachments.length === 0} aria-label={props.isSending ? t.stop : t.send} onClick={props.onSend}><Icon name={props.isSending ? "stop" : "send"} size={16} /></button></div></div>
   </div></div>;
 }
 

@@ -20,6 +20,7 @@ PiDeck 是为 [Pi Agent Harness](https://pi.dev) 设计的桌面界面端。
 - [PiDeck 架构说明](docs/architecture.zh-CN.md)
 - [Pi CLI 功能矩阵](docs/pi-cli-feature-matrix.zh-CN.md)
 - [文档同步规则](rules/documentation-management.md)
+- [UI/UX 开发规范](rules/ui-ux-standards.zh-CN.md)
 
 ## 本地开发
 
