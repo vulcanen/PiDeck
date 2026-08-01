@@ -1,4 +1,5 @@
-import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
+import Editor from "react-simple-code-editor";
 import type {
   AuthMethod,
   ContextUsage,
@@ -18,7 +19,7 @@ import { copyText, Icon, useDialogFocus } from "./ui";
 
 type Theme = "light" | "dark";
 type SuggestionMode = "slash" | "mention" | null;
-type WorkingPhase = "thinking" | "responding" | "tool" | null;
+type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | null;
 type MessageLoad = { status: "idle" | "loading" | "ready" | "error"; error?: string };
 type ActivityStep = {
   id: string;
@@ -33,6 +34,7 @@ type ActivityStep = {
 };
 type TaskUiState = {
   isSending: boolean;
+  isCompacting: boolean;
   streamText: string;
   workingPhase: WorkingPhase;
   activity: ActivityStep[];
@@ -44,6 +46,34 @@ type ImageAttachment = { id: string; data: string; mimeType: string; name: strin
 type SentImageMessage = { text: string; images: ImageAttachment[] };
 type PreviewImage = { src: string; alt: string };
 type ImageContextMenuState = { x: number; y: number; image: PreviewImage };
+
+function createDefaultTaskUiState(): TaskUiState {
+  return { isSending: false, isCompacting: false, streamText: "", workingPhase: null, activity: [] };
+}
+
+const commandDescriptionCopy: Record<string, Record<Language, string>> = {
+  settings: { zh: "打开设置", en: "Open settings" },
+  model: { zh: "选择模型", en: "Select model" },
+  "scoped-models": { zh: "配置模型轮换", en: "Configure model cycling" },
+  export: { zh: "导出当前会话", en: "Export the current session" },
+  import: { zh: "导入 JSONL 会话", en: "Import a JSONL session" },
+  name: { zh: "重命名当前会话", en: "Rename the current session" },
+  session: { zh: "显示会话信息", en: "Show session information" },
+  fork: { zh: "从会话树创建分支", en: "Create a branch from the session tree" },
+  tree: { zh: "浏览会话树", en: "Navigate the session tree" },
+  login: { zh: "配置 Provider 认证", en: "Configure Provider authentication" },
+  logout: { zh: "移除 Provider 认证", en: "Remove Provider authentication" },
+  new: { zh: "开始新会话", en: "Start a new session" },
+  compact: { zh: "压缩当前上下文", en: "Compact the current context" },
+  resume: { zh: "恢复另一个会话", en: "Resume another session" },
+  reload: { zh: "重新加载 Pi 资源", en: "Reload Pi resources" },
+  quit: { zh: "退出 PiDeck", en: "Quit PiDeck" },
+};
+
+function localizeCommandDescription(name: string, description: string | undefined, language: Language) {
+  const localized = commandDescriptionCopy[name.toLowerCase()];
+  return localized?.[language] ?? description ?? "";
+}
 
 function textFromMessage(message: any): string {
   if (typeof message?.content === "string") return message.content;
@@ -180,6 +210,8 @@ export function App() {
   const shortcut = (key: string) => `${isMac ? "⌘" : "Ctrl+"}${key}`;
   const activeTaskUi = activeTask ? taskUi[activeTask.id] : undefined;
   const isSending = Boolean(activeTaskUi?.isSending);
+  const isCompacting = Boolean(activeTaskUi?.isCompacting);
+  const isWorking = isSending || isCompacting;
   const streamText = activeTaskUi?.streamText ?? "";
   const workingPhase = activeTaskUi?.workingPhase ?? null;
   const liveApproval = activeTaskUi?.approval;
@@ -200,14 +232,14 @@ export function App() {
 
   function patchTaskUi(taskId: string, patch: Partial<TaskUiState>) {
     setTaskUi((current) => {
-      const previous = current[taskId] ?? { isSending: false, streamText: "", workingPhase: null, activity: [] };
+      const previous = current[taskId] ?? createDefaultTaskUiState();
       return { ...current, [taskId]: { ...previous, ...patch } };
     });
   }
 
   function updateActivity(taskId: string, update: (steps: ActivityStep[]) => ActivityStep[]) {
     setTaskUi((current) => {
-      const previous = current[taskId] ?? { isSending: true, streamText: "", workingPhase: "thinking" as const, activity: [] };
+      const previous = current[taskId] ?? { ...createDefaultTaskUiState(), isSending: true, workingPhase: "thinking" as const };
       return { ...current, [taskId]: { ...previous, activity: update(previous.activity) } };
     });
   }
@@ -233,6 +265,23 @@ export function App() {
   async function refreshWorkspace() {
     try { setWorkspace(await window.pideck.workspace.snapshot(projectCwd)); }
     catch (error) { showNotice(`${t.workspaceRefreshFailed}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  async function refreshModels(providerId?: string) {
+    try {
+      const maxAttempts = providerId ? 8 : 1;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const [providersResult, modelsResult] = await Promise.allSettled([
+          providerId ? window.pideck.providers.list() : Promise.resolve([] as ProviderSummary[]),
+          window.pideck.models.list(),
+        ]);
+        if (modelsResult.status === "fulfilled") setModels(modelsResult.value);
+        else throw modelsResult.reason;
+        if (!providerId) return;
+        if (providersResult.status === "fulfilled" && providersResult.value.some((provider) => provider.id === providerId && provider.authState === "configured")) return;
+        await new Promise((resolve) => window.setTimeout(resolve, attempt < 2 ? 150 : 300));
+      }
+    } catch (error) { showNotice(`Pi models.list: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   async function loadInitialData() {
@@ -272,6 +321,7 @@ export function App() {
 
   useEffect(() => { localStorage.setItem("pideck.language", language); document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; }, [language]);
   useEffect(() => { localStorage.setItem("pideck.theme", theme); document.documentElement.style.colorScheme = theme; }, [theme]);
+  useEffect(() => { void window.pideck.app.setLanguage(language).catch(() => undefined); }, [language]);
   useEffect(() => {
     try { localStorage.setItem("pideck.sent-images.v1", JSON.stringify(sentImagesByTask)); }
     catch { /* Image history is a UI fallback; Pi remains the authoritative session store. */ }
@@ -290,6 +340,32 @@ export function App() {
     if (followConversationRef.current) element.scrollTop = element.scrollHeight;
     else if (streamText || isSending) setShowJumpToLatest(true);
   }, [messages, streamText, isSending]);
+
+  useLayoutEffect(() => {
+    const element = conversationRef.current;
+    if (!element) return;
+    const root = document.documentElement;
+    const updateScrollbarWidth = () => {
+      const scrollbarWidth = Math.max(0, element.offsetWidth - element.clientWidth);
+      root.style.setProperty("--conversation-scrollbar-width", `${scrollbarWidth}px`);
+    };
+    updateScrollbarWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateScrollbarWidth);
+      return () => {
+        window.removeEventListener("resize", updateScrollbarWidth);
+        root.style.removeProperty("--conversation-scrollbar-width");
+      };
+    }
+    const observer = new ResizeObserver(updateScrollbarWidth);
+    observer.observe(element);
+    window.addEventListener("resize", updateScrollbarWidth);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateScrollbarWidth);
+      root.style.removeProperty("--conversation-scrollbar-width");
+    };
+  }, []);
 
   function handleConversationScroll() {
     const element = conversationRef.current;
@@ -315,23 +391,23 @@ export function App() {
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
     const slashItems = [
-      ...slashCommands,
-      ...prompts.map((item) => ({ name: item.name, description: item.description })),
-      ...skills.map((item) => ({ name: item.name, description: item.description })),
+      ...slashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...prompts.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
     ];
     return slashItems.filter((item) => item.name.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
-  }, [capabilities, suggestionMode, suggestionQuery, workspace]);
+  }, [capabilities, language, suggestionMode, suggestionQuery, workspace]);
   const paletteCommands = useMemo(() => {
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
     const commands = [
-      ...slashCommands,
-      ...prompts.map((item) => ({ name: item.name, description: item.description, source: "prompt" })),
-      ...skills.map((item) => ({ name: item.name, description: item.description, source: "skill" })),
+      ...slashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...prompts.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language), source: "prompt" })),
+      ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language), source: "skill" })),
     ];
     return Array.from(new Map(commands.map((command) => [command.name, command])).values());
-  }, [capabilities]);
+  }, [capabilities, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,9 +477,18 @@ export function App() {
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
     if (event?.type === "agent_start") {
-      patchTaskUi(taskId, { isSending: true, workingPhase: "thinking", streamText: "", toolName: undefined, activity: [] });
+      patchTaskUi(taskId, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", toolName: undefined, activity: [] });
       setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: "running" } : task));
+      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
     } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
+    else if (event?.type === "compaction_start") patchTaskUi(taskId, { isCompacting: true, workingPhase: "compacting", toolName: undefined });
+    else if (event?.type === "compaction_end") {
+      patchTaskUi(taskId, { isCompacting: false, workingPhase: "thinking" });
+      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+    }
+    else if (event?.type === "message_start" || event?.type === "message_end") {
+      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+    }
     else if (event?.type === "message_update" && event.stream?.type === "thinking_delta" && event.stream.delta) {
       updateActivity(taskId, (steps) => {
         const last = steps[steps.length - 1];
@@ -414,8 +499,8 @@ export function App() {
     } else if (event?.type === "message_update" && event.stream?.type === "text_delta" && event.stream.delta) {
       updateActivity(taskId, (steps) => steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: Date.now() } : step));
       setTaskUi((current) => {
-        const previous = current[taskId] ?? { isSending: true, streamText: "", workingPhase: "responding" as const, activity: [] };
-        return { ...current, [taskId]: { ...previous, isSending: true, workingPhase: "responding", streamText: previous.streamText + event.stream.delta, toolName: undefined } };
+        const previous = current[taskId] ?? { ...createDefaultTaskUiState(), isSending: true, workingPhase: "responding" as const };
+        return { ...current, [taskId]: { ...previous, isSending: true, isCompacting: false, workingPhase: "responding", streamText: previous.streamText + event.stream.delta, toolName: undefined } };
       });
     } else if (event?.type === "tool_execution_start") {
       const startedAt = Date.now();
@@ -426,6 +511,7 @@ export function App() {
     } else if (event?.type === "tool_execution_end") {
       updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step));
       patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
+      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
     }
     else if (event?.type === "message.snapshot") {
       setMessagesByTask((current) => ({ ...current, [taskId]: (event.messages ?? []) as any[] }));
@@ -434,7 +520,7 @@ export function App() {
     } else if (event?.type === "agent_settled" || event?.type === "agent_end") {
       const endedAt = Date.now();
       updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt }));
-      patchTaskUi(taskId, { isSending: false, workingPhase: null, streamText: "", toolName: undefined });
+      patchTaskUi(taskId, { isSending: false, isCompacting: false, workingPhase: null, streamText: "", toolName: undefined });
       void window.pideck.sessions.messages(taskId, projectCwd).then((next) => {
         setMessagesByTask((current) => ({ ...current, [taskId]: next as any[] }));
         setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
@@ -549,13 +635,13 @@ export function App() {
     const desiredThinking = thinkingLevel;
     const images = composerImages;
     const task = activeTask ?? await createTask();
-    if (!task || taskUi[task.id]?.isSending) return;
+    if (!task) return;
     const optimisticId = `local-${Date.now()}`;
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
     if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { text, images }] }));
     setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
-    patchTaskUi(task.id, { isSending: true, workingPhase: "thinking", streamText: "" });
+    patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "" });
     const taskTitle = text.replace(/\s+/g, " ").trim().slice(0, 80);
     const shouldNameTask = !task.title || task.title === copy.zh.newTaskName || task.title === copy.en.newTaskName;
     setTasks((current) => current.map((item) => item.id === task.id ? { ...item, title: shouldNameTask ? taskTitle || item.title : item.title, state: "running" } : item));
@@ -565,7 +651,7 @@ export function App() {
       if (creating && desiredThinking !== "off") await window.pideck.agent.setThinkingLevel(task.id, desiredThinking, projectCwd);
       await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })));
     } catch (error) {
-      patchTaskUi(task.id, { isSending: false, workingPhase: null });
+      patchTaskUi(task.id, { isSending: false, isCompacting: false, workingPhase: null });
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
       if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
       setTasks((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
@@ -575,7 +661,7 @@ export function App() {
 
   async function abortActive() {
     if (!activeTask) return;
-    try { await window.pideck.agent.abort(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, workingPhase: null, streamText: "" }); }
+    try { await window.pideck.agent.abort(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "" }); }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -679,7 +765,7 @@ export function App() {
         <button className="quiet-button" onClick={() => setPaletteOpen(true)}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
         <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
-        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="key" /></button>
+        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="settings" /></button>
       </div>
     </header>
 
@@ -703,10 +789,6 @@ export function App() {
       <main className="main-column" id="main-content" tabIndex={-1}>
         <div className="conversation-header">
           <div className="conversation-title"><div className="breadcrumb"><span>PiDeck</span><span>/</span><span>{activeTask?.title ?? t.conversation}</span></div><h1>{activeTask?.title ?? t.conversation}</h1></div>
-          <div className="conversation-actions">
-            <button className="icon-button" title={t.showFiles} aria-label={t.showFiles} onClick={() => { setRightPanel("files"); setInspectorOpen(true); void refreshWorkspace(); }}><Icon name="file" /></button>
-            <button className="icon-button" title={t.toggleInspector} aria-label={t.toggleInspector} aria-expanded={inspectorOpen} onClick={() => setInspectorOpen((current) => !current)}><Icon name="panel" /></button>
-          </div>
         </div>
         <div ref={conversationRef} className="conversation-scroll" onScroll={handleConversationScroll}>
           {loadError && <div className="runtime-error" role="alert"><strong>{loadError}</strong><button onClick={() => void loadInitialData()}>{t.retry}</button></div>}
@@ -714,11 +796,11 @@ export function App() {
           {!initialLoading && !loadError && !activeTask && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noSessions}</h2><p>{t.createFirst}</p><button className="button primary" onClick={() => void createTask()}><Icon name="plus" size={14} />{t.newTask}</button></div>}
           {activeTask && messageLoad.status === "loading" && messages.length === 0 && <ConversationSkeleton label={t.loadingConversation} />}
           {activeTask && messageLoad.status === "error" && <div className="conversation-error" role="alert"><span><Icon name="alert" /> <strong>{t.conversationLoadFailed}</strong><small>{messageLoad.error}</small></span><button className="button ghost" onClick={() => setMessageReload((current) => current + 1)}>{t.retry}</button></div>}
-          {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isSending && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
-          {isSending && <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running />}
+          {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isWorking && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
+          {isWorking && <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running />}
           <MessageTimeline messages={messages} language={language} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
           {streamText && <article className="message assistant-message live-message"><div className="live-message-status"><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
-          {isSending && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
+          {isWorking && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
           {liveApproval && <ApprovalCard approval={liveApproval} language={language} onResolve={async (decision) => {
             try { await window.pideck.approvals.resolve(liveApproval.requestId, decision); if (activeTask) { patchTaskUi(activeTask.id, { approval: undefined, workingPhase: decision === "allow-once" ? "thinking" : null }); setTasks((current) => current.map((task) => task.id === activeTask.id ? { ...task, state: decision === "allow-once" ? "running" : task.state } : task)); } }
             catch (error) { showNotice(error instanceof Error ? error.message : String(error)); throw error; }
@@ -729,7 +811,7 @@ export function App() {
           if (suggestionMode && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setSuggestionIndex((current) => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))); return; }
           if (event.key === "Escape") { setSuggestionMode(null); return; }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendPrompt(); }
-        }} onSend={() => void (isSending ? abortActive() : sendPrompt())} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} commandNames={paletteCommands.map((command) => command.name)} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
+        }} onSend={() => void sendPrompt()} onStop={() => void abortActive()} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} commandNames={paletteCommands.map((command) => command.name)} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
         <PermissionLevelControl language={language} status={permissionStatus} onStatus={handlePermissionStatus} />
       </main>
 
@@ -745,7 +827,7 @@ export function App() {
     {notice && <div className="toast" role="status" aria-live="polite">{notice}</div>}
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
-    {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} />}
+    {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
     {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
     {imageContextMenu && <ImageContextMenu language={language} x={imageContextMenu.x} y={imageContextMenu.y} onCopy={async () => { const copied = await copyImageToClipboard(imageContextMenu.image.src); setImageContextMenu(null); showNotice(copied ? t.copiedImage : t.copyImageFailed); }} />}
   </div>;
@@ -886,6 +968,21 @@ function ContextRing({ usage, language }: { usage?: ContextUsage; language: Lang
   </span>;
 }
 
+function ContextRingPopover({ usage, language }: { usage?: ContextUsage; language: Language }) {
+  const t = copy[language];
+  const percent = usage?.percent === null || usage?.percent === undefined ? 0 : Math.max(0, Math.min(100, usage.percent));
+  const circumference = 2 * Math.PI * 8;
+  const dash = circumference * percent / 100;
+  const percentLabel = usage?.percent === null || usage?.percent === undefined ? t.contextUnknown : `${Math.round(percent)}% ${t.contextUsed}`;
+  const totalLabel = usage?.tokens === null || usage?.tokens === undefined || usage?.contextWindow === null || usage?.contextWindow === undefined
+    ? t.contextUnknown
+    : `${formatTokenCount(usage.tokens)} / ${formatTokenCount(usage.contextWindow)} ${t.tokenUnit}`;
+  return <span className="context-ring-wrap" tabIndex={0} aria-label={usage?.percent === null || usage?.percent === undefined ? t.contextUsage : `${t.contextUsage}, ${Math.round(percent)}%`}>
+    <span className="context-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle className="context-ring-track" cx="10" cy="10" r="8" /><circle className="context-ring-progress" cx="10" cy="10" r="8" strokeDasharray={`${dash} ${circumference - dash}`} /></svg></span>
+    <span className="context-tooltip" role="tooltip"><strong>{t.contextWindow}</strong><span className="context-percentage">{percentLabel}</span><span className="context-total">{totalLabel}</span></span>
+  </span>;
+}
+
 function PermissionLevelControl({ language, status, onStatus }: { language: Language; status: PermissionStatus | null; onStatus: (status: PermissionStatus) => void }) {
   const t = copy[language];
   const modes: Array<{ id: PermissionMode; label: string; description: string }> = [
@@ -915,7 +1012,7 @@ function PermissionLevelControl({ language, status, onStatus }: { language: Lang
 
 function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
   const t = copy[language];
-  const label = phase === "tool" ? toolName ? t.toolRunning(toolName) : t.toolStatus : phase === "responding" ? t.respondingStatus : t.thinkingStatus;
+  const label = phase === "tool" ? toolName ? t.toolRunning(toolName) : t.toolStatus : phase === "responding" ? t.respondingStatus : phase === "compacting" ? t.compactingStatus : t.thinkingStatus;
   return <div className="working-indicator" role="status" aria-live="polite"><span>{label}</span><span className="working-dots"><span /><span /><span /></span></div>;
 }
 
@@ -944,36 +1041,35 @@ function highlightComposerText(value: string, commandNames: string[]): ReactNode
     if (!isCommand && token.startsWith("/")) continue;
     if (start > cursor) result.push(<span key={`text-${cursor}`}>{value.slice(cursor, start)}</span>);
     if (prefix) result.push(<span key={`space-${start}`}>{prefix}</span>);
-    result.push(<mark className={`composer-token ${token.startsWith("/") ? "command-token" : "mention-token"}`} key={`token-${start}`}>{token}</mark>);
+    const isSkill = token.startsWith("/skill:");
+    const isMention = token.startsWith("@");
+    const label = isSkill ? token.slice("/skill:".length) : token.slice(1);
+    result.push(<mark className={`composer-token ${isSkill ? "skill-token" : isMention ? "mention-token" : "command-token"}`} key={`token-${start}`}><span className="composer-token-label">{label}</span></mark>);
     cursor = start + match[0].length;
   }
   if (cursor < value.length) result.push(<span key={`text-${cursor}`}>{value.slice(cursor)}</span>);
   return result;
 }
 
-function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
+function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; onStop: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
   const t = copy[props.language];
   const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const highlightRef = useRef<HTMLDivElement>(null);
   const [modelQuery, setModelQuery] = useState("");
   const filteredModels = props.modelOptions.filter((model) => `${model.providerName} ${model.name}`.toLowerCase().includes(modelQuery.toLowerCase()));
   useEffect(() => { suggestionRefs.current[props.suggestionIndex]?.scrollIntoView({ block: "nearest" }); }, [props.suggestionIndex, props.suggestions.length, props.suggestionMode]);
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 168)}px`;
-  }, [props.value]);
   useEffect(() => { if (!props.modelMenuOpen) setModelQuery(""); }, [props.modelMenuOpen]);
+  const hasDraft = props.value.trim().length > 0 || props.attachments.length > 0;
+  const stopOnly = props.isSending && !hasDraft;
+  const handleEditorPaste: React.ClipboardEventHandler<HTMLElement> = (event) => props.onPaste(event as unknown as React.ClipboardEvent<HTMLTextAreaElement>);
+  const handleEditorKeyDown: React.KeyboardEventHandler<HTMLElement> = (event) => props.onKeyDown(event as unknown as React.KeyboardEvent<HTMLTextAreaElement>);
   return <div className="composer-wrap"><div className="composer-shell">
     {props.suggestionMode && props.suggestions.length > 0 && <div className="suggestion-popover" role="listbox" id="composer-suggestions" aria-label={props.suggestionMode === "mention" ? t.files : t.command}>{props.suggestions.map((item, index) => <button ref={(element) => { suggestionRefs.current[index] = element; }} key={item.name ?? item.path} type="button" role="option" aria-selected={index === props.suggestionIndex} className={index === props.suggestionIndex ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => props.onSuggestion(item)}><span className="suggestion-symbol">{props.suggestionMode === "mention" ? "@" : "/"}</span><span><strong>{item.name ?? item.path}</strong><small>{item.description ?? item.path}</small></span></button>)}</div>}
-    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })} onContextMenu={(event) => props.onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><div ref={highlightRef} className="composer-highlight" aria-hidden="true">{props.value ? highlightComposerText(props.value, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</div><textarea ref={textareaRef} autoFocus value={props.value} onChange={(event) => props.onChange(event.target.value)} onPaste={props.onPaste} onScroll={(event) => { if (highlightRef.current) highlightRef.current.scrollTop = event.currentTarget.scrollTop; }} onKeyDown={props.onKeyDown} placeholder="" rows={2} aria-label={t.ask} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
+    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })} onContextMenu={(event) => props.onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><Editor className="composer-editor-surface" style={{ display: "block", width: "100%" }} value={props.value} onValueChange={props.onChange} highlight={(code) => <>{code ? highlightComposerText(code, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</>} textareaClassName="composer-editor-input" preClassName="composer-highlight" padding={0} onPaste={handleEditorPaste} onKeyDown={handleEditorKeyDown} autoFocus placeholder="" aria-label={t.ask} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
       <div className="menu-anchor"><button className="chip" aria-haspopup="menu" aria-expanded={props.thinkingMenuOpen} onClick={props.onThinkingMenu}><Icon name="spark" size={14} /><span>{props.thinkingLevel}</span><Icon name="chevron" size={13} /></button>{props.thinkingMenuOpen && <div className="inline-menu" role="menu" aria-label={t.chooseThinking}><strong>{t.chooseThinking}</strong>{props.thinkingLevels.map((level) => <button role="menuitemradio" aria-checked={level === props.thinkingLevel} key={level} className={level === props.thinkingLevel ? "active" : ""} onClick={() => props.onThinking(level)}>{level}</button>)}</div>}</div>
-      <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRing usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
+      <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRingPopover usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
       <button className="chip subtle" aria-label={t.mentionLabel} title={t.mentionLabel} onClick={() => props.onChange(`${props.value}${props.value ? " " : ""}@`)}><Icon name="plus" size={14} />@</button>
       <button className="chip subtle terminal-trigger" onClick={props.onTerminal}><Icon name="terminal" size={13} />{t.terminal}</button>
-    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !props.value.trim() && props.attachments.length === 0} aria-label={props.isSending ? t.stop : t.send} onClick={props.onSend}><Icon name={props.isSending ? "stop" : "send"} size={16} /></button></div></div>
+    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !hasDraft} aria-label={stopOnly ? t.stop : t.send} onClick={stopOnly ? props.onStop : props.onSend}><Icon name={stopOnly ? "stop" : "send"} size={16} /></button></div></div>
   </div></div>;
 }
 
@@ -1018,10 +1114,10 @@ function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNe
   const dialogRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   useDialogFocus(dialogRef, onClose);
-  const quickItems = [
+    const quickItems = [
     { id: "new-task", label: t.newTask, description: shortcut("N"), action: onNewTask, icon: "plus" },
     { id: "terminal", label: t.terminal, description: shortcut("J"), action: onTerminal, icon: "terminal" },
-    { id: "provider", label: t.provider, description: shortcut(","), action: onSettings, icon: "key" },
+    { id: "provider", label: t.provider, description: shortcut(","), action: onSettings, icon: "settings" },
     ...(onCompact ? [{ id: "compact", label: t.compactContext, description: "", action: onCompact, icon: "spark" }] : []),
     ...(onExport ? [{ id: "export-jsonl", label: t.exportJsonl, description: "", action: () => onExport("jsonl"), icon: "file" }, { id: "export-html", label: t.exportHtml, description: "", action: () => onExport("html"), icon: "file" }] : []),
   ];
@@ -1058,10 +1154,11 @@ function ConfirmDialog({ language, task, busy, onCancel, onConfirm }: { language
   return <div className="dialog-backdrop"><div ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description"><span className="confirm-icon"><Icon name="alert" /></span><h2 id="delete-title">{t.deleteSessionTitle}</h2><p id="delete-description">{t.deleteSessionBody(task.title)}</p><div><button className="button ghost" disabled={busy} onClick={onCancel}>{t.cancel}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? t.deleting : t.deleteSession}</button></div></div></div>;
 }
 
-function ProviderSettings({ language, focusProviderId, onClose }: { language: Language; focusProviderId: string | null; onClose: () => void }) {
+function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh }: { language: Language; focusProviderId: string | null; onClose: () => void; onModelsRefresh: (providerId?: string) => Promise<void> | void }) {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [providerStates, setProviderStates] = useState<Record<string, ProviderSummary["authState"]>>({});
   const [busyProvider, setBusyProvider] = useState<string | null>(null);
+  const [authMethod, setAuthMethod] = useState<AuthMethod | null>(null);
   const [apiKeyProvider, setApiKeyProvider] = useState<string | null>(null);
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string | undefined>>({});
@@ -1078,9 +1175,10 @@ function ProviderSettings({ language, focusProviderId, onClose }: { language: La
   async function resolvePrompt(value: string) {
     if (!authPrompt) return;
     const requestId = authPrompt.requestId;
-    setAuthPrompt(null);
     try { await window.pideck.providers.resolveAuth(requestId, value); }
-    catch (error) { setAuthError(error instanceof Error ? error.message : String(error)); }
+    catch (error) { setAuthError(error instanceof Error ? error.message : String(error)); return; }
+    setAuthPrompt(null);
+    setAuthError(null);
   }
   useDialogFocus(dialogRef, () => {
     if (authPrompt) { void resolvePrompt(""); return; }
@@ -1105,38 +1203,45 @@ function ProviderSettings({ language, focusProviderId, onClose }: { language: La
   useEffect(() => window.pideck.events.subscribe((runtimeEvent) => {
     if (runtimeEvent.type !== "auth.event" || !runtimeEvent.requestId) return;
     const event = runtimeEvent.event as any;
-    if (event?.type === "prompt") setAuthPrompt({ requestId: runtimeEvent.requestId, message: event.prompt?.message ?? t.authPromptFallback, placeholder: event.prompt?.placeholder ?? "", value: "" });
+    if (event?.type === "prompt") {
+      setAuthError(null);
+      setAuthNotice(null);
+      setAuthUrl(null);
+      setAuthPrompt({ requestId: runtimeEvent.requestId, message: event.prompt?.message ?? t.authPromptFallback, placeholder: event.prompt?.placeholder ?? "", value: "" });
+    }
     else if (event?.type === "notify" && event.event?.type === "auth_url") {
-      setAuthUrl(event.event.url ?? null); setAuthNotice(event.event.instructions ?? t.authBrowserInstruction);
-      if (event.event.url) void window.pideck.providers.openAuthUrl(event.event.url).catch((error) => setAuthError(String(error)));
+      setAuthUrl(null); setAuthNotice(null);
+      if (event.event.url) void window.pideck.providers.openAuthUrl(event.event.url).catch(() => undefined);
     } else if (event?.type === "notify" && event.event?.type === "device_code") {
-      setAuthUrl(event.event.verificationUri ?? null); setAuthNotice(t.authDeviceCode(event.event.userCode ?? ""));
-      if (event.event.verificationUri) void window.pideck.providers.openAuthUrl(event.event.verificationUri).catch((error) => setAuthError(String(error)));
+      setAuthUrl(null); setAuthNotice(null);
+      if (event.event.verificationUri) void window.pideck.providers.openAuthUrl(event.event.verificationUri).catch(() => undefined);
     }
   }), [language]);
 
   async function auth(providerId: string, method: AuthMethod, secret?: string) {
     if (method === "api-key" && !secret?.trim()) { setFieldErrors((current) => ({ ...current, [providerId]: t.apiKeyRequired })); return; }
-    setBusyProvider(providerId); setAuthError(null); setAuthNotice(method === "oauth" ? t.oauthWaiting : null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [providerId]: undefined }));
+    setBusyProvider(providerId); setAuthMethod(method); setAuthError(null); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [providerId]: undefined }));
     try {
-      await window.pideck.providers.login(providerId, method, secret?.trim());
-      closeApiKeyForm(); setAuthNotice(null); await loadProviders();
+      if (method === "api-key") await window.pideck.providers.setApiKey(providerId, secret!.trim());
+      else await window.pideck.providers.login(providerId, method);
+      closeApiKeyForm(); setAuthNotice(null); setAuthError(null); setAuthMethod(null); await loadProviders(); await onModelsRefresh(providerId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (method === "api-key") setFieldErrors((current) => ({ ...current, [providerId]: message })); else setAuthError(message);
-    } finally { setBusyProvider(null); }
+      if (method === "api-key") setFieldErrors((current) => ({ ...current, [providerId]: message }));
+      else setAuthError(message);
+    } finally { setBusyProvider(null); if (method !== "oauth") setAuthMethod(null); }
   }
 
   async function logout(providerId: string) {
     setBusyProvider(providerId); setAuthError(null);
-    try { await window.pideck.providers.logout(providerId); await loadProviders(); }
+    try { await window.pideck.providers.logout(providerId); await loadProviders(); await onModelsRefresh(providerId); }
     catch (error) { setAuthError(error instanceof Error ? error.message : String(error)); }
     finally { setBusyProvider(null); }
   }
 
-  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2><p>{t.providerAuthDescription}</p></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
-    <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : providers.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button ghost" disabled={busyProvider === provider.id} onClick={() => void logout(provider.id)}>{t.logout}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
+  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{!authPrompt && authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{!authPrompt && authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
+    <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : providers.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; const oauthLocked = state === "configured"; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button ghost" disabled={busyProvider === provider.id} onClick={() => void logout(provider.id)}>{t.logout}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id || oauthLocked} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
     <div className="settings-footer"><span>{providers.length ? t.providerCount(providers.length) : ""}</span><button className="button ghost" onClick={onClose}>{t.done}</button></div>
-    {authPrompt && <div className="auth-prompt-backdrop"><form className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p><label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type="password" value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label><div><button type="button" className="button ghost" onClick={() => void resolvePrompt("")}>{t.cancel}</button><button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button></div></form></div>}
+    {authPrompt && <div className="auth-prompt-backdrop"><form className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p>{authError && <div className="inline-error" role="alert">{authError}</div>}<label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type="password" value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label><div><button type="button" className="button ghost" onClick={() => { setAuthPrompt(null); setAuthError(null); setAuthMethod(null); }}>{t.cancel}</button><button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button></div></form></div>}
   </section></div>;
 }

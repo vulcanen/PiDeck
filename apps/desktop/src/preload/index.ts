@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage } from "@pideck/contracts";
+import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage } from "@pideck/contracts";
 
 const bridge: PideckBridge = {
+  app: {
+    setLanguage: (language: AppLanguage) => ipcRenderer.invoke("app:set-language", language),
+  },
   runtime: {
     status: () => ipcRenderer.invoke("runtime:status"),
   },

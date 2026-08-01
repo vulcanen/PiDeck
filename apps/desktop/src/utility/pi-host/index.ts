@@ -261,6 +261,57 @@ function jsonSafe<T>(value: T): T {
   }
 }
 
+type NormalizedPromptImage = { type: "image"; data: string; mimeType: string };
+
+function normalizePromptImages(images: unknown): NormalizedPromptImage[] | undefined {
+  if (!Array.isArray(images)) return undefined;
+
+  const normalized = images
+    .map((image) => {
+      if (!image || typeof image !== "object") return undefined;
+      const record = image as Record<string, unknown>;
+      const data = typeof record.data === "string" ? record.data : undefined;
+      const mimeType = typeof record.mimeType === "string" ? record.mimeType : undefined;
+      if (!data || !mimeType) return undefined;
+      return { type: "image", data, mimeType } as const;
+    })
+    .filter((image): image is NormalizedPromptImage => image !== undefined);
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeSessionImages(sessionManager: any): boolean {
+  const entries = sessionManager.getEntries?.();
+  if (!Array.isArray(entries)) return false;
+
+  let changed = false;
+  for (const entry of entries) {
+    if (!entry || entry.type !== "message") continue;
+    const content = entry.message?.content;
+    if (!Array.isArray(content)) continue;
+
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      if (record.type == null && typeof record.data === "string" && typeof record.mimeType === "string") {
+        record.type = "image";
+        changed = true;
+      }
+    }
+  }
+
+  if (!changed) return false;
+
+  const sessionFile = sessionManager.getSessionFile?.();
+  const header = sessionManager.getHeader?.();
+  if (sessionFile && header) {
+    const lines = [JSON.stringify(header), ...entries.map((entry: unknown) => JSON.stringify(entry))];
+    writeFileSync(sessionFile, `${lines.join("\n")}\n`, "utf8");
+  }
+
+  return true;
+}
+
 function modelSummary(provider: any, model: any, authConfigured: boolean) {
   return {
     id: model.id,
@@ -361,6 +412,19 @@ function normalizeAgentEvent(event: any): unknown {
       isError: event.isError,
     };
   }
+  if (event.type === "compaction_start") {
+    return { type: event.type, reason: event.reason };
+  }
+  if (event.type === "compaction_end") {
+    return {
+      type: event.type,
+      reason: event.reason,
+      result: jsonSafe(event.result),
+      aborted: event.aborted,
+      willRetry: event.willRetry,
+      errorMessage: event.errorMessage,
+    };
+  }
   if (event.type === "agent_end" || event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
     return { type: event.type, willRetry: event.willRetry, message: jsonSafe(event.message) };
   }
@@ -382,7 +446,10 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   const existing = agentSessions.get(taskId);
   if (existing) {
     const sessionRevision = agentSessionRevisions.get(taskId);
-    if (sessionRevision === permissionRevision || existing.isStreaming) return existing;
+    if (sessionRevision === permissionRevision || existing.isStreaming) {
+      if (!existing.isStreaming) normalizeSessionImages(existing.sessionManager);
+      return existing;
+    }
     // Do not interrupt an active turn. Once idle, recreate against the new
     // extension configuration while keeping the same Pi SessionManager/file.
     existing.dispose?.();
@@ -401,6 +468,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       manager = sessionPath ? sdk.SessionManager.open(sessionPath) : sdk.SessionManager.create(cwd);
       sessionManagers.set(taskId, manager);
     }
+    normalizeSessionImages(manager);
     const permissionExtensionPath = resolvePermissionExtensionPath();
     const resourceLoader = sdk.DefaultResourceLoader && permissionExtensionPath
       ? new sdk.DefaultResourceLoader({ cwd, agentDir: sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent"), additionalExtensionPaths: [permissionExtensionPath] })
@@ -645,7 +713,8 @@ async function handle(request: PiHostRequest): Promise<void> {
       }
       case "agent.prompt": {
         const payload = request.payload as { taskId?: string; text?: string; cwd?: string; images?: Array<{ data: string; mimeType: string }> } | undefined;
-        if (!payload?.taskId || (!payload.text && !payload.images?.length)) throw new Error("taskId and text or images are required");
+        const images = normalizePromptImages(payload?.images);
+        if (!payload?.taskId || (!payload.text && !images?.length)) throw new Error("taskId and text or images are required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         const sdk = await loadPiSdk();
         const sessionName = session.sessionManager?.getSessionName?.();
@@ -658,7 +727,11 @@ async function handle(request: PiHostRequest): Promise<void> {
           if (title) session.sessionManager?.appendSessionInfo?.(title);
           titledSessions.add(payload.taskId);
         }
-        await session.prompt(payload.text ?? "", { source: "interactive", images: payload.images });
+        await session.prompt(payload.text ?? "", {
+          source: "interactive",
+          images,
+          ...(session.isStreaming ? { streamingBehavior: "steer" as const } : {}),
+        });
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -729,6 +802,7 @@ async function handle(request: PiHostRequest): Promise<void> {
               id: provider.id,
               name: provider.name ?? provider.id,
               authState: auth.configured ? "configured" : credential?.type === "oauth" ? "expired" : "missing",
+              authMethod: credential?.type === "oauth" ? "oauth" : credential?.type === "api_key" ? "api-key" : null,
               authMethods: authMethods.length > 0 ? authMethods : ["api-key"],
               modelCount: runtime.getModels(provider.id).length,
             };
@@ -741,10 +815,10 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.providerId || !payload.method) throw new Error("providerId and method are required");
         const runtime = await getModelRuntime();
         if (payload.method === "api-key") {
-          if (!payload.secret) throw new Error("An API key is required");
-          await runtime.login(payload.providerId, "api_key", {
-            prompt: async () => payload.secret as string,
-            notify: () => undefined,
+          const apiKey = payload.secret?.trim();
+          if (!apiKey) throw new Error("An API key is required");
+          void runtime.setRuntimeApiKey(payload.providerId, apiKey, { allowNetwork: false }).catch((error: unknown) => {
+            console.error(`[PiHost] API key save failed for ${payload.providerId}:`, error);
           });
         } else {
           await runtime.login(payload.providerId, "oauth", {
@@ -763,7 +837,11 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { providerId?: string; apiKey?: string } | undefined;
         if (!payload?.providerId || !payload.apiKey) throw new Error("providerId and apiKey are required");
         const runtime = await getModelRuntime();
-        await runtime.setRuntimeApiKey(payload.providerId, payload.apiKey);
+        const apiKey = payload.apiKey.trim();
+        if (!apiKey) throw new Error("An API key is required");
+        void runtime.setRuntimeApiKey(payload.providerId, apiKey, { allowNetwork: false }).catch((error: unknown) => {
+          console.error(`[PiHost] API key save failed for ${payload.providerId}:`, error);
+        });
         send({ id: request.id, ok: true, result: undefined });
         return;
       }

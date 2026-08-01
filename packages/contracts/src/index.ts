@@ -4,6 +4,7 @@ export const IPC_VERSION = 1 as const;
 
 export type AuthMethod = "api-key" | "oauth";
 export type PermissionMode = "ask" | "allow" | "deny" | "yolo";
+export type AppLanguage = "zh" | "en";
 
 export interface PermissionStatus {
   mode: PermissionMode;
@@ -26,6 +27,7 @@ export interface ProviderSummary {
   id: string;
   name: string;
   authState: "configured" | "available" | "expired" | "missing";
+  authMethod?: AuthMethod | null;
   authMethods: AuthMethod[];
   modelCount: number;
 }
@@ -71,6 +73,9 @@ export interface WorkspaceSnapshot {
 }
 
 export interface PideckBridge {
+  app: {
+    setLanguage(language: AppLanguage): Promise<void>;
+  };
   runtime: {
     status(): Promise<"connected" | "starting" | "disconnected">;
   };

@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { execFileSync, fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { PiHostRequest, PiHostResponse } from "@pideck/contracts";
+import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contracts";
 
 type RuntimeStatus = "connected" | "starting" | "disconnected";
 
@@ -10,11 +10,108 @@ let host: ChildProcess | undefined;
 let hostAlive = false;
 let hostStatus: RuntimeStatus = "starting";
 let hostWindow: BrowserWindow | undefined;
+let currentLanguage: AppLanguage = app.getLocale().toLowerCase().startsWith("zh") ? "zh" : "en";
 const pending = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
 }>();
+
+const menuCopy = {
+  zh: {
+    file: "文件",
+    edit: "编辑",
+    view: "查看",
+    window: "窗口",
+    close: "关闭",
+    quit: "退出",
+    undo: "撤销",
+    redo: "重做",
+    cut: "剪切",
+    copy: "复制",
+    paste: "粘贴",
+    selectAll: "全选",
+    reload: "重新加载",
+    forceReload: "强制重新加载",
+    toggleDevTools: "切换开发者工具",
+    resetZoom: "重置缩放",
+    zoomIn: "放大",
+    zoomOut: "缩小",
+    toggleFullscreen: "切换全屏",
+    minimize: "最小化",
+  },
+  en: {
+    file: "File",
+    edit: "Edit",
+    view: "View",
+    window: "Window",
+    close: "Close",
+    quit: "Quit",
+    undo: "Undo",
+    redo: "Redo",
+    cut: "Cut",
+    copy: "Copy",
+    paste: "Paste",
+    selectAll: "Select All",
+    reload: "Reload",
+    forceReload: "Force Reload",
+    toggleDevTools: "Toggle Developer Tools",
+    resetZoom: "Reset Zoom",
+    zoomIn: "Zoom In",
+    zoomOut: "Zoom Out",
+    toggleFullscreen: "Toggle Full Screen",
+    minimize: "Minimize",
+  },
+} satisfies Record<AppLanguage, Record<string, string>>;
+
+function buildApplicationMenu(language: AppLanguage) {
+  const t = menuCopy[language];
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: t.file,
+      submenu: [
+        { role: "close", label: t.close },
+        { type: "separator" },
+        { role: "quit", label: t.quit },
+      ],
+    },
+    {
+      label: t.edit,
+      submenu: [
+        { role: "undo", label: t.undo },
+        { role: "redo", label: t.redo },
+        { type: "separator" },
+        { role: "cut", label: t.cut },
+        { role: "copy", label: t.copy },
+        { role: "paste", label: t.paste },
+        { role: "selectAll", label: t.selectAll },
+      ],
+    },
+    {
+      label: t.view,
+      submenu: [
+        { role: "reload", label: t.reload },
+        { role: "forceReload", label: t.forceReload },
+        { type: "separator" },
+        { role: "toggleDevTools", label: t.toggleDevTools },
+        { type: "separator" },
+        { role: "resetZoom", label: t.resetZoom },
+        { role: "zoomIn", label: t.zoomIn },
+        { role: "zoomOut", label: t.zoomOut },
+        { type: "separator" },
+        { role: "togglefullscreen", label: t.toggleFullscreen },
+      ],
+    },
+    {
+      label: t.window,
+      submenu: [
+        { role: "minimize", label: t.minimize },
+        { role: "close", label: t.close },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 function publishRuntimeStatus(status: RuntimeStatus) {
   hostStatus = status;
@@ -105,6 +202,11 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
 }
 
 function registerIpcHandlers() {
+  ipcMain.handle("app:set-language", (_event, language: AppLanguage) => {
+    currentLanguage = language === "en" ? "en" : "zh";
+    buildApplicationMenu(currentLanguage);
+    return currentLanguage;
+  });
   ipcMain.handle("runtime:status", () => hostStatus);
   ipcMain.handle("projects:list", () => requestHost("projects.list"));
   ipcMain.handle("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: projectId }));
@@ -178,6 +280,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   registerIpcHandlers();
+  buildApplicationMenu(currentLanguage);
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
