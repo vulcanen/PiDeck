@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-renderer/
+release/
+apps/desktop/assets/pideck-miniwindow.node
 .codex/
 .idea/
 *.log

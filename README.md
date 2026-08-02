@@ -29,3 +29,20 @@ PiDeck 会优先从本机全局 `pi` 命令定位 Pi 0.83.x。若需要指定 SD
 ```powershell
 $env:PIDECK_PI_MODULE = "D:\path\to\pi-coding-agent\dist\index.js"
 ```
+
+安装依赖并启动开发版：
+
+```bash
+npm install
+npm run dev
+```
+
+## macOS 打包
+
+生成带 PiDeck Bundle 名称和自定义应用图标、适配当前 Mac 架构的 `.app`：
+
+```bash
+npm run package:mac
+```
+
+产物位于 `release/PiDeck-darwin-<arch>/PiDeck.app`。当前本地打包未签名，仅用于开发机验证；对外分发前仍需完成 Apple Developer 签名与公证。

@@ -1,7 +1,9 @@
 {
   "name": "pideck",
+  "productName": "PiDeck",
   "private": true,
   "version": "0.1.0",
+  "main": "apps/desktop/dist/main/index.js",
   "description": "A calm, editorial desktop workspace for Pi.",
   "workspaces": [
     "apps/*",
@@ -10,9 +12,13 @@
   "scripts": {
     "dev": "npm --workspace @pideck/desktop run dev",
     "build": "npm --workspace @pideck/desktop run build",
-    "typecheck": "npm --workspace @pideck/desktop run typecheck"
+    "typecheck": "npm --workspace @pideck/desktop run typecheck",
+    "package:mac": "npm run build && electron-packager . PiDeck --platform=darwin --electron-version=43.2.0 --out=release --overwrite --icon=apps/desktop/assets/pideck-icon.icns --app-bundle-id=com.pideck.desktop --build-version=6 --extend-info=apps/desktop/assets/mac-info.plist --no-asar --no-prune --ignore='^/(\\.git|release|docs|rules|\\.codex|\\.agents)'"
   },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.4"
   }
 }

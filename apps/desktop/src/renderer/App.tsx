@@ -809,7 +809,7 @@ export function App() {
   return <div className={`app-shell ${theme}${isMac ? " platform-macos" : ""}`}>
     <a className="skip-link" href="#main-content">{t.skipToContent}</a>
     <header className="titlebar">
-      <div className="brand-lockup"><span className="brand-mark">P</span><span className="brand-name">PiDeck</span><span className="brand-divider" /><span className="eyebrow">{t.workspace}</span></div>
+      <div className="brand-lockup"><img className="brand-mark" src="./pideck-icon.png" alt="" aria-hidden="true" draggable={false} /><span className="brand-name">PiDeck</span><span className="brand-divider" /><span className="eyebrow">{t.workspace}</span></div>
       <div className="window-drag" />
       <div className="titlebar-actions">
         <button className="quiet-button" onClick={openCommandPalette}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>

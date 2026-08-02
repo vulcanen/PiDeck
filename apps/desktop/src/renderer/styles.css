@@ -48,6 +48,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   --layer-toast: 50;
   --motion: cubic-bezier(.32, .72, 0, 1);
   --conversation-width: 920px;
+  --message-font-size: 14px;
+  --message-line-height: 1.75;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
   width: 100vw;
@@ -95,7 +97,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   padding-left: 78px;
 }
 .brand-lockup { z-index: 1; display: flex; align-items: center; gap: 9px; min-width: 0; }
-.brand-mark, .project-avatar, .empty-glyph, .working-avatar {
+.project-avatar, .empty-glyph, .working-avatar {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -104,7 +106,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   font-family: "PT Serif", "Noto Serif SC", serif;
   font-weight: 700;
 }
-.brand-mark { width: 22px; height: 22px; border-radius: 6px; font-size: 15px; }
+.brand-mark { display: block; flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; object-fit: cover; }
 .brand-name { font-size: 14px; font-weight: 680; letter-spacing: -.02em; }
 .brand-divider { width: 1px; height: 15px; margin: 0 3px; background: var(--line-strong); }
 .eyebrow { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .11em; text-transform: uppercase; }
@@ -280,7 +282,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .live-message-status { min-height: 20px; }
 .live-pill { display: inline-flex; align-items: center; gap: 5px; margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; }
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.markdown-content { color: var(--text); overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; }
+.markdown-content { color: var(--text); overflow-wrap: anywhere; font-size: var(--message-font-size); line-height: var(--message-line-height); }
 .markdown-content > :first-child { margin-top: 10px; }
 .markdown-content > :last-child { margin-bottom: 0; }
 .markdown-content p, .markdown-content ul, .markdown-content ol, .markdown-content blockquote { margin: .65em 0; }
@@ -387,7 +389,7 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .composer-image-preview:hover img, .composer-image-preview:focus-visible img { opacity: .78; }
 .composer-remove-image { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: color-mix(in srgb, var(--text) 78%, transparent); color: var(--canvas); }
 .composer-editor { position: relative; min-height: 52px; max-height: 168px; overflow: hidden; }
-.composer-editor-surface { position: relative; display: block; width: 100%; min-height: 52px; max-height: 168px; overflow: hidden; }
+.composer-editor-surface { position: relative; display: block; width: 100%; min-height: 52px; max-height: 168px; overflow: hidden; font-size: var(--message-font-size); line-height: var(--message-line-height); }
 .composer-editor-surface pre,
 .composer-editor-surface textarea {
   box-sizing: border-box;
@@ -398,8 +400,8 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: inherit;
+  line-height: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -419,12 +421,12 @@ kbd { color: var(--faint); font: 600 10px "JetBrains Mono", ui-monospace, monosp
 .composer-token {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
+  min-height: 18px;
   margin: 0 1px;
-  padding: 1px 7px;
-  border-radius: 8px;
+  padding: 1px 6px;
+  border-radius: 7px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
   vertical-align: baseline;

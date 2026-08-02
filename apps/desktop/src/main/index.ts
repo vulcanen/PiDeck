@@ -2,8 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstruc
 import { execFileSync, fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contracts";
+
+app.setName("PiDeck");
 
 type RuntimeStatus = "connected" | "starting" | "disconnected";
 
@@ -12,6 +15,11 @@ let hostAlive = false;
 let hostStatus: RuntimeStatus = "starting";
 let hostWindow: BrowserWindow | undefined;
 let currentLanguage: AppLanguage = app.getLocale().toLowerCase().startsWith("zh") ? "zh" : "en";
+const applicationIconPath = path.join(__dirname, "../../assets/pideck-icon.png");
+const dockIconPath = path.join(__dirname, "../../assets/pideck-dock-icon.png");
+const nativeRequire = createRequire(__filename);
+type MiniwindowAddon = { installMiniwindowCustomization(handle: Buffer, iconPath: string): boolean };
+let miniwindowAddon: MiniwindowAddon | undefined;
 const pending = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -298,6 +306,7 @@ function createWindow() {
     height: 940,
     minWidth: 375,
     minHeight: 520,
+    icon: applicationIconPath,
     backgroundColor: "#f7f6f1",
     titleBarStyle: "hiddenInset",
     ...(process.platform === "darwin" ? { trafficLightPosition: { x: 14, y: 17 } } : {}),
@@ -322,15 +331,24 @@ function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    void window.loadFile(path.join(__dirname, "../../../dist-renderer/index.html"));
+    void window.loadFile(path.join(__dirname, "../../../../dist-renderer/index.html"));
   }
   startHost(window);
+  if (process.platform === "darwin") {
+    try {
+      miniwindowAddon ??= nativeRequire(path.join(__dirname, "../../assets/pideck-miniwindow.node")) as MiniwindowAddon;
+      miniwindowAddon.installMiniwindowCustomization(window.getNativeWindowHandle(), applicationIconPath);
+    } catch (error) {
+      console.warn("Could not customize the minimized window Dock tile", error);
+    }
+  }
   window.on("closed", () => {
     if (hostWindow === window) hostWindow = undefined;
   });
 }
 
 app.whenReady().then(() => {
+  if (process.platform === "darwin") app.dock?.setIcon(dockIconPath);
   registerIpcHandlers();
   buildApplicationMenu(currentLanguage);
   createWindow();
