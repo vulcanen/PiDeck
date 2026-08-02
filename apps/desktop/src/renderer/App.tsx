@@ -8,11 +8,9 @@ import type {
   PermissionStatus,
   ProviderSummary,
   SessionCapabilities,
-  WorkspaceChange,
-  WorkspaceFile,
   WorkspaceSnapshot,
 } from "@pideck/contracts";
-import type { ProjectSummary, TaskSummary } from "@pideck/domain";
+import { deriveSessionTitle, parseSkillInvocation, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription, type Language } from "./i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
 import { copyText, Icon, useDialogFocus } from "./ui";
@@ -47,6 +45,26 @@ type SentImageMessage = { text: string; images: ImageAttachment[] };
 type PreviewImage = { src: string; alt: string };
 type ImageContextMenuState = { x: number; y: number; image: PreviewImage };
 type ProviderFilter = "all" | "configured" | "expired" | "missing";
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function handleRovingMenuKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem'], [role='menuitemradio']"));
+  if (!items.length) return;
+  const currentIndex = items.findIndex((item) => item === document.activeElement);
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? items.length - 1
+      : event.key === "ArrowDown"
+        ? (currentIndex + 1 + items.length) % items.length
+        : (currentIndex - 1 + items.length) % items.length;
+  event.preventDefault();
+  items[nextIndex]?.focus();
+}
 
 function createDefaultTaskUiState(): TaskUiState {
   return { isSending: false, isCompacting: false, streamText: "", workingPhase: null, activity: [] };
@@ -156,8 +174,7 @@ export function App() {
   const [terminalCommand, setTerminalCommand] = useState("");
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [terminalRunning, setTerminalRunning] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [rightPanel, setRightPanel] = useState<"changes" | "files">("changes");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
   const [capabilities, setCapabilities] = useState<SessionCapabilities | null>(null);
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -181,11 +198,13 @@ export function App() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const followConversationRef = useRef(true);
   const noticeTimerRef = useRef<number | null>(null);
   const initialLoadStartedRef = useRef(false);
   const t = copy[language];
+  useDialogFocus(sidebarRef, () => setMobileSidebarOpen(false), mobileSidebarOpen && window.matchMedia("(max-width: 560px)").matches);
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
   const shortcut = (key: string) => `${isMac ? "⌘" : "Ctrl+"}${key}`;
   const activeTaskUi = activeTask ? taskUi[activeTask.id] : undefined;
@@ -420,7 +439,7 @@ export function App() {
     if (!element) return;
     followConversationRef.current = true;
     setShowJumpToLatest(false);
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    element.scrollTo({ top: element.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }
 
   const filteredTasks = useMemo(() => tasks.filter((task) => task.title.toLowerCase().includes(searchQuery.toLowerCase())), [tasks, searchQuery]);
@@ -554,6 +573,11 @@ export function App() {
       updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step));
       patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
       void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+    }
+    else if (event?.type === "session_info_changed" && typeof event.name === "string" && event.name.trim()) {
+      const title = event.name.trim();
+      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, title } : task));
+      setActiveTask((current) => current?.id === taskId ? { ...current, title } : current);
     }
     else if (event?.type === "message.snapshot") {
       setMessagesByTask((current) => ({ ...current, [taskId]: (event.messages ?? []) as any[] }));
@@ -691,7 +715,7 @@ export function App() {
     setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
     patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "" });
-    const taskTitle = text.replace(/\s+/g, " ").trim().slice(0, 80);
+    const taskTitle = deriveSessionTitle(text);
     const shouldNameTask = !task.title || task.title === copy.zh.newTaskName || task.title === copy.en.newTaskName;
     const updatedAt = new Date().toISOString();
     setTasks((current) => sortTasksByUpdatedAt(current.map((item) => item.id === task.id ? { ...item, title: shouldNameTask ? taskTitle || item.title : item.title, state: "running", updatedAt } : item)));
@@ -735,16 +759,23 @@ export function App() {
 
   function updateComposer(value: string) {
     setComposer(value);
-    const match = /(?:^|\s)([/@])([^\s]*)$/.exec(value);
-    if (!match) { setSuggestionMode(null); setSuggestionQuery(""); return; }
-    setSuggestionMode(match[1] === "/" ? "slash" : "mention");
-    setSuggestionQuery(match[2]); setSuggestionIndex(0);
+    const mentionMatch = /(?:^|\s)@([^\s]*)$/.exec(value);
+    if (mentionMatch) {
+      setSuggestionMode("mention"); setSuggestionQuery(mentionMatch[1]); setSuggestionIndex(0); return;
+    }
+    const slashMatch = /^\/([^\s/]*)$/.exec(value);
+    const slashQuery = slashMatch?.[1].toLowerCase() ?? "";
+    const knownPrefix = slashMatch && (slashQuery === "" || paletteCommands.some((command) => command.name.replace(/^\//, "").toLowerCase().startsWith(slashQuery)));
+    if (!slashMatch || !knownPrefix) { setSuggestionMode(null); setSuggestionQuery(""); return; }
+    setSuggestionMode("slash"); setSuggestionQuery(slashMatch[1]); setSuggestionIndex(0);
   }
 
   function applySuggestion(item: any) {
     const prefix = suggestionMode === "mention" ? "@" : "/";
     const replacement = `${prefix}${suggestionMode === "mention" ? item.path : item.name} `;
-    setComposer((current) => current.replace(/(?:^|\s)[/@][^\s]*$/, (token) => `${token.startsWith(" ") ? " " : ""}${replacement}`));
+    setComposer((current) => suggestionMode === "mention"
+      ? current.replace(/(?:^|\s)@[^\s]*$/, (token) => `${/^\s/.test(token) ? token[0] : ""}${replacement}`)
+      : current.replace(/^\/[^\s/]*$/, replacement));
     setSuggestionMode(null);
   }
 
@@ -812,6 +843,7 @@ export function App() {
       <div className="brand-lockup"><img className="brand-mark" src="./pideck-icon.png" alt="" aria-hidden="true" draggable={false} /><span className="brand-name">PiDeck</span><span className="brand-divider" /><span className="eyebrow">{t.workspace}</span></div>
       <div className="window-drag" />
       <div className="titlebar-actions">
+        <button className="icon-button mobile-nav-trigger" type="button" title={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-label={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-expanded={mobileSidebarOpen} aria-controls="workspace-sidebar" onClick={() => setMobileSidebarOpen((current) => !current)}><Icon name="folder" /></button>
         <button className="quiet-button" onClick={openCommandPalette}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
         <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
@@ -819,10 +851,11 @@ export function App() {
       </div>
     </header>
 
-    <div className={`workspace-grid ${inspectorOpen ? "" : "inspector-collapsed"}`}>
-      <aside className="sidebar">
-        <button className="new-task" disabled={!projectCwd || initialLoading} onClick={() => void createTask()}><span className="new-task-icon"><Icon name="plus" /></span><span>{t.newTask}</span><kbd>{shortcut("N")}</kbd></button>
-        <label className="search-box"><Icon name="search" size={15} /><input ref={searchInputRef} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={t.search} /><kbd>/</kbd></label>
+    <div className="workspace-grid">
+      <aside ref={sidebarRef} id="workspace-sidebar" className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`} aria-label={t.openNavigation}>
+        <div className="sidebar-mobile-header"><strong>{t.projects}</strong><button className="icon-button" type="button" title={t.closeNavigation} aria-label={t.closeNavigation} onClick={() => setMobileSidebarOpen(false)}><Icon name="x" /></button></div>
+        <button className="new-task" disabled={!projectCwd || initialLoading} onClick={() => { setMobileSidebarOpen(false); void createTask(); }}><span className="new-task-icon"><Icon name="plus" /></span><span>{t.newTask}</span><kbd>{shortcut("N")}</kbd></button>
+        <label className="search-box"><Icon name="search" size={15} /><input ref={searchInputRef} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={t.search} aria-label={t.search} /><kbd>/</kbd></label>
         <div className="sidebar-scroll">
           <div className="section-label"><span>{t.projects}</span><button className="project-add" type="button" title={t.openProject} aria-label={t.openProject} disabled={initialLoading} onClick={() => void chooseProjectDirectory()}><Icon name="plus" size={13} /></button></div>
           <div className="project-list">
@@ -838,7 +871,7 @@ export function App() {
                 </button>
                 {expanded && <div className="project-sessions">
                   <div className="task-list">
-                    {initialLoading && tasks.length === 0 ? <SidebarSkeleton /> : filteredTasks.map((task) => <TaskRow key={task.id} task={task} active={activeTask?.id === task.id} language={language} onClick={() => { setActiveTask(task); setTasks((current) => current.map((item) => item.id === task.id ? { ...item, unread: false } : item)); }} onContextMenu={(event) => { event.preventDefault(); openContextMenu(task, event.clientX, event.clientY); }} onMenu={(rect) => openContextMenu(task, rect.right - 160, rect.bottom + 4)} />)}
+                    {initialLoading && tasks.length === 0 ? <SidebarSkeleton /> : filteredTasks.map((task) => <TaskRow key={task.id} task={task} active={activeTask?.id === task.id} language={language} onClick={() => { setMobileSidebarOpen(false); setActiveTask(task); setTasks((current) => current.map((item) => item.id === task.id ? { ...item, unread: false } : item)); }} onContextMenu={(event) => { event.preventDefault(); openContextMenu(task, event.clientX, event.clientY); }} onMenu={(rect) => openContextMenu(task, rect.right - 160, rect.bottom + 4)} />)}
                     {!initialLoading && filteredTasks.length === 0 && <div className="empty-sidebar"><strong>{searchQuery ? t.noSessionMatches : t.noSessions}</strong><span>{searchQuery ? t.tryAnotherSearch : t.createFirst}</span></div>}
                   </div>
                 </div>}
@@ -847,9 +880,11 @@ export function App() {
           </div>
         </div>
         <div className="sidebar-footer">
+          <button className="sidebar-command" type="button" onClick={() => { setMobileSidebarOpen(false); openCommandPalette(); }}><Icon name="command" /><span>{t.command}</span><kbd>{shortcut("K")}</kbd></button>
           <div className={`runtime-status ${runtimeStatus}`}><span className="status-dot" /><span>{runtimeStatus === "connected" ? t.connected : runtimeStatus === "starting" ? t.runtimeStarting : t.runtimeDisconnected}</span>{runtimeStatus === "disconnected" && <button onClick={() => void loadInitialData()}>{t.retry}</button>}</div>
         </div>
       </aside>
+      {mobileSidebarOpen && <button className="sidebar-backdrop" type="button" tabIndex={-1} title={t.closeNavigation} aria-label={t.closeNavigation} onClick={() => setMobileSidebarOpen(false)} />}
 
       <main className="main-column" id="main-content" tabIndex={-1}>
         {activeTask && <div className="conversation-header">
@@ -880,17 +915,12 @@ export function App() {
         <PermissionLevelControl language={language} status={permissionStatus} onStatus={handlePermissionStatus} />
       </main>
 
-      {inspectorOpen && <button className="inspector-backdrop" aria-label={t.closeInspector} onClick={() => setInspectorOpen(false)} />}
-      {inspectorOpen && <aside className="inspector">
-        <div className="inspector-tabs" role="tablist"><button role="tab" aria-selected={rightPanel === "changes"} className={rightPanel === "changes" ? "active" : ""} onClick={() => setRightPanel("changes")}>{t.changes}<span className="tab-count">{workspace?.changes.length ?? 0}</span></button><button role="tab" aria-selected={rightPanel === "files"} className={rightPanel === "files" ? "active" : ""} onClick={() => setRightPanel("files")}>{t.files}</button><button className="icon-button" onClick={() => setInspectorOpen(false)} aria-label={t.closeInspector}><Icon name="x" size={15} /></button></div>
-        {rightPanel === "changes" ? <ChangesPanel changes={workspace?.changes ?? []} language={language} /> : <FilesPanel files={workspace?.files ?? []} language={language} />}
-      </aside>}
     </div>
 
-    {terminalOpen && <TerminalPanel language={language} cwd={projectCwd} output={terminalOutput} command={terminalCommand} running={terminalRunning} inspectorOpen={inspectorOpen} onCommand={setTerminalCommand} onExecute={() => void executeTerminal()} onClose={() => setTerminalOpen(false)} />}
+    {terminalOpen && <TerminalPanel language={language} cwd={projectCwd} output={terminalOutput} command={terminalCommand} running={terminalRunning} onCommand={setTerminalCommand} onExecute={() => void executeTerminal()} onClose={() => setTerminalOpen(false)} />}
     {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
-    {notice && <div className="toast" role="status" aria-live="polite">{notice}</div>}
-    {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
+    {notice && <div className={`toast ${terminalOpen ? "with-terminal" : ""}`} role="status" aria-live="polite">{notice}</div>}
+    {contextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
     {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
     {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
@@ -917,22 +947,24 @@ function StateMark({ state, language }: { state: TaskSummary["state"]; language:
 
 function TaskRow({ task, active, language, onClick, onContextMenu, onMenu }: { task: TaskSummary; active: boolean; language: Language; onClick: () => void; onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void; onMenu: (rect: DOMRect) => void }) {
   const t = copy[language];
-  return <div className={`task-row ${active ? "active" : ""}`} onContextMenu={onContextMenu}><button className="task-main" onClick={onClick} aria-current={active ? "page" : undefined} title={task.title}><span className="task-copy"><strong>{task.title}</strong></span>{task.state === "running" && <span className="task-working-spinner" role="img" aria-label={t.sessionState.running} title={t.sessionState.running} />}{task.state === "waiting-approval" && <span className="task-approval-mark" role="img" aria-label={t.sessionState.approval} title={t.sessionState.approval}>!</span>}{task.unread && <span className="unread-dot" title={t.unread} />}</button><button className="task-more" aria-label={t.moreActions} title={t.moreActions} onClick={(event) => { event.stopPropagation(); onMenu(event.currentTarget.getBoundingClientRect()); }}><Icon name="more" size={14} /></button></div>;
+  return <div className={`task-row ${active ? "active" : ""}`} onContextMenu={onContextMenu}><button className="task-main" onClick={onClick} aria-current={active ? "page" : undefined} title={task.title}><span className="task-copy"><strong>{task.title}</strong></span>{task.state === "running" && <span className="task-working-spinner" role="img" aria-label={t.sessionState.running} title={t.sessionState.running} />}{task.state === "waiting-approval" && <span className="task-approval-mark" role="img" aria-label={t.sessionState.approval} title={t.sessionState.approval}>!</span>}{task.unread && <span className="unread-dot" role="img" aria-label={t.unread} title={t.unread} />}</button><button className="task-more" aria-label={t.moreActions} title={t.moreActions} onClick={(event) => { event.stopPropagation(); onMenu(event.currentTarget.getBoundingClientRect()); }}><Icon name="more" size={14} /></button></div>;
 }
 
 function MessageView({ message, language, onPreviewImage, onContextMenuImage }: { message: any; language: Language; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
   const text = textFromMessage(message);
   const images = Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === "image" && part.data && part.mimeType) : [];
-  if (!text && !images.length && message?.role !== "toolResult") return null;
   const t = copy[language];
   const role = message?.role === "user" ? "user" : message?.role === "toolResult" ? "tool" : "assistant";
+  const skillInvocation = role === "user" ? parseSkillInvocation(text) : null;
+  const visibleText = skillInvocation ? skillInvocation.userMessage ?? "" : text;
+  if (!visibleText && !skillInvocation && !images.length && message?.role !== "toolResult") return null;
   if (role === "tool") {
     const toolName = message?.toolName ?? message?.name ?? t.toolResult;
     const failed = Boolean(message?.isError);
     return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
   }
   const messageTime = formatMessageTime(message.timestamp, language);
-  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <button type="button" className="image-preview-trigger" key={`${message.id ?? "image"}-${index}`} aria-label={t.imagePreview} onClick={() => onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })} onContextMenu={(event) => onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} /></button>)}</div>}{text && <MarkdownContent text={text} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
+  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{skillInvocation && <div className="message-invocations"><code className="message-invocation">/skill:{skillInvocation.name}</code></div>}{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <button type="button" className="image-preview-trigger" key={`${message.id ?? "image"}-${index}`} aria-label={t.imagePreview} onClick={() => onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })} onContextMenu={(event) => onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} /></button>)}</div>}{visibleText && <MarkdownContent text={visibleText} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
 }
 
 function activityValue(value: unknown): string {
@@ -1081,7 +1113,7 @@ function PermissionLevelControl({ language, status, onStatus }: { language: Lang
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
-  return <div className="permission-level-wrap"><button type="button" className="permission-level-button" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen((value) => !value)}><span className={`permission-mode-dot ${current.id}`} /><span>{current.label}</span><Icon name="chevron" size={13} /></button>{open && <div className="permission-level-menu" role="menu" aria-label={current.label}>{modes.map((mode) => <button type="button" role="menuitemradio" aria-checked={mode.id === current.id} key={mode.id} className={mode.id === current.id ? "selected" : ""} onClick={() => void changeMode(mode.id)}><span className={`permission-mode-dot ${mode.id}`} /><span><strong>{mode.label}</strong><small>{mode.description}</small></span><Icon name="check" size={13} /></button>)}</div>}{error && <span className="permission-level-error" role="alert">{error}</span>}</div>;
+  return <div className="permission-level-wrap"><button type="button" className="permission-level-button" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen((value) => !value)}><span className={`permission-mode-dot ${current.id}`} /><span>{current.label}</span><Icon name="chevron" size={13} /></button>{open && <div className="permission-level-menu" role="menu" aria-label={current.label} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); } else handleRovingMenuKeyDown(event); }}>{modes.map((mode) => <button type="button" role="menuitemradio" aria-checked={mode.id === current.id} tabIndex={mode.id === current.id ? 0 : -1} autoFocus={mode.id === current.id} key={mode.id} className={mode.id === current.id ? "selected" : ""} onClick={() => void changeMode(mode.id)}><span className={`permission-mode-dot ${mode.id}`} /><span><strong>{mode.label}</strong><small>{mode.description}</small></span><Icon name="check" size={13} /></button>)}</div>}{error && <span className="permission-level-error" role="alert">{error}</span>}</div>;
 }
 
 function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
@@ -1099,7 +1131,7 @@ function ApprovalCard({ approval, language, onResolve }: { approval: { toolName:
     try { await onResolve(decision); }
     catch (nextError) { setError(nextError instanceof Error ? nextError.message : String(nextError)); setResolving(false); }
   }
-  return <div className="approval-card" role="alert"><div className="approval-top"><div className="approval-title"><span className="approval-icon"><Icon name="terminal" size={15} /></span><div><strong>{t.approval}</strong><small>{t.approvalRequest(approval.toolName)}</small></div></div><span className="risk-label">{approval.toolName.toUpperCase()}</span></div><div className="command-preview"><span className="prompt-symbol">$</span><code>{JSON.stringify(approval.args ?? {}, null, 2)}</code></div>{error && <div className="inline-error" role="alert">{error}</div>}<div className="approval-actions"><button className="button primary" disabled={resolving} onClick={() => void resolve("allow-once")}><Icon name="check" size={14} />{t.approve}</button><button className="button ghost" disabled={resolving} onClick={() => void resolve("deny")}><Icon name="x" size={14} />{t.reject}</button><span className="approval-scope">{resolving ? t.loading : t.approvalScope}</span></div></div>;
+  return <div className="approval-card" role="alert"><div className="approval-top"><div className="approval-title"><span className="approval-icon"><Icon name="terminal" size={15} /></span><div><strong>{t.approval}</strong><small>{t.approvalRequest(approval.toolName)}</small></div></div><span className="approval-tool-label">{t.toolCall}</span></div><div className="command-preview"><span className="prompt-symbol">$</span><code>{JSON.stringify(approval.args ?? {}, null, 2)}</code></div>{error && <div className="inline-error" role="alert">{error}</div>}<div className="approval-actions"><button className="button primary" disabled={resolving} onClick={() => void resolve("allow-once")}><Icon name="check" size={14} />{t.approve}</button><button className="button ghost" disabled={resolving} onClick={() => void resolve("deny")}><Icon name="x" size={14} />{t.reject}</button><span className="approval-scope">{resolving ? t.loading : t.approvalScope}</span></div></div>;
 }
 
 function highlightComposerText(value: string, commandNames: string[]): ReactNode[] {
@@ -1117,8 +1149,7 @@ function highlightComposerText(value: string, commandNames: string[]): ReactNode
     if (prefix) result.push(<span key={`space-${start}`}>{prefix}</span>);
     const isSkill = token.startsWith("/skill:");
     const isMention = token.startsWith("@");
-    const label = isSkill ? token.slice("/skill:".length) : token.slice(1);
-    result.push(<mark className={`composer-token ${isSkill ? "skill-token" : isMention ? "mention-token" : "command-token"}`} key={`token-${start}`}><span className="composer-token-label">{label}</span></mark>);
+    result.push(<mark className={`composer-token ${isSkill ? "skill-token" : isMention ? "mention-token" : "command-token"}`} key={`token-${start}`}>{token}</mark>);
     cursor = start + match[0].length;
   }
   if (cursor < value.length) result.push(<span key={`text-${cursor}`}>{value.slice(cursor)}</span>);
@@ -1130,6 +1161,7 @@ function Composer(props: { value: string; onChange: (value: string) => void; onK
   const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [modelQuery, setModelQuery] = useState("");
   const filteredModels = props.modelOptions.filter((model) => `${model.providerName} ${model.name}`.toLowerCase().includes(modelQuery.toLowerCase()));
+  const activeModelIndex = filteredModels.findIndex((model) => model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId);
   useEffect(() => { suggestionRefs.current[props.suggestionIndex]?.scrollIntoView({ block: "nearest" }); }, [props.suggestionIndex, props.suggestions.length, props.suggestionMode]);
   useEffect(() => { if (!props.modelMenuOpen) setModelQuery(""); }, [props.modelMenuOpen]);
   const hasDraft = props.value.trim().length > 0 || props.attachments.length > 0;
@@ -1137,38 +1169,24 @@ function Composer(props: { value: string; onChange: (value: string) => void; onK
   const handleEditorPaste: React.ClipboardEventHandler<HTMLElement> = (event) => props.onPaste(event as unknown as React.ClipboardEvent<HTMLTextAreaElement>);
   const handleEditorKeyDown: React.KeyboardEventHandler<HTMLElement> = (event) => props.onKeyDown(event as unknown as React.KeyboardEvent<HTMLTextAreaElement>);
   return <div className="composer-wrap"><div className="composer-shell">
-    {props.suggestionMode && props.suggestions.length > 0 && <div className="suggestion-popover" role="listbox" id="composer-suggestions" aria-label={props.suggestionMode === "mention" ? t.files : t.command}>{props.suggestions.map((item, index) => <button ref={(element) => { suggestionRefs.current[index] = element; }} key={item.name ?? item.path} type="button" role="option" aria-selected={index === props.suggestionIndex} className={index === props.suggestionIndex ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => props.onSuggestion(item)}><span className="suggestion-symbol">{props.suggestionMode === "mention" ? "@" : "/"}</span><span><strong>{item.name ?? item.path}</strong><small>{item.description ?? item.path}</small></span></button>)}</div>}
-    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })} onContextMenu={(event) => props.onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><Editor className="composer-editor-surface" style={{ display: "block", width: "100%" }} value={props.value} onValueChange={props.onChange} highlight={(code) => <>{code ? highlightComposerText(code, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</>} textareaClassName="composer-editor-input" preClassName="composer-highlight" padding={0} onPaste={handleEditorPaste} onKeyDown={handleEditorKeyDown} autoFocus placeholder="" aria-label={t.ask} aria-controls="composer-suggestions" aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
-      <div className="menu-anchor"><button className="chip" aria-haspopup="menu" aria-expanded={props.thinkingMenuOpen} onClick={props.onThinkingMenu}><Icon name="spark" size={14} /><span>{props.thinkingLevel}</span><Icon name="chevron" size={13} /></button>{props.thinkingMenuOpen && <div className="inline-menu" role="menu" aria-label={t.chooseThinking}><strong>{t.chooseThinking}</strong>{props.thinkingLevels.map((level) => <button role="menuitemradio" aria-checked={level === props.thinkingLevel} key={level} className={level === props.thinkingLevel ? "active" : ""} onClick={() => props.onThinking(level)}>{level}</button>)}</div>}</div>
-      <div className="menu-anchor"><button className="model-chip" aria-haspopup="menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRingPopover usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" role="menu" aria-label={t.models}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
+    {props.suggestionMode && props.suggestions.length > 0 && <div className="suggestion-popover" role="listbox" id="composer-suggestions" aria-label={props.suggestionMode === "mention" ? t.files : t.command}>{props.suggestions.map((item, index) => <button id={`composer-suggestion-${index}`} ref={(element) => { suggestionRefs.current[index] = element; }} key={item.name ?? item.path} type="button" role="option" aria-selected={index === props.suggestionIndex} className={index === props.suggestionIndex ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => props.onSuggestion(item)}><span className="suggestion-symbol">{props.suggestionMode === "mention" ? "@" : "/"}</span><span><strong>{item.name ?? item.path}</strong><small>{item.description ?? item.path}</small></span></button>)}</div>}
+    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} title={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })} onContextMenu={(event) => props.onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><Editor className="composer-editor-surface" style={{ display: "block", width: "100%" }} value={props.value} onValueChange={props.onChange} highlight={(code) => <>{code ? highlightComposerText(code, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</>} textareaClassName="composer-editor-input" preClassName="composer-highlight" padding={0} onPaste={handleEditorPaste} onKeyDown={handleEditorKeyDown} autoFocus placeholder="" aria-label={t.ask} aria-controls="composer-suggestions" aria-activedescendant={props.suggestionMode && props.suggestions.length ? `composer-suggestion-${props.suggestionIndex}` : undefined} aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
+      <div className="menu-anchor"><button className="chip" title={t.chooseThinking} aria-haspopup="menu" aria-controls="thinking-menu" aria-expanded={props.thinkingMenuOpen} onClick={props.onThinkingMenu}><Icon name="spark" size={14} /><span>{props.thinkingLevel}</span><Icon name="chevron" size={13} /></button>{props.thinkingMenuOpen && <div className="inline-menu" id="thinking-menu" role="menu" aria-label={t.chooseThinking} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); props.onThinkingMenu(); } else handleRovingMenuKeyDown(event); }}><strong>{t.chooseThinking}</strong>{props.thinkingLevels.map((level, index) => <button role="menuitemradio" aria-checked={level === props.thinkingLevel} tabIndex={level === props.thinkingLevel || (!props.thinkingLevels.includes(props.thinkingLevel) && index === 0) ? 0 : -1} autoFocus={level === props.thinkingLevel || (!props.thinkingLevels.includes(props.thinkingLevel) && index === 0)} key={level} className={level === props.thinkingLevel ? "active" : ""} onClick={() => props.onThinking(level)}>{level}</button>)}</div>}</div>
+      <div className="menu-anchor"><button className="model-chip" title={t.chooseModel} aria-haspopup="menu" aria-controls="model-menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRingPopover usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" id="model-menu" role="menu" aria-label={t.models} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); props.onModelMenu(); } else handleRovingMenuKeyDown(event); }}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} aria-label={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model, index) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} tabIndex={index === (activeModelIndex >= 0 ? activeModelIndex : 0) ? 0 : -1} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
       <button className="chip subtle" aria-label={t.mentionLabel} title={t.mentionLabel} onClick={() => props.onChange(`${props.value}${props.value ? " " : ""}@`)}><Icon name="plus" size={14} />@</button>
       <button className="chip subtle terminal-trigger" onClick={props.onTerminal}><Icon name="terminal" size={13} />{t.terminal}</button>
-    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !hasDraft} aria-label={stopOnly ? t.stop : t.send} onClick={stopOnly ? props.onStop : props.onSend}><Icon name={stopOnly ? "stop" : "send"} size={16} /></button></div></div>
+    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !hasDraft} aria-label={stopOnly ? t.stop : t.send} title={stopOnly ? t.stop : t.send} onClick={stopOnly ? props.onStop : props.onSend}><Icon name={stopOnly ? "stop" : "send"} size={16} /></button></div></div>
   </div></div>;
 }
 
-function ChangesPanel({ changes, language }: { changes: WorkspaceChange[]; language: Language }) {
-  const t = copy[language];
-  const [selectedPath, setSelectedPath] = useState<string | null>(changes[0]?.path ?? null);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => { if (!selectedPath || !changes.some((change) => change.path === selectedPath)) setSelectedPath(changes[0]?.path ?? null); }, [changes, selectedPath]);
-  async function copyPath() { if (!selectedPath || !await copyText(selectedPath)) return; setCopied(true); window.setTimeout(() => setCopied(false), 1400); }
-  return <div className="inspector-content" role="tabpanel"><div className="change-summary"><div><strong>{t.fileCount(changes.length)}</strong><span>{t.additions(changes.reduce((sum, item) => sum + item.additions, 0))}</span></div></div>{changes.length === 0 ? <div className="inspector-empty">{t.noChanges}</div> : <><div className="file-change-list">{changes.map((change) => <button key={change.path} aria-pressed={selectedPath === change.path} className={`file-change ${selectedPath === change.path ? "selected" : ""}`} onClick={() => setSelectedPath(change.path)}><span className="file-tone" /><span className="file-change-copy"><strong>{change.path.split("/").pop()}</strong><small>{change.path}</small></span><span className="diff-count"><em>+{change.additions}</em><i>−{change.deletions}</i></span></button>)}</div><div className="diff-preview"><div className="diff-header"><span>{selectedPath}</span><span className="diff-lines">{changes.find((change) => change.path === selectedPath)?.status}</span></div><div className="diff-empty">{t.workspaceSummaryOnly}<button className="button ghost" onClick={() => void copyPath()}><Icon name="copy" size={13} />{copied ? t.copied : t.copyPath}</button></div></div></>}</div>;
-}
-
-function FilesPanel({ files, language }: { files: WorkspaceFile[]; language: Language }) {
-  const t = copy[language];
-  return <div className="inspector-content" role="tabpanel"><div className="file-tree-root"><Icon name="folder" size={14} /><strong>PiDeck</strong><span>{t.itemCount(files.length)}</span></div>{files.length === 0 ? <div className="inspector-empty">{t.noFiles}</div> : <div className="file-tree" role="tree">{files.map((file) => { const depth = file.path.split("/").length - 1; return <div key={`${file.kind}:${file.path}`} role="treeitem" aria-level={depth + 1} className={file.kind === "directory" ? "directory-row" : "file-row"} style={{ paddingLeft: `${6 + depth * 14}px` }}><Icon name={file.kind === "directory" ? "folder" : "file"} size={14} /><span>{file.path.split("/").pop()}</span>{file.size !== undefined && <small>{Math.max(1, Math.round(file.size / 1024))} KB</small>}</div>; })}</div>}</div>;
-}
-
-function TerminalPanel({ language, cwd, output, command, running, inspectorOpen, onCommand, onExecute, onClose }: { language: Language; cwd: string; output: string[]; command: string; running: boolean; inspectorOpen: boolean; onCommand: (value: string) => void; onExecute: () => void; onClose: () => void }) {
+function TerminalPanel({ language, cwd, output, command, running, onCommand, onExecute, onClose }: { language: Language; cwd: string; output: string[]; command: string; running: boolean; onCommand: (value: string) => void; onExecute: () => void; onClose: () => void }) {
   const t = copy[language];
   const inputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => { if (followRef.current && outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }, [output]);
-  return <section className={`terminal-float ${inspectorOpen ? "with-inspector" : ""}`} role="dialog" aria-modal="false" aria-label={t.terminal}><div className="terminal-float-header"><span><Icon name="terminal" size={14} />{t.terminal}</span><small>{cwd} · {t.terminalRuntime}</small><button className="icon-button" onClick={onClose} aria-label={t.closeTerminal}><Icon name="x" size={14} /></button></div><div ref={outputRef} className="terminal-output" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>{output.length === 0 ? <div className="terminal-muted">{t.terminalEmpty}</div> : output.map((line, index) => <pre className="terminal-line" key={`${index}-${line.slice(0, 20)}`}>{line}</pre>)}</div><form className="terminal-input-row" onSubmit={(event) => { event.preventDefault(); onExecute(); }}><span className="terminal-green">›</span><input ref={inputRef} value={command} onChange={(event) => onCommand(event.target.value)} placeholder={t.terminalPlaceholder} aria-label={t.terminalPlaceholder} disabled={running} /><span className="terminal-running">{running ? "…" : ""}</span></form></section>;
+  return <section className="terminal-float" role="dialog" aria-modal="false" aria-label={t.terminal}><div className="terminal-float-header"><span><Icon name="terminal" size={14} />{t.terminal}</span><small>{cwd} · {t.terminalRuntime}</small><button className="icon-button" onClick={onClose} aria-label={t.closeTerminal} title={t.closeTerminal}><Icon name="x" size={14} /></button></div><div ref={outputRef} className="terminal-output" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>{output.length === 0 ? <div className="terminal-muted">{t.terminalEmpty}</div> : output.map((line, index) => <pre className="terminal-line" key={`${index}-${line.slice(0, 20)}`}>{line}</pre>)}</div><form className="terminal-input-row" onSubmit={(event) => { event.preventDefault(); onExecute(); }}><span className="terminal-green">›</span><input ref={inputRef} value={command} onChange={(event) => onCommand(event.target.value)} placeholder={t.terminalPlaceholder} aria-label={t.terminalPlaceholder} disabled={running} /><span className="terminal-running">{running ? "…" : ""}</span></form></section>;
 }
 
 class CommandPaletteBoundary extends Component<{ children: ReactNode; language: Language; onClose: () => void }, { error: string | null }> {
@@ -1188,7 +1206,7 @@ function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNe
   const dialogRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   useDialogFocus(dialogRef, onClose);
-    const quickItems = [
+  const quickItems = [
     { id: "new-task", label: t.newTask, description: shortcut("N"), action: onNewTask, icon: "plus" },
     { id: "terminal", label: t.terminal, description: shortcut("J"), action: onTerminal, icon: "terminal" },
     { id: "provider", label: t.provider, description: shortcut(","), action: onSettings, icon: "settings" },
@@ -1218,7 +1236,7 @@ function ImagePreview({ image, language, onClose, onContextMenuImage }: { image:
 
 function ImageContextMenu({ language, x, y, onCopy }: { language: Language; x: number; y: number; onCopy: () => void }) {
   const t = copy[language];
-  return <div className="image-context-menu" role="menu" style={{ left: x, top: y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={onCopy}><Icon name="copy" size={13} />{t.copyImage}</button></div>;
+  return <div className="image-context-menu" role="menu" aria-label={t.copyImage} style={{ left: x, top: y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" autoFocus onClick={onCopy}><Icon name="copy" size={13} />{t.copyImage}</button></div>;
 }
 
 function ConfirmDialog({ language, task, busy, onCancel, onConfirm }: { language: Language; task: TaskSummary; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
@@ -1329,7 +1347,7 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
     finally { setBusyProvider(null); }
   }
 
-  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{!authPrompt && authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{!authPrompt && authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
+  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings} title={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{!authPrompt && authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{!authPrompt && authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
     {!loading && !listError && providers.length > 0 && <div className="provider-tools"><label className="provider-search"><Icon name="search" size={14} /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder={t.providerSearch} aria-label={t.providerSearch} /></label><div className="provider-filters" role="group" aria-label={t.providerAuthTitle}>{(["all", "configured", "expired", "missing"] as ProviderFilter[]).map((filter) => <button type="button" key={filter} aria-pressed={providerFilter === filter} onClick={() => setProviderFilter(filter)}>{filter === "all" ? t.providerFilterAll : filter === "configured" ? t.providerFilterConfigured : filter === "expired" ? t.providerFilterExpired : t.providerFilterMissing}</button>)}</div></div>}
     <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : filteredProviders.length === 0 ? <div className="provider-list-empty"><Icon name="search" size={17} /><span>{t.providerNoMatches}</span></div> : filteredProviders.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; const oauthLocked = state === "configured"; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button danger-subtle" disabled={busyProvider === provider.id} onClick={() => setPendingLogout(provider)}>{t.removeProviderAuth}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id || oauthLocked} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
     <div className="settings-footer"><span>{providers.length ? providerQuery || providerFilter !== "all" ? t.providerFilteredCount(filteredProviders.length, providers.length) : t.providerCount(providers.length) : ""}</span><button className="button ghost" onClick={onClose}>{t.done}</button></div>

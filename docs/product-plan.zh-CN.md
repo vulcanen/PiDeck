@@ -65,7 +65,7 @@ packages/
 5. 选择已认证 Provider/Model 和思考等级。
 6. 发送 Prompt、查看流式回复和停止运行。
 7. 查看工具调用、工具结果和审批卡。
-8. 查看工作区文件、Git Changes 和本地终端。
+8. 通过 `@file` 引用工作区文件，并使用本地终端。
 9. 压缩上下文并导出 JSONL/HTML。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
 11. 使用 Provider API Key/OAuth 本地认证。

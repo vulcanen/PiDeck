@@ -1,4 +1,5 @@
 import type { PermissionMode, PiHostRequest, PiHostResponse } from "@pideck/contracts";
+import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
@@ -606,14 +607,21 @@ async function handle(request: PiHostRequest): Promise<void> {
         send({
           id: request.id,
           ok: true,
-          result: sessions.map((session: any) => ({
-            id: session.id,
-            title: session.name ?? session.firstMessage ?? session.id.slice(0, 8),
-            projectId: cwd,
-            state: "idle",
-            model: sessionModelLabel(session, sdk),
-            updatedAt: new Date(session.modified ?? Date.now()).toISOString(),
-          })),
+          result: sessions.map((session: any) => {
+            const storedName = typeof session.name === "string" ? session.name : "";
+            const firstMessage = typeof session.firstMessage === "string" ? session.firstMessage : "";
+            const titleSource = isDefaultSessionTitle(storedName) || isCommandDerivedSessionTitle(storedName)
+              ? firstMessage
+              : storedName || firstMessage;
+            return {
+              id: session.id,
+              title: deriveSessionTitle(titleSource) || storedName || session.id.slice(0, 8),
+              projectId: cwd,
+              state: "idle",
+              model: sessionModelLabel(session, sdk),
+              updatedAt: new Date(session.modified ?? Date.now()).toISOString(),
+            };
+          }),
         });
         return;
       }
@@ -769,16 +777,14 @@ async function handle(request: PiHostRequest): Promise<void> {
         const images = normalizePromptImages(payload?.images);
         if (!payload?.taskId || (!payload.text && !images?.length)) throw new Error("taskId and text or images are required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        const sdk = await loadPiSdk();
         const sessionName = session.sessionManager?.getSessionName?.();
-        if (!titledSessions.has(payload.taskId) && (!sessionName || sessionName === "新建任务" || sessionName === "New task")) {
-          const promptText = payload.text ?? "";
-          const parsedSkill = sdk.parseSkillBlock?.(promptText);
-          const skillCommand = /^\/skill:([^\s]+)/.exec(promptText);
-          const titleSource = parsedSkill?.userMessage ?? (parsedSkill ? `Skill: ${parsedSkill.name}` : skillCommand ? `Skill: ${skillCommand[1]}` : promptText);
-          const title = titleSource.replace(/\s+/g, " ").trim().slice(0, 80);
-          if (title) session.sessionManager?.appendSessionInfo?.(title);
-          titledSessions.add(payload.taskId);
+        if (!titledSessions.has(payload.taskId) && (isDefaultSessionTitle(sessionName) || isCommandDerivedSessionTitle(sessionName))) {
+          const title = deriveSessionTitle(payload.text ?? "");
+          if (title) {
+            if (typeof session.setSessionName === "function") session.setSessionName(title);
+            else session.sessionManager?.appendSessionInfo?.(title);
+            titledSessions.add(payload.taskId);
+          }
         }
         await session.prompt(payload.text ?? "", {
           source: "interactive",
