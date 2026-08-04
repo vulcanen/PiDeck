@@ -37,6 +37,10 @@ interface ConversationPaneSlotProps {
   onContextMenuImage: ComposerProps["onContextMenuImage"];
 }
 
+function conversationPaneKey(projectCwd: string, taskId: string): string {
+  return `${projectCwd}\u0000${taskId}`;
+}
+
 function ConversationPaneSlot({
   data, active, language, t, loadError, scrollPositionsRef, scrollHandleRef,
   onTimelineAtEnd, onRetryInitialLoad, onRetryMessages, onResolveApproval,
@@ -52,6 +56,7 @@ function ConversationPaneSlot({
   if (!retained) return null;
 
   const { task, messageLoad, messages, isWorking, streamText, workingPhase, taskUi, steeringMessageKeys } = retained;
+  const scrollKey = conversationPaneKey(task.projectId, task.id);
   return <div
     ref={paneRef}
     className={`conversation-scroll conversation-pane ${active ? "is-active" : "is-inactive"}`}
@@ -72,6 +77,7 @@ function ConversationPaneSlot({
       completedActivity={taskUi?.completedActivity ?? []}
       steeringMessageKeys={steeringMessageKeys}
       taskId={task.id}
+      scrollKey={scrollKey}
       active={active}
       messageReady={messageLoad.status === "ready"}
       conversationRef={paneRef}
@@ -106,27 +112,29 @@ function ConversationPaneDeck({
   activeData, tasks, initialLoading, projectCwd, t, loadError,
   onChooseProject, onCreateTask, ...paneProps
 }: ConversationPaneDeckProps) {
-  const activeTaskId = activeData?.task.id;
-  const [cachedTaskIds, setCachedTaskIds] = useState<string[]>(() => activeTaskId ? [activeTaskId] : []);
+  const activePaneKey = activeData ? conversationPaneKey(activeData.task.projectId, activeData.task.id) : null;
+  const [cachedPaneKeys, setCachedPaneKeys] = useState<string[]>(() => activePaneKey ? [activePaneKey] : []);
 
   useLayoutEffect(() => {
-    if (!activeTaskId) return;
-    setCachedTaskIds((current) => current.includes(activeTaskId) ? current : [...current, activeTaskId]);
-  }, [activeTaskId]);
+    if (!activePaneKey) return;
+    setCachedPaneKeys((current) => current.includes(activePaneKey) ? current : [...current, activePaneKey]);
+  }, [activePaneKey]);
 
-  const availableTaskIds = useMemo(() => new Set(tasks.map((task) => task.id)), [tasks]);
-  const paneIds = activeTaskId && !cachedTaskIds.includes(activeTaskId)
-    ? [...cachedTaskIds, activeTaskId]
-    : cachedTaskIds;
+  // Keep visited panes mounted across project changes. The pane's own DOM
+  // scrollTop and virtualizer remain untouched, so switching projects is a
+  // visibility change instead of a remount/restore race.
+  const paneKeys = activePaneKey && !cachedPaneKeys.includes(activePaneKey)
+    ? [...cachedPaneKeys, activePaneKey]
+    : cachedPaneKeys;
 
   return <div className="conversation-pane-stack">
-    {paneIds.filter((taskId) => taskId === activeTaskId || availableTaskIds.has(taskId)).map((taskId) => <MemoConversationPaneSlot
-      key={taskId}
+    {paneKeys.map((paneKey) => <MemoConversationPaneSlot
+      key={paneKey}
       {...paneProps}
       t={t}
       loadError={loadError}
-      data={taskId === activeTaskId ? activeData ?? undefined : undefined}
-      active={taskId === activeTaskId}
+      data={paneKey === activePaneKey ? activeData ?? undefined : undefined}
+      active={paneKey === activePaneKey}
     />)}
     {!activeData && <div className="conversation-scroll conversation-pane is-active">
       {loadError && <div className="runtime-error" role="alert"><strong>{loadError}</strong><button onClick={() => void paneProps.onRetryInitialLoad()}>{t.retry}</button></div>}
@@ -192,7 +200,6 @@ export function AppConversation({
     <main className="main-column" id="main-content" tabIndex={-1}>
       {activeTask && <div className="conversation-header"><div className="conversation-title"><div className="breadcrumb"><span>{activeProject?.name ?? "PiDeck"}</span><span>/</span><span>{activeTask.title ?? t.conversation}</span></div><h1>{activeTask.title ?? t.conversation}</h1></div></div>}
       <ConversationPaneDeck
-        key={projectCwd || "no-project"}
         activeData={activeData}
         tasks={tasks}
         initialLoading={initialLoading}

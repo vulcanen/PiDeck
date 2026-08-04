@@ -1,4 +1,5 @@
 import { copy, type Language } from "@pideck/i18n";
+import type { SessionRunRecord } from "@pideck/contracts";
 import type { ActivityStep, WorkingPhase } from "./types";
 import { messageIdentity, textFromMessage } from "./message-utils";
 
@@ -10,19 +11,17 @@ export type MessageTimelineItem =
 function activityFromMessages(messages: any[], language: Language): ActivityStep[] {
   const steps: ActivityStep[] = [];
   const toolSteps = new Map<string, ActivityStep>();
-  let firstMessageAt: number | undefined;
   let lastAssistantAt: number | undefined;
   let assistantMessageId: string | number | undefined;
   for (const message of messages) {
     const timestamp = typeof message?.timestamp === "number" ? message.timestamp : Date.parse(message?.timestamp ?? "") || Date.now();
-    if (message?.role === "user" && firstMessageAt === undefined) firstMessageAt = timestamp;
     if (message?.role === "assistant" && Array.isArray(message.content)) {
       lastAssistantAt = timestamp;
       assistantMessageId = message.id ?? timestamp;
       for (const part of message.content) {
-        if (part?.type === "thinking" && part.thinking) steps.push({ id: `${message.id ?? timestamp}:thinking:${steps.length}`, kind: "thinking", label: copy[language].executionThinking, detail: part.thinking, startedAt: timestamp, endedAt: timestamp });
+        if (part?.type === "thinking" && part.thinking) steps.push({ id: `${message.id ?? timestamp}:thinking:${steps.length}`, kind: "thinking", label: copy[language].executionThinking, detail: part.thinking, startedAt: timestamp, endedAt: timestamp, timing: "unknown" });
         if (part?.type === "toolCall" || part?.type === "tool_call") {
-          const step = { id: part.id ?? part.toolCallId ?? `${message.id ?? timestamp}:tool:${steps.length}`, kind: "tool" as const, label: part.name ?? part.toolName ?? copy[language].toolResult, args: part.arguments ?? part.args ?? {}, startedAt: timestamp };
+          const step = { id: part.id ?? part.toolCallId ?? `${message.id ?? timestamp}:tool:${steps.length}`, kind: "tool" as const, label: part.name ?? part.toolName ?? copy[language].toolResult, args: part.arguments ?? part.args ?? {}, startedAt: timestamp, timing: "unknown" as const };
           steps.push(step);
           toolSteps.set(step.id, step);
         }
@@ -44,18 +43,72 @@ function activityFromMessages(messages: any[], language: Language): ActivityStep
   }
   // Pi may persist the final assistant text without its transient thinking
   // and tool events. Recreate a compact historical summary from the turn
-  // timestamps so a restart does not make recent “processed” rows disappear.
+  // without inventing a duration that was never persisted.
   if (!steps.length && lastAssistantAt !== undefined) {
-    const startedAt = firstMessageAt ?? lastAssistantAt;
     steps.push({
       id: `${assistantMessageId ?? lastAssistantAt}:summary`,
       kind: "thinking",
       label: copy[language].executionThinking,
-      startedAt,
-      endedAt: Math.max(startedAt, lastAssistantAt),
+      startedAt: lastAssistantAt,
+      endedAt: lastAssistantAt,
+      timing: "unknown",
     });
   }
   return steps;
+}
+
+/**
+ * Rebuild the detailed execution steps after a session reload. Pi persists
+ * thinking/tool messages separately from PiDeck's execution timing metadata;
+ * keep the former for the expandable detail view and overlay the latter on
+ * the first step so the summary duration remains authoritative.
+ */
+export function restoreCompletedActivity(messages: any[], language: Language, records: SessionRunRecord[]): ActivityStep[][] {
+  const groups: ActivityStep[][] = [];
+  let turn: any[] = [];
+  let hasAssistantInTurn = false;
+  const flushTurn = () => {
+    if (!turn.length) return;
+    const steps = activityFromMessages(turn, language);
+    if (steps.length) groups.push(steps);
+    turn = [];
+    hasAssistantInTurn = false;
+  };
+
+  for (const message of messages) {
+    if (message?.role === "user" && turn.length && hasAssistantInTurn) flushTurn();
+    turn.push(message);
+    if (message?.role === "assistant") hasAssistantInTurn = true;
+  }
+  flushTurn();
+
+  // A message snapshot can be unavailable temporarily (or a provider may
+  // omit all detail). Keep a useful summary row for those records rather than
+  // dropping the persisted run completely.
+  if (groups.length === 0 && records.length > 0) {
+    return records.map((record) => [{
+      id: `persisted:${record.id}`,
+      kind: "thinking" as const,
+      label: copy[language].executionThinking,
+      startedAt: record.startedAt,
+      endedAt: record.endedAt,
+      durationMs: record.durationMs,
+      timing: "measured" as const,
+    }]);
+  }
+
+  // Align metadata to the newest reconstructed groups. This mirrors the
+  // timeline's existing offset handling when a session contains older turns
+  // that were not observed during the current app lifetime.
+  const groupOffset = Math.max(0, groups.length - records.length);
+  const recordOffset = Math.max(0, records.length - groups.length);
+  return groups.map((steps, groupIndex) => {
+    const record = records[groupIndex - groupOffset + recordOffset];
+    if (!record || steps.length === 0) return steps;
+    return steps.map((step, stepIndex) => stepIndex === 0
+      ? { ...step, durationMs: record.durationMs, timing: "measured" as const }
+      : step);
+  });
 }
 
 export function buildMessageTimelineItems({

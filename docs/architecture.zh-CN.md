@@ -132,15 +132,15 @@ permission-engine → contracts + Pi Permission System 配置
 
 Renderer 的会话时间线由 `app-conversation.tsx` 和 `ui-components.tsx` 组合，使用 `@tanstack/react-virtual` 管理长会话。每个访问过的 Session 保留独立 pane、DOM `scrollTop`、follow 状态和虚拟器测量快照；首次打开无快照时定位到最新消息，有快照时恢复用户位置。用户向上滚动后立即退出 follow，队列变化和流式增长不会抢回用户位置。
 
-PiDeck 的“已处理”执行摘要不是 Pi Session 中的独立字段：运行期间优先使用 `use-runtime-events.ts` 收集的 activity，重启后优先从 Pi 原始 thinking/tool 内容重建；Provider 只保存空 thinking 或正式文本时，`timeline-utils.ts` 使用消息时间戳生成轻量历史摘要。
+PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示状态，不会直接写回会话。为稳定恢复“已处理”耗时，PiHost 在 `agent_start`、非 Steering 的 Follow-up 边界和 `agent_settled` 记录每个 execution group 的 `startedAt/endedAt/durationMs`，并通过 Pi 官方 `SessionManager.appendCustomEntry()` 写入 `pideck.execution-run` 自定义 entry；该 entry 不进入 LLM context。Renderer 通过 `sessions.runMetadata` 读取精确耗时，Pi 原始 thinking/tool 仅用于重建步骤内容。没有该元数据的旧会话显示“已处理”但不再从消息时间戳推断耗时。
 
 ## 5. 当前 Bridge 能力
 
 以 `packages/contracts/src/index.ts` 为准，当前已声明：
 
 - `runtime.status`
-- `projects.list/chooseDirectory/remove`
-- `sessions.list/create/delete/messages/capabilities/compact/export`
+- `projects.list/chooseDirectory/remove/setTrust`
+- `sessions.list/create/delete/messages/runMetadata/capabilities/compact/export/import/rename/stats/share/changelog`
 - `agent.queue/setQueueModes/clearQueue/promoteQueue`
 - `extensions.resolveUi`
 - `packages.list/install/remove/update/configure`
@@ -149,7 +149,7 @@ PiDeck 的“已处理”执行摘要不是 Pi Session 中的独立字段：运�
 - `workspace.snapshot`
 - `terminal.execute`
 - `providers.list/login/logout/setApiKey/auth-response/open-auth-url`
-- `agent.prompt/abort/setThinkingLevel/setModel`
+- `agent.prompt/abort/setThinkingLevel/setModel/setScopedModels`
 - `approvals.resolve`
 - `events.subscribe`
 
@@ -166,7 +166,9 @@ PiHost 将以下事件发送到 Renderer：
 { type: "auth.event", requestId, event }
 ```
 
-`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update 等事件。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
+认证提示通过 `providers.auth-response` 回传文本、选择项或取消状态；取消会结束 Pi 的等待，不会遗留挂起的登录请求。
+
+`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update 等事件。`agent_end` 的 `messages` 来自 Pi SDK，Renderer 在后续自动重试或队列续接前即可合并本轮消息；`agent_settled` 再读取最终 Session 快照。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
 
 ## 7. Pi 能力映射
 
@@ -174,7 +176,7 @@ PiHost 将以下事件发送到 Renderer：
 - Pi ModelRuntime → Provider 设置、模型选择和思考等级。
 - Pi slash command / Prompt / Skill catalog → Composer 建议和命令面板。
 - Pi Agent event → 流式回复、工具过程、审批和运行状态。
-- Pi Session export/compact/tree → 会话操作和命令面板入口。
+- Pi Session export/compact → 会话操作和命令面板入口；Session Tree 的 `/fork`、`/clone`、`/tree` 仍列入待支持。
 - Pi Agent steering/follow-up queue → Composer 队列面板、投递方式和批处理模式。
 - Pi workspace / git status → Files 与 Changes 面板。
 
@@ -190,6 +192,7 @@ projects.list
 models.list
 providers.list
 sessions.create
+sessions.runMetadata
 sessions.capabilities
 workspace.snapshot
 terminal.execute（仅无副作用命令）

@@ -83,12 +83,14 @@ packages/
 6. 发送 Prompt、查看流式回复和停止运行。
 7. 查看工具调用、工具结果和审批卡。
 8. 通过 `@file` 引用工作区文件，并使用本地终端。
-9. 压缩上下文并导出 JSONL/HTML。
+9. 压缩上下文并导出 JSONL/HTML，导入 Pi JSONL 会话、重命名和查看会话统计。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
 11. 使用 Provider API Key/OAuth 本地认证。
 12. 切换中文/英文和浅色/深色主题。
 13. 使用 Steering / Follow-up 队列、批处理模式和队列消息面板。
 14. 对长会话使用 TanStack Virtual，并按 Session 缓存消息 pane、滚动位置和测量快照。
+15. 使用 `/copy`、`/share`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models` 的桌面映射；`/share` 依赖本机 `gh` CLI。
+16. 在 Pi Session 自定义 entry 中持久化每次 Agent 运行的精确起止时间，关闭并重启后保持“已处理”耗时一致。
 
 ## 4. 消息与对话行为
 
@@ -97,7 +99,7 @@ packages/
 - Markdown、代码块、表格和链接由 Renderer 展示层渲染，不改变 Pi 原始消息。
 - 会话标题已经避免直接使用完整 Skill 文本；Skill 展开后的 `<skill>` 内容仍需补充独立的折叠引用卡片，当前不应宣称已经完成。
 - 工具调用和思考过程应作为可折叠 Activity 展示，并显示工具数量、思考块数量和耗时。
-- “已处理”摘要优先由 Pi 原始 thinking/tool 内容重建；Provider 只保存空 thinking 或正式文本时，Renderer 根据消息时间戳生成轻量历史摘要。运行时 `completedActivity` 不视为持久化数据。
+- Pi 原始 thinking/tool 内容用于重建“已处理”摘要里的步骤内容；精确耗时来自 PiHost 在 `agent_start`、Follow-up 分组边界和 `agent_settled` 通过 `SessionManager.appendCustomEntry()` 写入的 `pideck.execution-run` 元数据，Steering 消息继续共享同一 execution group。运行时 `completedActivity` 仍不是持久化字段；没有元数据的旧会话只显示“已处理”，不根据消息时间戳推断耗时。
 - 思考摘要、流式回复和最终 Assistant 消息复用稳定时间线项，避免回复完成时卸载/重建整段消息列表。
 - 切换 Session 时立即定位到该会话的最新位置或保存的位置，不播放跨会话滚动动画。
 - 用户手动离开底部时显示“回到最新消息”，不强制抢夺滚动位置。
@@ -110,12 +112,13 @@ packages/
 ```text
 runtime.status
 projects.list/chooseDirectory/remove
-sessions.list/create/delete/messages/capabilities/compact/export
+sessions.list/create/delete/messages/runMetadata/capabilities/compact/export/import/rename/stats/share/changelog
 models.list
 workspace.snapshot
 terminal.execute
 providers.list/login/logout/setApiKey/auth-response/open-auth-url
-agent.prompt/abort/setThinkingLevel/setModel
+agent.prompt/abort/setThinkingLevel/setModel/setScopedModels
+projects.setTrust
 agent.queue/setQueueModes/clearQueue/promoteQueue
 approvals.resolve
 events.subscribe
@@ -138,6 +141,10 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 - `/export` → Pi Session HTML/JSONL 导出。
 - `/new` → 新建 Session。
 - `/reload` → 重载 Pi 资源/重新读取初始数据。
+- `/import`、`/name`、`/session`、`/share` → PiHost 会话导入、命名、统计和 GitHub Gist 分享。
+- `/copy`、`/changelog`、`/hotkeys`、`/resume`、`/quit` → Renderer/Electron 桌面操作。
+- `/trust`、`/scoped-models` → Pi 项目信任存储和模型范围设置。
+- `/fork`、`/clone`、`/tree` → 暂不显示，列入待支持列表。
 
 没有稳定 Bridge 的命令不得让模型把它当普通 Prompt 执行，也不得伪装成已经完成。UI 应显示可操作的“当前桌面端尚未支持”提示。
 
@@ -212,6 +219,7 @@ projects.list
 models.list
 providers.list
 sessions.create
+sessions.runMetadata
 sessions.capabilities
 workspace.snapshot
 terminal.execute（无副作用命令）

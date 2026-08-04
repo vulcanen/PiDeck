@@ -2,20 +2,22 @@ import { Icon } from "@pideck/ui-system";
 import { AppConversation } from "./app-conversation";
 import { AppSidebar } from "./app-sidebar";
 import type { AppController } from "./use-app-controller";
-import { CommandPalette, CommandPaletteBoundary, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, ProjectRemoveDialog, ProviderSettings, TerminalPanel, copyImageToClipboard } from "./ui-components";
+import { CommandPalette, CommandPaletteBoundary, CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, ProjectRemoveDialog, ProviderSettings, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TerminalPanel, TrustDialog, copyImageToClipboard } from "./ui-components";
 
 export function AppView({ controller }: { controller: AppController }) {
   const {
     language, setLanguage, theme, setTheme, projectCwd, projects, expandedProjectCwds, tasks,
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, runtimeStatus, shortcut, t, isMac,
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, createTask, chooseProjectDirectory,
-    openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions,
+    openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions, createTaskForProject,
     searchQuery, setSearchQuery,
     loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
-    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus,
+    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities,
     composerProps, jumpToLatest, executeTerminal, terminalOpen, terminalCommand,
     terminalOutput, terminalRunning, setTerminalCommand, setTerminalOpen, paletteOpen, setPaletteOpen, paletteCommands,
     composer, updateComposer, compactSession, exportSession, notice, contextMenu, projectContextMenu,
+    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,
+    renameSession, resolveTrust, saveScopedModels,
     pendingDelete, pendingProjectRemove, deletingTaskId, removingProjectCwd, extensionUiRequest,
     packagesOpen, settingsOpen, providerFocus, previewImage, imageContextMenu, setPendingDelete,
     setPendingProjectRemove, setContextMenu, setProjectContextMenu, setPackagesOpen, setSettingsOpen,
@@ -57,6 +59,7 @@ export function AppView({ controller }: { controller: AppController }) {
         shortcut={shortcut}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         onCreateTask={createTask}
+        onCreateTaskForProject={createTaskForProject}
         onChooseProject={chooseProjectDirectory}
         onOpenCommandPalette={openCommandPalette}
         onSearchQuery={setSearchQuery}
@@ -114,8 +117,13 @@ export function AppView({ controller }: { controller: AppController }) {
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
     {pendingProjectRemove && <ProjectRemoveDialog language={language} project={pendingProjectRemove} busy={removingProjectCwd === pendingProjectRemove.cwd} onCancel={() => setPendingProjectRemove(null)} onConfirm={() => void removeProject(pendingProjectRemove)} />}
     {extensionUiRequest && <ExtensionUiDialog request={extensionUiRequest} language={language} onResolve={(value) => { void window.pideck.extensions.resolveUi(extensionUiRequest.requestId, value).then(() => setExtensionUiRequest(null)).catch((error) => showNotice(error instanceof Error ? error.message : String(error))); }} />}
-    {packagesOpen && <PackageSettings language={language} cwd={projectCwd} onClose={() => setPackagesOpen(false)} onNotice={showNotice} />}
+    {packagesOpen && <PackageSettings language={language} cwd={activeProject?.cwd ?? projectCwd} onClose={() => setPackagesOpen(false)} onNotice={showNotice} onPackagesChanged={() => setMessageReload((current) => current + 1)} />}
     {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
+    {commandDialog && <CommandResultDialog language={language} title={commandDialog.title} body={commandDialog.body} onClose={() => setCommandDialog(null)} />}
+    {renameOpen && activeTask && <RenameSessionDialog language={language} currentName={activeTask.title} onSave={(name) => void renameSession(name)} onClose={() => setRenameOpen(false)} />}
+    {resumeOpen && <ResumeSessionDialog language={language} project={activeProject} tasks={tasks} activeTaskId={activeTask?.id} onSelect={(task) => { if (activeProject) void selectTask(activeProject, task); setResumeOpen(false); }} onClose={() => setResumeOpen(false)} />}
+    {trustOpen && <TrustDialog language={language} onResolve={(trusted) => void resolveTrust(trusted)} onClose={() => setTrustOpen(false)} />}
+    {scopedModelsOpen && <ScopedModelsDialog language={language} models={modelOptions} selectedIds={capabilities?.scopedModels?.length ? capabilities.scopedModels : modelOptions.map((model) => `${model.providerId}/${model.id}`)} onSave={(modelIds, persist) => void saveScopedModels(modelIds, persist)} onClose={() => setScopedModelsOpen(false)} />}
     {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
     {imageContextMenu && <ImageContextMenu language={language} x={imageContextMenu.x} y={imageContextMenu.y} onCopy={async () => { const copied = await copyImageToClipboard(imageContextMenu.image.src); setImageContextMenu(null); showNotice(copied ? t.copiedImage : t.copyImageFailed); }} />}
   </div>;

@@ -26,6 +26,7 @@ export interface AppSidebarProps {
   onCloseMobile: () => void;
   onOpenCommandPalette: () => void;
   onCreateTask: () => void | Promise<unknown>;
+  onCreateTaskForProject: (project: ProjectSummary) => void | Promise<unknown>;
   onChooseProject: () => void | Promise<unknown>;
   onSearchQuery: (value: string) => void;
   onSelectProject: (project: ProjectSummary) => void | Promise<unknown>;
@@ -40,7 +41,7 @@ export interface AppSidebarProps {
 export function AppSidebar({
   language, t, sidebarRef, searchInputRef, mobileSidebarOpen, projectCwd, projects, tasks,
   projectTasksByCwd, projectTaskLoads, expandedProjectCwds, searchQuery, activeTask,
-  initialLoading, runtimeStatus, shortcut, onCloseMobile, onOpenCommandPalette, onCreateTask,
+  initialLoading, runtimeStatus, shortcut, onCloseMobile, onOpenCommandPalette, onCreateTask, onCreateTaskForProject,
   onChooseProject, onSearchQuery, onSelectProject, onOpenProjectContext, onSelectTask,
   onOpenTaskContext, onTaskMenu, onLoadProjectSessions, onRetry,
 }: AppSidebarProps) {
@@ -70,7 +71,7 @@ export function AppSidebar({
               {expanded && <div className="project-sessions"><div className="task-list">
                 {projectTaskLoad.status === "loading" && projectTasks.length === 0 ? <SidebarSkeleton /> : filteredProjectTasks.map((task) => <TaskRow key={task.id} task={task} active={selected && activeTask?.id === task.id} language={language} onClick={() => void onSelectTask(project, task)} onContextMenu={(event) => { event.preventDefault(); onOpenTaskContext(task, event.clientX, event.clientY); }} onMenu={(rect) => onTaskMenu(task, rect)} />)}
                 {projectTaskLoad.status === "error" && <div className="empty-sidebar" role="alert"><strong>{t.projectSessionsLoadFailed}</strong><span>{projectTaskLoad.error}</span><button className="button ghost" type="button" onClick={() => void onLoadProjectSessions(project)}>{t.retry}</button></div>}
-                {projectTaskLoad.status === "ready" && filteredProjectTasks.length === 0 && <div className="empty-sidebar"><strong>{searchQuery ? t.noSessionMatches : t.noSessions}</strong><span>{searchQuery ? t.tryAnotherSearch : t.createFirst}</span>{!searchQuery && <button className="button primary" type="button" onClick={() => void onCreateTask()}><Icon name="plus" size={14} />{t.newTask}</button>}</div>}
+                {projectTaskLoad.status === "ready" && filteredProjectTasks.length === 0 && <div className="empty-sidebar"><strong>{searchQuery ? t.noSessionMatches : t.noSessions}</strong><span>{searchQuery ? t.tryAnotherSearch : t.createFirst}</span>{!searchQuery && <button className="button primary" type="button" onClick={() => void onCreateTaskForProject(project)}><Icon name="plus" size={14} />{t.newTask}</button>}</div>}
               </div></div>}
             </section>;
           })}

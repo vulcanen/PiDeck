@@ -11,6 +11,8 @@ export type ActivityStep = {
   result?: unknown;
   startedAt: number;
   endedAt?: number;
+  durationMs?: number;
+  timing?: "measured" | "unknown";
   isError?: boolean;
 };
 export type TaskUiState = {
@@ -23,7 +25,15 @@ export type TaskUiState = {
   toolName?: string;
   approval?: { requestId: string; toolName: string; args?: unknown };
 };
-export type AuthPromptState = { requestId: string; message: string; placeholder: string; value: string };
+export type AuthPromptOption = { id: string; label: string; description?: string };
+export type AuthPromptState = {
+  requestId: string;
+  type: "text" | "secret" | "select" | "manual_code";
+  message: string;
+  placeholder: string;
+  value: string;
+  options?: AuthPromptOption[];
+};
 export type ImageAttachment = { id: string; data: string; mimeType: string; name: string };
 export type SentImageMessage = { text: string; images: ImageAttachment[] };
 export type PreviewImage = { src: string; alt: string };

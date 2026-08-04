@@ -11,6 +11,7 @@ export type PiSdk = {
   DefaultResourceLoader?: new (options: { cwd: string; agentDir: string; additionalExtensionPaths?: string[] }) => any;
   DefaultPackageManager?: new (options: { cwd: string; agentDir: string; settingsManager: any }) => any;
   SettingsManager?: { create(cwd: string, agentDir?: string): any };
+  ProjectTrustStore?: new (agentDir: string) => any;
   getAgentDir?: () => string;
   parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
   SessionManager: {
@@ -19,9 +20,10 @@ export type PiSdk = {
     create(cwd: string): {
       appendSessionInfo(name: string): void;
       getSessionId(): string;
+      getSessionDir?: () => string;
       getSessionFile?: () => string | undefined;
     };
-    open(path: string): any;
+    open(path: string, sessionDir?: string, cwdOverride?: string): any;
     inMemory(cwd?: string): any;
   };
   createAgentSession(options: { cwd: string; sessionManager: any; modelRuntime: any; resourceLoader?: any }): Promise<{ session: any }>;
@@ -94,13 +96,21 @@ export function getModelRuntime(): Promise<any> {
 }
 
 export function modelSummary(provider: any, model: any, authConfigured: boolean) {
+  const thinkingLevelMap = model.thinkingLevelMap as Record<string, string | null | undefined> | undefined;
+  const supportedThinkingLevels = ["off", "minimal", "low", "medium", "high"];
+  // Pi supports the extended levels only when the model explicitly maps
+  // them. Keep this in lockstep with getSupportedThinkingLevels().
+  if (thinkingLevelMap?.xhigh !== undefined) supportedThinkingLevels.push("xhigh");
+  if (thinkingLevelMap?.max !== undefined) supportedThinkingLevels.push("max");
   return {
     id: model.id,
     providerId: provider.id,
     providerName: provider.name ?? provider.id,
     name: model.name ?? model.id,
     reasoning: Boolean(model.reasoning),
-    thinkingLevels: model.reasoning ? ["off", "minimal", "low", "medium", "high", "xhigh"] : ["off"],
+    thinkingLevels: model.reasoning
+      ? supportedThinkingLevels
+      : ["off"],
     authConfigured,
   };
 }
@@ -109,7 +119,7 @@ export function sessionModelLabel(sessionInfo: any, sdk: PiSdk): string {
   try {
     const manager = sdk.SessionManager.open(sessionInfo.path);
     const model = manager.buildSessionContext?.().model;
-    if (model?.provider && model?.id) return `${model.provider}/${model.id}`;
+    if (model?.provider && (model?.modelId || model?.id)) return `${model.provider}/${model.modelId ?? model.id}`;
   } catch {
     // Older or partially written session files may not have a model entry.
   }

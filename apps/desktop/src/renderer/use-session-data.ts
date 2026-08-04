@@ -1,14 +1,19 @@
 import { useEffect } from "react";
 import type { ContextUsage, ModelSummary, SessionCapabilities } from "@pideck/contracts";
-import type { MessageLoad } from "./types";
+import { type Language } from "@pideck/i18n";
+import { createDefaultTaskUiState } from "./message-utils";
+import type { MessageLoad, TaskUiState } from "./types";
+import { restoreCompletedActivity } from "./timeline-utils";
 
 export interface SessionDataOptions {
   projectCwd: string;
   taskId?: string;
+  language: Language;
   models: ModelSummary[];
   messageReload: number;
   setMessageLoads: React.Dispatch<React.SetStateAction<Record<string, MessageLoad>>>;
   setMessagesByTask: React.Dispatch<React.SetStateAction<Record<string, any[]>>>;
+  setTaskUi: React.Dispatch<React.SetStateAction<Record<string, TaskUiState>>>;
   setCapabilities: React.Dispatch<React.SetStateAction<SessionCapabilities | null>>;
   setActiveModel: React.Dispatch<React.SetStateAction<ModelSummary | null>>;
   setThinkingLevel: (level: string) => void;
@@ -18,7 +23,7 @@ export interface SessionDataOptions {
 }
 
 export function useSessionData({
-  projectCwd, taskId, models, messageReload, setMessageLoads, setMessagesByTask,
+  projectCwd, taskId, language, models, messageReload, setMessageLoads, setMessagesByTask, setTaskUi,
   setCapabilities, setActiveModel, setThinkingLevel, setThinkingLevels, setContextUsage, showNotice,
 }: SessionDataOptions) {
   useEffect(() => {
@@ -40,7 +45,8 @@ export function useSessionData({
     void Promise.allSettled([
       window.pideck.sessions.messages(taskId, projectCwd),
       window.pideck.sessions.capabilities(taskId, projectCwd),
-    ]).then(([messagesResult, capabilitiesResult]) => {
+      window.pideck.sessions.runMetadata(taskId, projectCwd),
+    ]).then(([messagesResult, capabilitiesResult, runMetadataResult]) => {
       if (cancelled) return;
       if (messagesResult.status === "fulfilled") {
         setMessagesByTask((current) => ({ ...current, [taskId]: messagesResult.value as any[] }));
@@ -62,7 +68,17 @@ export function useSessionData({
         setThinkingLevel(fallback?.thinkingLevels[0] ?? "off");
         showNotice(`Pi capabilities: ${capabilitiesResult.reason instanceof Error ? capabilitiesResult.reason.message : String(capabilitiesResult.reason)}`);
       }
+      if (runMetadataResult.status === "fulfilled") {
+        const completedActivity = messagesResult.status === "fulfilled"
+          ? restoreCompletedActivity(messagesResult.value as any[], language, runMetadataResult.value)
+          : restoreCompletedActivity([], language, runMetadataResult.value);
+        setTaskUi((current) => {
+          const previous = current[taskId] ?? createDefaultTaskUiState();
+          if (previous.isSending) return current;
+          return { ...current, [taskId]: { ...previous, activity: [], completedActivity } };
+        });
+      }
     });
     return () => { cancelled = true; };
-  }, [projectCwd, taskId, models, messageReload]);
+  }, [language, projectCwd, taskId, models, messageReload, setTaskUi]);
 }

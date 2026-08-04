@@ -8,7 +8,6 @@ export interface FallbackCommand {
  * command list always comes from Pi's built-in slash command catalog.
  */
 export const fallbackSlashCommands: FallbackCommand[] = [
-  { name: "settings", description: "Open settings menu" },
   { name: "model", description: "Select model" },
   { name: "scoped-models", description: "Configure model cycling" },
   { name: "export", description: "Export the current session" },

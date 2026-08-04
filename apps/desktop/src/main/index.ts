@@ -260,7 +260,7 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
       return;
     }
     const id = randomUUID();
-    const timeoutMs = command === "providers.login"
+    const timeoutMs = command === "providers.login" || command === "sessions.share"
       ? 15 * 60_000
       : command === "agent.prompt"
         ? 10 * 60_000
@@ -282,6 +282,7 @@ function registerIpcHandlers() {
     buildApplicationMenu(currentLanguage);
     return currentLanguage;
   });
+  ipcMain.handle("app:quit", () => { app.quit(); });
   ipcMain.handle("runtime:status", () => hostStatus);
   ipcMain.handle("projects:list", async (_event, preferredCwd?: string) => {
     const registry = readProjectRegistry();
@@ -313,13 +314,33 @@ function registerIpcHandlers() {
     hideProjectCwd(cwd);
     return null;
   });
+  ipcMain.handle("projects:set-trust", (_event, cwd: string, trusted: boolean) => requestHost("projects.setTrust", { cwd, trusted }));
   ipcMain.handle("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: projectId }));
   ipcMain.handle("sessions:create", (_event, input?: { cwd?: string; name?: string }) => requestHost("sessions.create", input));
   ipcMain.handle("sessions:delete", (_event, taskId: string, cwd?: string) => requestHost("sessions.delete", { taskId, cwd }));
   ipcMain.handle("sessions:messages", (_event, taskId: string, cwd?: string) => requestHost("sessions.messages", { taskId, cwd }));
+  ipcMain.handle("sessions:run-metadata", (_event, taskId: string, cwd?: string) => requestHost("sessions.runMetadata", { taskId, cwd }));
   ipcMain.handle("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd }));
   ipcMain.handle("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd }));
   ipcMain.handle("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd }));
+  ipcMain.handle("sessions:import", async (_event, taskId?: string, inputPath?: string, cwd?: string) => {
+    let selectedPath = inputPath?.trim();
+    if (!selectedPath) {
+      if (!hostWindow) return null;
+      const result = await dialog.showOpenDialog(hostWindow, {
+        title: currentLanguage === "zh" ? "导入 Pi 会话" : "Import Pi session",
+        properties: ["openFile"],
+        filters: [{ name: "Pi JSONL", extensions: ["jsonl"] }, { name: "All files", extensions: ["*"] }],
+      });
+      if (result.canceled) return null;
+      selectedPath = result.filePaths[0];
+    }
+    return requestHost("sessions.import", { taskId, inputPath: selectedPath, cwd });
+  });
+  ipcMain.handle("sessions:rename", (_event, taskId: string, name: string, cwd?: string) => requestHost("sessions.rename", { taskId, name, cwd }));
+  ipcMain.handle("sessions:stats", (_event, taskId: string, cwd?: string) => requestHost("sessions.stats", { taskId, cwd }));
+  ipcMain.handle("sessions:share", (_event, taskId: string, cwd?: string) => requestHost("sessions.share", { taskId, cwd }));
+  ipcMain.handle("sessions:changelog", () => requestHost("app.changelog"));
   ipcMain.handle("models:list", () => requestHost("models.list"));
   ipcMain.handle("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd }));
   ipcMain.handle("terminal:execute", (_event, taskId: string, command: string, cwd?: string) => requestHost("terminal.execute", { taskId, command, cwd: cwd ?? process.cwd() }));
@@ -327,7 +348,7 @@ function registerIpcHandlers() {
   ipcMain.handle("providers:login", (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => requestHost("providers.login", { providerId, method, secret }));
   ipcMain.handle("providers:set-api-key", (_event, providerId: string, apiKey: string) => requestHost("providers.setApiKey", { providerId, apiKey }));
   ipcMain.handle("providers:logout", (_event, providerId: string) => requestHost("providers.logout", { providerId }));
-  ipcMain.handle("providers:auth-response", (_event, requestId: string, value: string) => requestHost("providers.auth-response", { requestId, value }));
+  ipcMain.handle("providers:auth-response", (_event, requestId: string, value: string, cancelled?: boolean) => requestHost("providers.auth-response", { requestId, value, cancelled }));
   ipcMain.handle("providers:open-auth-url", async (_event, url: string) => {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) auth URLs can be opened");
@@ -337,6 +358,7 @@ function registerIpcHandlers() {
   ipcMain.handle("agent:abort", (_event, taskId: string) => requestHost("agent.abort", { taskId }));
   ipcMain.handle("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("agent:set-scoped-models", (_event, taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => requestHost("agent.setScopedModels", { taskId, modelIds, persist, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("agent:queue", (_event, taskId: string, cwd?: string) => requestHost("agent.queue", { taskId, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("agent:set-queue-modes", (_event, taskId: string, modes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" }, cwd?: string) => requestHost("agent.setQueueModes", { taskId, cwd: cwd ?? process.cwd(), ...modes }));
   ipcMain.handle("agent:clear-queue", (_event, taskId: string, cwd?: string) => requestHost("agent.clearQueue", { taskId, cwd: cwd ?? process.cwd() }));

@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   mergeMessageSnapshot,
@@ -7,6 +9,7 @@ const {
 } = require("../dist/renderer/message-utils.js");
 const {
   buildMessageTimelineItems,
+  restoreCompletedActivity,
 } = require("../dist/renderer/timeline-utils.js");
 const {
   appendTerminalOutput,
@@ -29,6 +32,184 @@ function describeTimeline(items) {
       ? `live:${item.text}`
     : `message:${item.message.id}`);
 }
+
+test("empty project task creation keeps the target project cwd", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/app-sidebar.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /onClick=\{\(\) => void onCreateTaskForProject\(project\)\}/);
+});
+
+test("startup restores sessions for every persisted expanded project", () => {
+  const controller = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
+    "utf8",
+  );
+
+  assert.match(controller, /const restoredExpandedCwds = new Set\(expandedProjectCwds\)/);
+  assert.match(controller, /const restoredExpandedProjects = discoveredProjects\.filter\(\(project\) => project\.cwd !== selectedProject\.cwd && restoredExpandedCwds\.has\(project\.cwd\)\)/);
+  assert.match(controller, /await Promise\.all\(restoredExpandedProjects\.map\(\(project\) => loadProjectSessions\(project\)\)\)/);
+});
+
+test("execution durations use durable Pi session metadata", () => {
+  const host = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
+    "utf8",
+  );
+  const contracts = fs.readFileSync(
+    path.join(__dirname, "../../../packages/contracts/src/index.ts"),
+    "utf8",
+  );
+  const sessionData = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-session-data.ts"),
+    "utf8",
+  );
+  const timeline = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/timeline-utils.ts"),
+    "utf8",
+  );
+  const runtimeEvents = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-runtime-events.ts"),
+    "utf8",
+  );
+  const uiComponents = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui-components.tsx"),
+    "utf8",
+  );
+
+  assert.match(host, /appendCustomEntry/);
+  assert.match(host, /agent_start/);
+  assert.match(host, /agent_settled/);
+  assert.match(host, /queueDelivery === "followUp"/);
+  assert.match(host, /finishExecutionGroup/);
+  assert.match(host, /case "sessions\.runMetadata"/);
+  assert.match(contracts, /export interface SessionRunRecord/);
+  assert.match(contracts, /runMetadata\(taskId: string/);
+  assert.match(sessionData, /window\.pideck\.sessions\.runMetadata\(taskId, projectCwd\)/);
+  assert.match(sessionData, /restoreCompletedActivity/);
+  assert.match(timeline, /durationMs: record\.durationMs/);
+  assert.match(runtimeEvents, /applyPersistedRunDurations/);
+  assert.match(runtimeEvents, /sessions\.runMetadata\(taskId, projectCwd\)/);
+  assert.match(uiComponents, /persistedDurationMs/);
+  assert.match(timeline, /persisted:\$\{record\.id\}/);
+});
+
+test("name command opens an editable rename dialog without an argument", () => {
+  const controller = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
+    "utf8",
+  );
+  const components = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui-components.tsx"),
+    "utf8",
+  );
+
+  assert.match(controller, /command === "name"\) \{ if \(argument\) await renameSession\(argument\); else if \(activeTask\) setRenameOpen\(true\)/);
+  assert.match(components, /function RenameSessionDialog/);
+});
+
+test("conversation panes survive project switches and scope scroll snapshots", () => {
+  const conversation = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/app-conversation.tsx"),
+    "utf8",
+  );
+  const components = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui-components.tsx"),
+    "utf8",
+  );
+
+  assert.match(conversation, /cachedPaneKeys/);
+  assert.match(conversation, /conversationPaneKey\(task\.projectId, task\.id\)/);
+  assert.doesNotMatch(conversation, /<ConversationPaneDeck\s+key=\{projectCwd/);
+  assert.match(components, /scrollPositionsRef\.current\[scrollKey\]/);
+});
+
+test("package enable/disable edits Pi autoload state instead of re-adding sources", () => {
+  const host = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
+    "utf8",
+  );
+  const components = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui-components.tsx"),
+    "utf8",
+  );
+
+  assert.match(host, /function configurePackageSource/);
+  assert.match(host, /manager\.listConfiguredPackages\?\.\(\)/);
+  assert.match(host, /disabled: item\.disabled === true \|\| item\.filtered === true/);
+  assert.match(host, /packageConfigRevision/);
+  assert.doesNotMatch(host, /function listConfiguredPackages/);
+  assert.match(host, /autoload: false/);
+  assert.doesNotMatch(host, /payload\.enabled\s*\?\s*manager\.addSourceToSettings/);
+  assert.match(components, /item\.disabled/);
+  assert.match(components, /onPackagesChanged/);
+});
+
+test("slash suggestion symbols keep their fixed visual width", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/styles.css"),
+    "utf8",
+  );
+
+  assert.match(styles, /\.suggestion-symbol\s*\{[^}]*flex:\s*0 0 22px/);
+});
+
+test("/settings is not exposed as a desktop command", () => {
+  const controller = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
+    "utf8",
+  );
+  const capabilities = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/pi-capabilities.ts"),
+    "utf8",
+  );
+  const i18n = fs.readFileSync(
+    path.join(__dirname, "../../../packages/i18n/src/index.ts"),
+    "utf8",
+  );
+
+  assert.match(controller, /new Set\(\["fork", "clone", "tree", "settings"\]\)/);
+  assert.doesNotMatch(controller, /command === "settings"/);
+  assert.match(controller, /const removedUiCommands = new Set\(\["settings"\]\)/);
+  assert.doesNotMatch(capabilities, /name: "settings"/);
+  assert.doesNotMatch(i18n, /^\s*settings:\s*\{/m);
+});
+
+test("Pi model metadata follows the current SDK shape", () => {
+  const adapter = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-adapter/src/index.ts"),
+    "utf8",
+  );
+
+  assert.match(adapter, /model\.thinkingLevelMap/);
+  assert.match(adapter, /model\?\.modelId \|\| model\?\.id/);
+  assert.doesNotMatch(adapter, /model\?\.provider && model\?\.id\) return/);
+});
+
+test("agent_end messages and auth cancellation stay on the bridge", () => {
+  const host = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
+    "utf8",
+  );
+  const contracts = fs.readFileSync(
+    path.join(__dirname, "../../../packages/contracts/src/index.ts"),
+    "utf8",
+  );
+  const runtimeEvents = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-runtime-events.ts"),
+    "utf8",
+  );
+
+  assert.match(host, /type: event\.type, willRetry: event\.willRetry, messages: jsonSafe\(event\.messages\)/);
+  assert.match(runtimeEvents, /Array\.isArray\(event\.messages\)/);
+  assert.match(host, /cancelled\?: boolean/);
+  assert.match(contracts, /resolveAuth\(requestId: string, value: string, cancelled\?: boolean\)/);
+  assert.match(host, /waiter\.reject\(new Error\("Authentication cancelled"\)\)/);
+  assert.match(host, /await persistProviderApiKey\(runtime, payload\.providerId/);
+  assert.doesNotMatch(host, /void runtime\.setRuntimeApiKey/);
+});
 
 test("message identity remains stable when Pi omits message ids", () => {
   const value = {
@@ -109,7 +290,7 @@ test("steering messages stay inside one logical turn", () => {
   assert.deepEqual(items.filter((item) => item.type === "message").map((item) => item.message.id), ["u1", "a1", "u-steer", "a2"]);
 });
 
-test("historical turns rebuild a compact processed summary after restart", () => {
+test("historical turns without metadata do not invent a duration", () => {
   const items = buildMessageTimelineItems({
     messages: [
       message("u1", "user", "first", 1_000),
@@ -124,8 +305,34 @@ test("historical turns rebuild a compact processed summary after restart", () =>
 
   const summary = items.find((item) => item.type === "execution");
   assert.equal(Boolean(summary), true);
-  assert.equal(summary.steps[0].startedAt, 1_000);
-  assert.equal(summary.steps[0].endedAt, 4_500);
+  assert.equal(summary.steps[0].timing, "unknown");
+});
+
+test("session reload keeps Pi thinking and tool details while restoring duration", () => {
+  const groups = restoreCompletedActivity([
+    message("u1", "user", "inspect", 1_000),
+    {
+      id: "a1",
+      role: "assistant",
+      timestamp: 2_000,
+      content: [
+        { type: "thinking", thinking: "check the workspace" },
+        { type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } },
+        { type: "text", text: "done" },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "tool-1",
+      timestamp: 3_000,
+      content: [{ type: "text", text: "file contents" }],
+    },
+  ], "en", [{ id: "run-1", startedAt: 1_000, endedAt: 4_000, durationMs: 3_000 }]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0][0].detail, "check the workspace");
+  assert.equal(groups[0].find((step) => step.kind === "tool").result, "file contents");
+  assert.equal(groups[0][0].durationMs, 3_000);
 });
 
 test("the active final turn keeps a stable summary and response item", () => {

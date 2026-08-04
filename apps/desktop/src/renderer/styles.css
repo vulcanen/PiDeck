@@ -504,7 +504,7 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .suggestion-popover { right: 0; bottom: calc(100% + 9px); left: 0; display: grid; max-height: 300px; padding: 6px; }
 .suggestion-popover button { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 7px 8px; border-radius: 8px; background: transparent; text-align: left; }
 .suggestion-popover button:hover, .suggestion-popover button.selected { background: var(--surface-muted); }
-.suggestion-symbol { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font: 12px var(--font-mono); }
+.suggestion-symbol { display: grid; flex: 0 0 22px; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font: 12px var(--font-mono); }
 .suggestion-popover button > span:last-child { display: grid; gap: 2px; min-width: 0; }
 .suggestion-popover strong, .suggestion-popover small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggestion-popover strong { color: var(--text); font-size: 12px; }
@@ -563,6 +563,16 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .extension-ui-dialog p { margin: 0 0 10px; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 .extension-ui-options, .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .extension-ui-dialog textarea { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--ink); font: inherit; }
+.session-name-field { display: grid; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.session-name-field input { width: 100%; box-sizing: border-box; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--ink); }
+.session-name-field input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.resume-list, .model-scope-list { display: grid; gap: 7px; max-height: 42vh; overflow: auto; margin: 8px 0 14px; }
+.resume-row { display: grid; gap: 3px; width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); color: var(--ink); text-align: left; cursor: pointer; }
+.resume-row:hover, .resume-row.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised)); }
+.resume-row small, .model-scope-row small { color: var(--muted); font-size: 11px; }
+.model-scope-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.model-scope-row span { display: grid; gap: 2px; }
+.model-scope-persist { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; color: var(--muted); font-size: 12px; }
 .tree-list { min-height: 0; overflow: auto; padding: 12px 16px 20px; }
 .tree-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; border-bottom: 1px solid var(--line); }
 .tree-entry-copy { min-width: 0; display: grid; gap: 3px; }
@@ -655,6 +665,9 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .auth-prompt label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .auth-prompt input { height: 38px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--text); }
 .auth-prompt > div { display: flex; justify-content: flex-end; gap: 8px; }
+.auth-prompt > .auth-prompt-options { display: grid; justify-content: stretch; gap: 8px; }
+.auth-prompt-option { display: grid; justify-items: start; gap: 3px; width: 100%; text-align: left; }
+.auth-prompt-option small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 .provider-logout-prompt { justify-items: start; }
 .provider-logout-prompt h3 { margin-top: 2px; }
 .provider-logout-prompt > div { width: 100%; margin-top: 5px; }

@@ -11,6 +11,7 @@
 | 会话列表与切换 | 展开任意项目后按最近更新时间倒序显示会话；只有单击具体会话才切换中央工作区 | `SessionManager.list(cwd)` / `updatedAt` |
 | 新建会话 | New task；展开无会话项目时的“新建任务”按钮；空状态按钮 | `SessionManager.create(cwd)` |
 | 会话消息 | 中央对话线程 | `AgentSession.messages`；按 Pi `parseSkillBlock()` 语义将 Skill 引用与用户原文分层展示 |
+| 执行耗时恢复 | “已处理”执行摘要 | PiHost 在 `agent_start`、Follow-up 分组边界和 `agent_settled` 记录 execution group，通过 `SessionManager.appendCustomEntry("pideck.execution-run", ...)` 将精确起止时间写入 Pi Session；Steering 仍合并为同一组，`sessions.runMetadata` 在重启后恢复，旧会话不伪造耗时 |
 | 会话命名 | 会话列表与对话标题 | 从首条用户意图移除 Skill/命令/资源前缀后生成短标题，并通过 `AgentSession.setSessionName()` 持久化 |
 | 会话删除 | 会话更多菜单 | `sessions.delete` |
 | 会话位置与长会话 | 中央虚拟化对话线程 | `@tanstack/react-virtual`；每个 Session 缓存 pane、DOM `scrollTop`、follow 状态和测量快照；首次打开定位最新消息，切换恢复保存位置 |
@@ -20,7 +21,7 @@
 | 思考等级 | Composer Thinking 菜单 | `AgentSession.getAvailableThinkingLevels()` |
 | Pi slash command catalog | 行首已知 `/` 前缀建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
 | `@file` 提示 | Composer `@` | `workspace.snapshot` 返回的当前工作区文件快照 |
-| Agent 流式事件 | 中央线程 | `agent_start`、`message_update`、`tool_execution_*` 等 |
+| Agent 流式事件 | 中央线程 | `agent_start`、`agent_end.messages`、`agent_settled`、`message_update`、`tool_execution_*` 等 |
 | Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`；队列新增、插入和处理在 follow 状态下自动跟随 |
 | 工具审批 | 中央审批卡 | 当前 PiHost `beforeToolCall` 适配 |
 | 工具过程 | 可折叠过程块 | Tool Result、工具名称、成功/失败状态 |
@@ -39,6 +40,10 @@
 - 只有展示 catalog、但没有对应 Bridge 的命令不能伪装成已执行。
 - `/skill:name` 由 Pi `AgentSession.prompt()` 负责展开；PiDeck 按 Pi TUI 的 `parseSkillBlock()` 规则仅显示紧凑 Skill 引用和用户实际输入，不把注入的 Skill 正文重复显示为用户消息。
 - Extension command 的权威来源是当前 Pi `ResourceLoader`，不是静态 fallback。
+
+当前已接入的桌面命令包括 `/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。这些命令分别通过 PiHost、Electron 系统能力或已有会话列表完成桌面映射；`/share` 仍要求本机安装并登录 `gh` CLI。
+
+`/fork`、`/clone` 与 `/tree` 暂不在 Composer 建议和命令面板中显示，并列入待支持列表。它们需要把 Pi 的 Session Tree 分支导航、会话替换和消息时间线恢复完整映射到 PiDeck，当前手动输入会提示待支持，不会伪装成已执行。
 
 ## 权限与审批边界
 

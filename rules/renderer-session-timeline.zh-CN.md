@@ -8,8 +8,8 @@
 - Pi `AgentSession.messages` / Session JSONL 是消息事实来源；Renderer 只保存可序列化 DTO，不复制一套消息数据库。
 - Pi 持久化的是原始 `thinking`、`toolCall`、`toolResult` 和正式消息内容，不保证存在“已处理 xx 秒”这样的现成 UI 摘要。
 - `TaskUiState.activity`、`streamText` 和 `completedActivity` 是当前 Renderer 生命周期的运行时状态，重启后会丢失。
-- 历史执行摘要必须优先从 Pi 保存的 thinking/tool 内容重建；当 Provider 只保存空 thinking block 或正式文本时，才使用用户/助手时间戳生成轻量摘要，并明确这是展示层推断值。
-- 不要把 Renderer 的活动摘要写回 Pi Session，也不要为了恢复 UI 位置改动 Pi Session 文件格式。
+- 历史执行摘要的步骤内容优先从 Pi 保存的 thinking/tool 内容重建；精确耗时只读取 PiHost 通过 `SessionManager.appendCustomEntry()` 写入的 `pideck.execution-run` 元数据，不从用户/助手消息时间戳推断。
+- 不要把 Renderer 的活动详情写回 Pi Session，也不要为了恢复 UI 位置改动 Pi Session 文件格式。允许 PiHost 使用 Pi 官方 custom entry API 保存最小化、可版本化的运行起止元数据；该数据不得进入 LLM context。
 
 ## 2. Renderer 结构
 
@@ -54,6 +54,6 @@
 - [ ] 用户上滑后切换 Session 再切回，位置和虚拟测量缓存保持不变。
 - [ ] 思考摘要、流式回复、正式回复不会在完成瞬间抖动或重排整个列表。
 - [ ] 排队新增、插入、处理和流式增长在底部时自动跟随；上滑后不抢位置。
-- [ ] 重启后历史回合仍能显示 Pi 原始步骤或时间戳推断的“已处理”摘要。
+- [ ] 重启后有 `pideck.execution-run` 元数据的历史回合显示与运行时一致的精确耗时；旧会话不伪造耗时。
 - [ ] 消息日期只在 hover/focus 显示，且没有旧 Session 残留。
 - [ ] 运行 `npm run typecheck`、`npm run test:renderer`、`npm run build` 和 `git diff --check`。

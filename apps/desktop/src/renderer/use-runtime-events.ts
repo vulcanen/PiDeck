@@ -1,9 +1,21 @@
 import { useEffect } from "react";
-import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent } from "@pideck/contracts";
+import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionRunRecord } from "@pideck/contracts";
 import type { TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import type { ActivityStep, TaskUiState } from "./types";
 import { createDefaultTaskUiState, mergeMessageSnapshot, messageIdentity, sortTasksByUpdatedAt } from "./message-utils";
+
+function applyPersistedRunDurations(groups: ActivityStep[][], records: SessionRunRecord[]): ActivityStep[][] {
+  const groupOffset = Math.max(0, groups.length - records.length);
+  const recordOffset = Math.max(0, records.length - groups.length);
+  return groups.map((steps, groupIndex) => {
+    const record = records[groupIndex - groupOffset + recordOffset];
+    if (!record || steps.length === 0) return steps;
+    return steps.map((step, stepIndex) => stepIndex === 0
+      ? { ...step, durationMs: record.durationMs, timing: "measured" }
+      : step);
+  });
+}
 
 export interface RuntimeEventsOptions {
   projectCwd: string;
@@ -124,13 +136,27 @@ export function useRuntimeEvents({
     else if (event?.type === "tool_execution_end") { updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step)); patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined }); void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined); }
     else if (event?.type === "session_info_changed" && typeof event.name === "string" && event.name.trim()) { const title = event.name.trim(); updateTaskLists((current) => current.map((task) => task.id === taskId ? { ...task, title } : task)); setActiveTask((current) => current?.id === taskId ? { ...current, title } : current); }
     else if (event?.type === "message.snapshot") { discardStreamDeltas(taskId); setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], Array.isArray(event.messages) ? event.messages : [], true) })); setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } })); patchTaskUi(taskId, { streamText: "" }); }
-    else if (event?.type === "agent_end") { discardStreamDeltas(taskId); updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt: Date.now() })); patchTaskUi(taskId, { workingPhase: "thinking", streamText: "", toolName: undefined }); }
+    else if (event?.type === "agent_end") {
+      discardStreamDeltas(taskId);
+      if (Array.isArray(event.messages) && event.messages.length > 0) {
+        setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], event.messages) }));
+        setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
+      }
+      updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt: Date.now() }));
+      patchTaskUi(taskId, { workingPhase: "thinking", streamText: "", toolName: undefined });
+    }
     else if (event?.type === "agent_settled") {
       discardStreamDeltas(taskId);
       const endedAt = Date.now();
       updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt }));
       setTaskUi((current) => { const previous = current[taskId] ?? createDefaultTaskUiState(); const completedActivity = previous.activity.length > 0 ? [...previous.completedActivity, previous.activity.map((step) => step.endedAt ? step : { ...step, endedAt })] : previous.completedActivity; return { ...current, [taskId]: { ...previous, isSending: false, isCompacting: false, workingPhase: null, streamText: "", toolName: undefined, activity: [], completedActivity } }; });
       void window.pideck.sessions.messages(taskId, projectCwd).then((next) => { setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], next as any[], true) })); setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } })); }).catch((error) => setMessageLoads((current) => ({ ...current, [taskId]: { status: "error", error: error instanceof Error ? error.message : String(error) } })));
+      // Read back the record PiHost just appended so the completed view and a
+      // later restart use the same authoritative duration value.
+      void window.pideck.sessions.runMetadata(taskId, projectCwd).then((records) => setTaskUi((current) => {
+        const previous = current[taskId] ?? createDefaultTaskUiState();
+        return { ...current, [taskId]: { ...previous, completedActivity: applyPersistedRunDurations(previous.completedActivity, records) } };
+      })).catch(() => undefined);
       void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
       void refreshWorkspace();
       updateTaskLists((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "idle", updatedAt: new Date().toISOString() } : task)));

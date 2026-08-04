@@ -1,12 +1,13 @@
-import type { PermissionMode, PiHostRequest, PiHostResponse } from "@pideck/contracts";
+import type { PermissionMode, PiHostRequest, PiHostResponse, SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel, type PiSdk } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { pathToFileURL } from "node:url";
 
 const parentPort = (process as typeof process & {
@@ -20,12 +21,20 @@ const sessionFiles = new Map<string, string>();
 const titledSessions = new Set<string>();
 const agentSessions = new Map<string, any>();
 const agentSessionPromises = new Map<string, Promise<any>>();
+const agentSessionPackageRevisions = new Map<string, number>();
+const executionGroupStarts = new Map<string, number>();
+const SESSION_RUN_METADATA_TYPE = "pideck.execution-run";
 // `session.isStreaming` is updated by Pi asynchronously. Reserve a task as
 // soon as a direct prompt is accepted so a second prompt arriving in that
 // small window is queued instead of starting a competing run.
 const agentRunReservations = new Set<string>();
 const capabilitySessions = new Map<string, any>();
-const authWaiters = new Map<string, (value: string) => void>();
+let packageConfigRevision = 0;
+type AuthWaiter = {
+  resolve: (value: string) => void;
+  reject: (reason?: unknown) => void;
+};
+const authWaiters = new Map<string, AuthWaiter>();
 const agentSessionRevisions = new Map<string, number>();
 const extensionUiWaiters = new Map<string, (value: string | boolean | undefined) => void>();
 function normalizePackageInstallSource(source: string): string {
@@ -73,6 +82,36 @@ function emitAuth(requestId: string, event: unknown) {
   process.send?.({ type: "auth.event", requestId, event });
 }
 
+/**
+ * Adapt Pi's AuthInteraction to the renderer bridge. API-key login can supply
+ * the value already entered in the settings form for the first prompt; any
+ * additional provider-specific fields still use the normal interactive prompt.
+ */
+function createAuthInteraction(requestId: string, initialSecret?: string) {
+  let initialSecretAvailable = Boolean(initialSecret);
+  let promptSequence = 0;
+  return {
+    prompt: (prompt: any) => {
+      if (initialSecretAvailable && prompt?.type !== "select") {
+        initialSecretAvailable = false;
+        return Promise.resolve(initialSecret as string);
+      }
+      const promptId = `${requestId}:${++promptSequence}`;
+      emitAuth(promptId, { type: "prompt", prompt: jsonSafe(prompt) });
+      return new Promise<string>((resolve, reject) => authWaiters.set(promptId, { resolve, reject }));
+    },
+    notify: (event: unknown) => emitAuth(requestId, { type: "notify", event: jsonSafe(event) }),
+  };
+}
+
+async function persistProviderApiKey(runtime: any, providerId: string, apiKey: string, requestId: string): Promise<void> {
+  const provider = runtime.getProvider?.(providerId);
+  if (!provider?.auth?.apiKey?.login) throw new Error(`${provider?.name ?? providerId} does not support API-key login`);
+  // ModelRuntime.login persists the returned credential through Pi's
+  // credential store. setRuntimeApiKey is intentionally runtime-only.
+  await runtime.login(providerId, "api-key", createAuthInteraction(requestId, apiKey));
+}
+
 function emitApproval(requestId: string, taskId: string, toolName: string, args: unknown) {
   const message = { type: "approval.requested", requestId, taskId, event: { toolName, args: jsonSafe(args) } };
   parentPort?.postMessage(message);
@@ -92,6 +131,44 @@ function jsonSafe<T>(value: T): T {
   } catch {
     return String(value) as T;
   }
+}
+
+function persistSessionRun(session: any, taskId: string, startedAt: number, endedAt: number): void {
+  const appendEntry = session.sessionManager?.appendCustomEntry;
+  if (typeof appendEntry !== "function") return;
+  const record: SessionRunRecord = {
+    id: `${taskId}:${startedAt}`,
+    startedAt,
+    endedAt,
+    durationMs: Math.max(0, endedAt - startedAt),
+  };
+  try {
+    appendEntry.call(session.sessionManager, SESSION_RUN_METADATA_TYPE, record);
+  } catch {
+    // A non-persistent/in-memory Pi session should not prevent the runtime
+    // event from reaching the renderer.
+  }
+}
+
+function finishExecutionGroup(session: any, taskId: string, endedAt: number): void {
+  const startedAt = executionGroupStarts.get(taskId);
+  executionGroupStarts.delete(taskId);
+  if (startedAt !== undefined) persistSessionRun(session, taskId, startedAt, endedAt);
+}
+
+function sessionRunMetadata(session: any): SessionRunRecord[] {
+  const entries = session.sessionManager?.getBranch?.() ?? session.sessionManager?.getEntries?.() ?? [];
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry: any) => entry?.type === "custom" && entry.customType === SESSION_RUN_METADATA_TYPE)
+    .map((entry: any) => entry.data)
+    .filter((record: any): record is SessionRunRecord => Boolean(
+      record
+      && typeof record.id === "string"
+      && Number.isFinite(record.startedAt)
+      && Number.isFinite(record.endedAt)
+      && Number.isFinite(record.durationMs),
+    ));
 }
 
 type NormalizedPromptImage = { type: "image"; data: string; mimeType: string };
@@ -265,12 +342,60 @@ async function withQueueMutationLock<T>(taskId: string, operation: () => Promise
   }
 }
 
-async function createPackageManager(cwd: string): Promise<any> {
+async function createPackageManagerContext(cwd: string): Promise<{ manager: any; settingsManager: any }> {
   const sdk = await loadPiSdk();
   if (!sdk.DefaultPackageManager || !sdk.SettingsManager) throw new Error("Pi PackageManager is not available in this Pi runtime");
   const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
   const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
-  return new sdk.DefaultPackageManager({ cwd, agentDir, settingsManager });
+  return { manager: new sdk.DefaultPackageManager({ cwd, agentDir, settingsManager }), settingsManager };
+}
+
+async function createPackageManager(cwd: string): Promise<any> {
+  return (await createPackageManagerContext(cwd)).manager;
+}
+
+function packageSourceString(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "source" in value && typeof value.source === "string") return value.source;
+  return undefined;
+}
+
+function packageSettingsKey(local: boolean): "packages" {
+  // Kept as a named helper so the scope decision stays explicit at every
+  // callsite; Pi exposes separate getters/setters for the two scopes.
+  return "packages";
+}
+
+function configurePackageSource(settingsManager: any, source: string, enabled: boolean, local: boolean): boolean {
+  const settings = local ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings();
+  const packages = [...(settings[packageSettingsKey(local)] ?? [])];
+  const index = packages.findIndex((entry) => packageSourceString(entry) === source);
+  const current = index >= 0 ? packages[index] : undefined;
+
+  if (enabled) {
+    // Remove only the package-level autoload override. Keep resource filters
+    // intact; Pi's config TUI uses the same object-to-string cleanup rule.
+    if (typeof current === "string") return false;
+    if (index >= 0 && current && typeof current === "object") {
+      if (current.autoload !== false) return false;
+      const next = { ...current };
+      delete next.autoload;
+      const hasFilters = ["extensions", "skills", "prompts", "themes"].some((key) => next[key] !== undefined);
+      packages[index] = hasFilters ? next : next.source;
+    }
+    else packages.push(source);
+  } else {
+    // Disabling is an autoload override, not removal. Preserve any existing
+    // resource filters while forcing the package itself to stay unloaded.
+    if (index < 0) packages.push({ source, autoload: false });
+    else if (typeof current === "string") packages[index] = { source: current, autoload: false };
+    else if (current && typeof current === "object" && current.autoload !== false) packages[index] = { ...current, autoload: false };
+    else return false;
+  }
+
+  if (local) settingsManager.setProjectPackages(packages);
+  else settingsManager.setPackages(packages);
+  return true;
 }
 
 async function listWorkspaceFiles(cwd: string): Promise<Array<{ path: string; kind: "file" | "directory"; size?: number }>> {
@@ -334,6 +459,23 @@ async function listSlashCommands(session: any) {
   return { builtins: jsonSafe([...builtins, ...extensionCommands]), prompts: jsonSafe(prompts), skills: jsonSafe(skills) };
 }
 
+function firstUserText(manager: any): string {
+  for (const entry of manager.getEntries?.() ?? []) {
+    if (entry?.type === "message" && entry.message?.role === "user") {
+      const content = entry.message.content;
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) return content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n");
+    }
+  }
+  return "";
+}
+
+function changelogPath(): string {
+  const moduleDir = path.dirname(resolvePiModule());
+  const candidates = [path.join(moduleDir, "CHANGELOG.md"), path.join(moduleDir, "..", "CHANGELOG.md")];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
 function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "followUp"): unknown {
   if (event.type === "message_update") {
     const streamEvent = event.assistantMessageEvent ?? {};
@@ -374,8 +516,11 @@ function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "followUp"): 
       errorMessage: event.errorMessage,
     };
   }
-  if (event.type === "agent_end" || event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
-    return { type: event.type, willRetry: event.willRetry, message: jsonSafe(event.message) };
+  if (event.type === "agent_end") {
+    return { type: event.type, willRetry: event.willRetry, messages: jsonSafe(event.messages) };
+  }
+  if (event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
+    return { type: event.type, willRetry: event.willRetry };
   }
   return jsonSafe(event);
 }
@@ -384,7 +529,8 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   const existing = agentSessions.get(taskId);
   if (existing) {
     const sessionRevision = agentSessionRevisions.get(taskId);
-    if (sessionRevision === permissionEngine.revision || existing.isStreaming || agentRunReservations.has(taskId)) {
+    const sessionPackageRevision = agentSessionPackageRevisions.get(taskId);
+    if ((sessionRevision === permissionEngine.revision && sessionPackageRevision === packageConfigRevision) || existing.isStreaming || agentRunReservations.has(taskId)) {
       if (!existing.isStreaming) normalizeSessionImages(existing.sessionManager);
       return existing;
     }
@@ -393,6 +539,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     existing.dispose?.();
     agentSessions.delete(taskId);
     agentSessionRevisions.delete(taskId);
+    agentSessionPackageRevisions.delete(taskId);
     // Queue contents live only on AgentSession. Drop renderer-side queue
     // sidecars and delivery hints when the idle session is recreated.
     queuedPromptImages.delete(taskId);
@@ -447,8 +594,19 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       // message_start event, discard the hint so a later identical prompt
       // cannot inherit the wrong steering/follow-up classification.
       if (event.type === "agent_settled") queueDeliveryHints.delete(taskId);
+      if (event.type === "agent_start") executionGroupStarts.set(taskId, Date.now());
+      if (event.type === "agent_settled") {
+        finishExecutionGroup(session, taskId, Date.now());
+      }
       if (event.type === "message_start" && event.message?.role === "user") {
         const queueDelivery = consumeQueueDeliveryHint(taskId, queueMessageText(event.message));
+        if (queueDelivery === "followUp") {
+          const boundary = Date.now();
+          finishExecutionGroup(session, taskId, boundary);
+          executionGroupStarts.set(taskId, boundary);
+        } else if (!executionGroupStarts.has(taskId)) {
+          executionGroupStarts.set(taskId, Date.now());
+        }
         emit(taskId, normalizeAgentEvent(event, queueDelivery));
         return;
       }
@@ -466,6 +624,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     });
     agentSessions.set(taskId, session);
     agentSessionRevisions.set(taskId, creationRevision);
+    agentSessionPackageRevisions.set(taskId, packageConfigRevision);
     return session;
   })();
   agentSessionPromises.set(taskId, creation);
@@ -474,6 +633,11 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   } finally {
     agentSessionPromises.delete(taskId);
   }
+}
+
+function invalidatePackageSessions(): void {
+  packageConfigRevision += 1;
+  capabilitySessions.clear();
 }
 
 async function ensureCapabilitySession(cwd: string): Promise<any> {
@@ -495,6 +659,10 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "runtime.status":
         send({ id: request.id, ok: true, result: "connected" });
         return;
+      case "app.changelog": {
+        send({ id: request.id, ok: true, result: existsSync(changelogPath()) ? readFileSync(changelogPath(), "utf8") : "" });
+        return;
+      }
       case "projects.list": {
         const currentCwd = path.resolve(resolveWorkspaceCwd());
         const knownCwds = typeof request.payload === "object" && request.payload && "knownCwds" in request.payload && Array.isArray(request.payload.knownCwds)
@@ -551,6 +719,16 @@ async function handle(request: PiHostRequest): Promise<void> {
             .sort((a, b) => b.updatedAt - a.updatedAt)
             .map(({ updatedAt: _updatedAt, ...project }) => project),
         });
+        return;
+      }
+      case "projects.setTrust": {
+        const payload = request.payload as { cwd?: string; trusted?: boolean } | undefined;
+        if (!payload?.cwd || typeof payload.trusted !== "boolean") throw new Error("cwd and trusted are required");
+        const sdk = await loadPiSdk();
+        const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+        if (!sdk.ProjectTrustStore) throw new Error("Pi project trust is not available in this runtime");
+        new sdk.ProjectTrustStore(agentDir).set(payload.cwd, payload.trusted);
+        send({ id: request.id, ok: true, result: { cwd: payload.cwd, trusted: payload.trusted } });
         return;
       }
       case "sessions.list": {
@@ -644,6 +822,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         send({ id: request.id, ok: true, result: jsonSafe(manager?.getEntries?.() ?? []) });
         return;
       }
+      case "sessions.runMetadata": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        send({ id: request.id, ok: true, result: jsonSafe(sessionRunMetadata(session)) });
+        return;
+      }
       case "sessions.capabilities": {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         const cwd = payload?.cwd ?? resolveWorkspaceCwd();
@@ -654,7 +839,14 @@ async function handle(request: PiHostRequest): Promise<void> {
         const activeModel = session.model;
         const provider = activeModel ? runtime.getProvider(activeModel.provider) : undefined;
         const auth = provider ? runtime.getProviderAuthStatus(provider.id) : undefined;
-        const slash = await listSlashCommands(session);
+        // If a package changed while the task was streaming, keep the active
+        // AgentSession intact but read command/prompt/skill metadata from a
+        // fresh capability session so disabled package commands disappear
+        // immediately from the desktop suggestions.
+        const commandSession = payload?.taskId && agentSessionPackageRevisions.get(payload.taskId) !== packageConfigRevision
+          ? await ensureCapabilitySession(cwd)
+          : session;
+        const slash = await listSlashCommands(commandSession);
         send({
           id: request.id,
           ok: true,
@@ -665,6 +857,7 @@ async function handle(request: PiHostRequest): Promise<void> {
             slashCommands: slash.builtins,
             prompts: slash.prompts,
             skills: slash.skills,
+            scopedModels: Array.isArray(session.scopedModels) ? session.scopedModels.map((item: any) => `${item.model?.provider}/${item.model?.id}`).filter((value: string) => !value.includes("undefined")) : [],
             contextUsage: jsonSafe(session.getContextUsage?.()),
           },
         });
@@ -685,6 +878,75 @@ async function handle(request: PiHostRequest): Promise<void> {
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         const outputPath = payload.format === "html" ? await session.exportToHtml() : session.exportToJsonl();
         send({ id: request.id, ok: true, result: { path: outputPath } });
+        return;
+      }
+      case "sessions.import": {
+        const payload = request.payload as { taskId?: string; inputPath?: string; cwd?: string } | undefined;
+        if (!payload?.inputPath?.trim()) throw new Error("inputPath is required");
+        const inputPath = path.resolve(payload.inputPath.trim());
+        if (!existsSync(inputPath)) throw new Error(`Session file not found: ${inputPath}`);
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const sdk = await loadPiSdk();
+        const currentPath = payload.taskId ? sessionFiles.get(payload.taskId) : undefined;
+        const currentManager = payload.taskId ? sessionManagers.get(payload.taskId) : undefined;
+        const scratchManager = sdk.SessionManager.create(cwd);
+        const targetDir = currentManager?.getSessionDir?.() ?? (currentPath ? path.dirname(currentPath) : undefined) ?? scratchManager.getSessionDir?.() ?? path.join(cwd, ".pi", "sessions");
+        mkdirSync(targetDir, { recursive: true });
+        const destination = path.join(targetDir, `import-${Date.now()}-${path.basename(inputPath)}`);
+        copyFileSync(inputPath, destination);
+        const manager = sdk.SessionManager.open(destination, targetDir, cwd);
+        normalizeSessionImages(manager);
+        const sessionId = manager.getSessionId();
+        sessionManagers.set(sessionId, manager);
+        sessionFiles.set(sessionId, destination);
+        const titleSource = manager.getSessionName?.() || firstUserText(manager);
+        send({
+          id: request.id,
+          ok: true,
+          result: {
+            id: sessionId,
+            title: deriveSessionTitle(titleSource) || manager.getSessionName?.() || sessionId.slice(0, 8),
+            projectId: cwd,
+            state: "idle",
+            model: sessionModelLabel({ path: destination }, sdk),
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+      case "sessions.rename": {
+        const payload = request.payload as { taskId?: string; name?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || !payload.name?.trim()) throw new Error("taskId and name are required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        session.setSessionName(payload.name.trim());
+        const name = session.sessionManager?.getSessionName?.() ?? payload.name.trim();
+        emit(payload.taskId, { type: "session_info_changed", name });
+        send({ id: request.id, ok: true, result: name });
+        return;
+      }
+      case "sessions.stats": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        send({ id: request.id, ok: true, result: jsonSafe(session.getSessionStats()) });
+        return;
+      }
+      case "sessions.share": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        execFileSync("gh", ["auth", "status"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        const tempPath = path.join(os.tmpdir(), `pideck-session-${Date.now()}.html`);
+        try {
+          await session.exportToHtml(tempPath);
+          const gistUrl = execFileSync("gh", ["gist", "create", "--public=false", tempPath], { encoding: "utf8" }).trim();
+          const gistId = gistUrl.split("/").filter(Boolean).pop();
+          if (!gistId) throw new Error("Could not parse the gist URL returned by gh");
+          const viewerBase = process.env.PI_SHARE_VIEWER_URL ?? "https://pi.dev/session/";
+          send({ id: request.id, ok: true, result: { url: `${viewerBase}#${gistId}`, gistUrl } });
+        } finally {
+          try { unlinkSync(tempPath); } catch { /* Best effort cleanup. */ }
+        }
         return;
       }
       case "agent.prompt": {
@@ -747,11 +1009,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         titledSessions.delete(payload.taskId);
         sessionManagers.delete(payload.taskId);
         agentSessions.delete(payload.taskId);
+        agentSessionPackageRevisions.delete(payload.taskId);
         queuedPromptImages.delete(payload.taskId);
         queueDeliveryHints.delete(payload.taskId);
         queueMutationLocks.delete(payload.taskId);
         queueRebuilds.delete(payload.taskId);
         agentRunReservations.delete(payload.taskId);
+        executionGroupStarts.delete(payload.taskId);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -788,6 +1052,32 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!model) throw new Error(`Unknown model: ${payload.providerId}/${payload.modelId}`);
         await session.setModel(model);
         send({ id: request.id, ok: true, result: { providerId: model.provider, modelId: model.id, name: model.name } });
+        return;
+      }
+      case "agent.setScopedModels": {
+        const payload = request.payload as { taskId?: string; modelIds?: string[] | null; persist?: boolean; cwd?: string } | undefined;
+        if (!payload?.taskId || !Array.isArray(payload.modelIds) && payload.modelIds !== null) throw new Error("taskId and modelIds are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        const runtime = await getModelRuntime();
+        const ids = payload.modelIds ?? [];
+        const scoped = [];
+        for (const reference of ids) {
+          const separator = reference.indexOf("/");
+          if (separator <= 0 || separator === reference.length - 1) throw new Error(`Invalid model reference: ${reference}`);
+          const model = runtime.getModel(reference.slice(0, separator), reference.slice(separator + 1));
+          if (!model) throw new Error(`Unknown model: ${reference}`);
+          scoped.push({ model });
+        }
+        session.setScopedModels(scoped);
+        if (payload.persist) {
+          const sdk = await loadPiSdk();
+          if (!sdk.SettingsManager) throw new Error("Pi settings are not available in this runtime");
+          const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+          const settings = sdk.SettingsManager.create(cwd, agentDir);
+          settings.setEnabledModels(ids.length > 0 ? [...ids] : undefined);
+        }
+        send({ id: request.id, ok: true, result: ids });
         return;
       }
       case "agent.queue": {
@@ -902,6 +1192,10 @@ async function handle(request: PiHostRequest): Promise<void> {
           source: item.source,
           scope: item.scope,
           filtered: Boolean(item.filtered),
+          // Pi represents an autoload-disabled package as a filtered package.
+          // Keep the renderer-facing name explicit while preserving compatibility
+          // with a future SDK that may expose a dedicated disabled field.
+          disabled: item.disabled === true || item.filtered === true,
           installedPath: item.installedPath,
         }))) });
         return;
@@ -912,6 +1206,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
         const source = normalizePackageInstallSource(payload.source);
         await manager.installAndPersist(source, { local: Boolean(payload.local) });
+        invalidatePackageSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -920,6 +1215,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.source?.trim()) throw new Error("source is required");
         const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
         await manager.removeAndPersist(payload.source.trim(), { local: Boolean(payload.local) });
+        invalidatePackageSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -927,18 +1223,17 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { source?: string; cwd?: string } | undefined;
         const manager = await createPackageManager(payload?.cwd ?? resolveWorkspaceCwd());
         await manager.update(payload?.source?.trim() || undefined);
+        invalidatePackageSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
       case "packages.configure": {
         const payload = request.payload as { source?: string; enabled?: boolean; local?: boolean; cwd?: string } | undefined;
         if (!payload?.source?.trim()) throw new Error("source is required");
-        const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
-        const changed = payload.enabled
-          ? manager.addSourceToSettings(payload.source.trim(), { local: Boolean(payload.local) })
-          : manager.removeSourceFromSettings(payload.source.trim(), { local: Boolean(payload.local) });
-        if (!changed) throw new Error(`Could not ${payload.enabled ? "add" : "remove"} package source`);
-        send({ id: request.id, ok: true, result: undefined });
+        const { settingsManager } = await createPackageManagerContext(payload.cwd ?? resolveWorkspaceCwd());
+        const changed = configurePackageSource(settingsManager, payload.source.trim(), Boolean(payload.enabled), Boolean(payload.local));
+        if (changed) invalidatePackageSessions();
+        send({ id: request.id, ok: true, result: { changed } });
         return;
       }
       case "providers.list": {
@@ -960,7 +1255,7 @@ async function handle(request: PiHostRequest): Promise<void> {
               name: provider.name ?? provider.id,
               authState: auth.configured ? "configured" : credential?.type === "oauth" ? "expired" : "missing",
               authMethod: credential?.type === "oauth" ? "oauth" : credential?.type === "api_key" ? "api-key" : null,
-              authMethods: authMethods.length > 0 ? authMethods : ["api-key"],
+              authMethods,
               modelCount: runtime.getModels(provider.id).length,
             };
           }),
@@ -974,18 +1269,9 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (payload.method === "api-key") {
           const apiKey = payload.secret?.trim();
           if (!apiKey) throw new Error("An API key is required");
-          void runtime.setRuntimeApiKey(payload.providerId, apiKey, { allowNetwork: false }).catch((error: unknown) => {
-            console.error(`[PiHost] API key save failed for ${payload.providerId}:`, error);
-          });
+          await persistProviderApiKey(runtime, payload.providerId, apiKey, request.id);
         } else {
-          await runtime.login(payload.providerId, "oauth", {
-            prompt: (prompt: unknown) => {
-              const requestId = `${request.id}:${Date.now()}`;
-              emitAuth(requestId, { type: "prompt", prompt: jsonSafe(prompt) });
-              return new Promise<string>((resolve) => authWaiters.set(requestId, resolve));
-            },
-            notify: (event: unknown) => emitAuth(request.id, { type: "notify", event: jsonSafe(event) }),
-          });
+          await runtime.login(payload.providerId, "oauth", createAuthInteraction(request.id));
         }
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -996,9 +1282,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const runtime = await getModelRuntime();
         const apiKey = payload.apiKey.trim();
         if (!apiKey) throw new Error("An API key is required");
-        void runtime.setRuntimeApiKey(payload.providerId, apiKey, { allowNetwork: false }).catch((error: unknown) => {
-          console.error(`[PiHost] API key save failed for ${payload.providerId}:`, error);
-        });
+        await persistProviderApiKey(runtime, payload.providerId, apiKey, request.id);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -1011,12 +1295,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         return;
       }
       case "providers.auth-response": {
-        const payload = request.payload as { requestId?: string; value?: string } | undefined;
-        if (!payload?.requestId || payload.value === undefined) throw new Error("requestId and value are required");
-        const resolve = authWaiters.get(payload.requestId);
-        if (!resolve) throw new Error("Auth prompt is no longer active");
+        const payload = request.payload as { requestId?: string; value?: string; cancelled?: boolean } | undefined;
+        if (!payload?.requestId || (!payload.cancelled && payload.value === undefined)) throw new Error("requestId and value are required");
+        const waiter = authWaiters.get(payload.requestId);
+        if (!waiter) throw new Error("Auth prompt is no longer active");
         authWaiters.delete(payload.requestId);
-        resolve(payload.value);
+        if (payload.cancelled) waiter.reject(new Error("Authentication cancelled"));
+        else waiter.resolve(payload.value as string);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }

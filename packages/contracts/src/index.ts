@@ -50,6 +50,42 @@ export interface SessionCapabilities {
   prompts: Array<{ name: string; description?: string }>;
   skills: Array<{ name: string; description?: string }>;
   contextUsage?: ContextUsage;
+  scopedModels?: string[];
+}
+
+export interface PiSessionStats {
+  sessionFile?: string;
+  sessionId: string;
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  cost: number;
+  contextUsage?: ContextUsage;
+}
+
+export interface SessionRunRecord {
+  id: string;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+}
+
+export interface ImportedSessionSummary {
+  id: string;
+  title: string;
+  projectId: string;
+  state: TaskSummary["state"];
+  model: string;
+  updatedAt: string;
 }
 
 export type QueueDelivery = "steer" | "followUp";
@@ -79,6 +115,7 @@ export interface PiPackageSummary {
   source: string;
   scope: "user" | "project";
   filtered: boolean;
+  disabled: boolean;
   installedPath?: string;
   updateAvailable?: boolean;
 }
@@ -106,6 +143,7 @@ export interface WorkspaceSnapshot {
 export interface PideckBridge {
   app: {
     setLanguage(language: AppLanguage): Promise<void>;
+    quit(): Promise<void>;
   };
   runtime: {
     status(): Promise<"connected" | "starting" | "disconnected">;
@@ -114,6 +152,7 @@ export interface PideckBridge {
     list(preferredCwd?: string): Promise<ProjectSummary[]>;
     chooseDirectory(): Promise<ProjectSummary | null>;
     remove(cwd: string): Promise<void>;
+    setTrust(cwd: string, trusted: boolean): Promise<void>;
   };
   sessions: {
     list(projectId?: string): Promise<TaskSummary[]>;
@@ -121,9 +160,15 @@ export interface PideckBridge {
     delete(taskId: string, cwd?: string): Promise<void>;
     remove(taskId: string, cwd?: string): Promise<void>;
     messages(taskId: string, cwd?: string): Promise<unknown[]>;
+    runMetadata(taskId: string, cwd?: string): Promise<SessionRunRecord[]>;
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string }>;
+    import(taskId: string | undefined, inputPath?: string, cwd?: string): Promise<ImportedSessionSummary | null>;
+    rename(taskId: string, name: string, cwd?: string): Promise<string>;
+    stats(taskId: string, cwd?: string): Promise<PiSessionStats>;
+    share(taskId: string, cwd?: string): Promise<{ url: string; gistUrl: string }>;
+    changelog(): Promise<string>;
   };
   models: {
     list(): Promise<ModelSummary[]>;
@@ -139,7 +184,7 @@ export interface PideckBridge {
     login(providerId: string, method: AuthMethod, secret?: string): Promise<void>;
     logout(providerId: string): Promise<void>;
     setApiKey(providerId: string, apiKey: string): Promise<void>;
-    resolveAuth(requestId: string, value: string): Promise<void>;
+    resolveAuth(requestId: string, value: string, cancelled?: boolean): Promise<void>;
     openAuthUrl(url: string): Promise<void>;
   };
   agent: {
@@ -147,6 +192,7 @@ export interface PideckBridge {
     abort(taskId: string): Promise<void>;
     setThinkingLevel(taskId: string, level: string, cwd?: string): Promise<void>;
     setModel(taskId: string, providerId: string, modelId: string, cwd?: string): Promise<void>;
+    setScopedModels(taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string): Promise<string[]>;
     queue(taskId: string, cwd?: string): Promise<AgentQueueState>;
     setQueueModes(taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string): Promise<AgentQueueState>;
     clearQueue(taskId: string, cwd?: string): Promise<AgentQueueState>;
@@ -184,14 +230,21 @@ export interface PiDeckRuntimeEvent {
 
 export type PiHostCommand =
   | "runtime.status"
+  | "app.changelog"
   | "projects.list"
+  | "projects.setTrust"
   | "sessions.list"
   | "sessions.create"
   | "sessions.delete"
   | "sessions.messages"
+  | "sessions.runMetadata"
   | "sessions.capabilities"
   | "sessions.compact"
   | "sessions.export"
+  | "sessions.import"
+  | "sessions.rename"
+  | "sessions.stats"
+  | "sessions.share"
   | "models.list"
   | "workspace.snapshot"
   | "terminal.execute"
@@ -204,6 +257,7 @@ export type PiHostCommand =
   | "agent.abort"
   | "agent.setThinkingLevel"
   | "agent.setModel"
+  | "agent.setScopedModels"
   | "agent.queue"
   | "agent.setQueueModes"
   | "agent.clearQueue"

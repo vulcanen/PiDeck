@@ -4,6 +4,11 @@ interface GlobalShortcutsOptions {
   searchInputRef: RefObject<HTMLInputElement | null>;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  commandDialogOpen: boolean;
+  renameOpen: boolean;
+  resumeOpen: boolean;
+  trustOpen: boolean;
+  scopedModelsOpen: boolean;
   pendingDelete: boolean;
   pendingProjectRemove: boolean;
   previewImage: boolean;
@@ -23,14 +28,14 @@ interface GlobalShortcutsOptions {
 }
 
 export function useGlobalShortcuts({
-  searchInputRef, paletteOpen, settingsOpen, pendingDelete, pendingProjectRemove, previewImage,
+  searchInputRef, paletteOpen, settingsOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
   thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, projectContextMenu, imageContextMenu,
   terminalOpen, onCommandPalette, onProviderSettings, onToggleTerminal, onCreateTask, onCloseMenus, onCloseTerminal,
 }: GlobalShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
-      const modalOpen = paletteOpen || settingsOpen || pendingDelete || pendingProjectRemove || previewImage;
+      const modalOpen = paletteOpen || settingsOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
       if (modalOpen) return;
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); onCommandPalette(); return; }
       if (modifier && event.key.toLowerCase() === "j") { event.preventDefault(); onToggleTerminal(); return; }
@@ -46,5 +51,5 @@ export function useGlobalShortcuts({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCloseTerminal, onCommandPalette, onCreateTask, onProviderSettings, onToggleTerminal, paletteOpen, pendingDelete, pendingProjectRemove, previewImage, projectContextMenu, searchInputRef, settingsOpen, suggestionMode, terminalOpen, thinkingMenuOpen]);
+  }, [commandDialogOpen, contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCloseTerminal, onCommandPalette, onCreateTask, onProviderSettings, onToggleTerminal, paletteOpen, pendingDelete, pendingProjectRemove, previewImage, projectContextMenu, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, terminalOpen, thinkingMenuOpen, trustOpen]);
 }

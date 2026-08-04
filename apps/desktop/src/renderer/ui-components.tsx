@@ -138,13 +138,17 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
   const t = copy[language];
   const startedAt = Math.min(...steps.map((step) => step.startedAt));
   const endedAt = running ? now : Math.max(...steps.map((step) => step.endedAt ?? step.startedAt));
-  const seconds = Math.max(0, (endedAt - startedAt) / 1000);
+  const persistedDurationMs = running ? undefined : steps.find((step) => Number.isFinite(step.durationMs))?.durationMs;
+  const seconds = Math.max(0, (persistedDurationMs ?? endedAt - startedAt) / 1000);
   const duration = formatActivityDuration(seconds);
+  // A restored group can have unknown per-step timing while its total run
+  // duration is authoritative in the persisted metadata.
+  const timingKnown = running || persistedDurationMs !== undefined || steps.every((step) => step.timing !== "unknown");
   return <details className="execution-summary" open={false}>
-    <summary><span>{running ? t.executionProcessing(duration) : t.executionProcessed(duration)}</span><Icon name="chevron" size={13} /></summary>
+    <summary><span>{running ? t.executionProcessing(duration) : timingKnown ? t.executionProcessed(duration) : t.executionProcessedUnknown}</span><Icon name="chevron" size={13} /></summary>
     <div className="execution-details">
       {steps.map((step) => <div className={`execution-step ${step.isError ? "failed" : ""}`} key={step.id}>
-        <div className="execution-step-heading"><span className="execution-step-icon"><Icon name={step.kind === "thinking" ? "spark" : step.isError ? "alert" : "terminal"} size={13} /></span><strong>{step.kind === "thinking" ? t.executionThinking : step.label}</strong><small>{step.endedAt ? `${((step.endedAt - step.startedAt) / 1000).toFixed(1)}s` : t.working}</small></div>
+        <div className="execution-step-heading"><span className="execution-step-icon"><Icon name={step.kind === "thinking" ? "spark" : step.isError ? "alert" : "terminal"} size={13} /></span><strong>{step.kind === "thinking" ? t.executionThinking : step.label}</strong><small>{step.timing === "unknown" ? "—" : step.endedAt ? `${((step.endedAt - step.startedAt) / 1000).toFixed(1)}s` : t.working}</small></div>
         {step.kind === "thinking" && step.detail && <pre>{step.detail}</pre>}
         {step.kind === "tool" && step.args !== undefined && <div className="execution-value"><span>{t.executionArguments}</span><pre>{activityValue(step.args)}</pre></div>}
         {step.kind === "tool" && step.result !== undefined && <div className="execution-value"><span>{t.executionResult}</span><pre>{activityValue(step.result)}</pre></div>}
@@ -164,6 +168,7 @@ interface MessageTimelineProps {
   completedActivity: ActivityStep[][];
   steeringMessageKeys: string[];
   taskId: string;
+  scrollKey: string;
   active: boolean;
   messageReady: boolean;
   conversationRef: RefObject<HTMLDivElement | null>;
@@ -180,10 +185,10 @@ interface MessageTimelineProps {
 // This component is the single owner of timeline scrolling. It snapshots both
 // the virtualizer measurements and offset on unmount, then consumes them once
 // as the next mount's initial state. No parent effect writes scrollTop.
-function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, completedActivity, steeringMessageKeys, taskId, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage }: MessageTimelineProps) {
+function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, completedActivity, steeringMessageKeys, taskId, scrollKey, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage }: MessageTimelineProps) {
   const items = useMemo(() => buildMessageTimelineItems({ messages, language, running, completedActivity, steeringMessageKeys, taskId, liveText: streamText, activeActivity, workingPhase, toolName }), [activeActivity, completedActivity, language, messages, running, steeringMessageKeys, streamText, taskId, toolName, workingPhase]);
   const count = items.length + (footer ? 1 : 0);
-  const initialSnapshotRef = useRef<ConversationScrollSnapshot | undefined>(scrollPositionsRef.current[taskId]);
+  const initialSnapshotRef = useRef<ConversationScrollSnapshot | undefined>(scrollPositionsRef.current[scrollKey]);
   const initializedRef = useRef(false);
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, HTMLDivElement> | null>(null);
   const userScrollOverrideRef = useRef(false);
@@ -196,7 +201,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     return item.stableKey ?? messageIdentity(item.message) ?? `message-${item.index}`;
   }, [items, taskId]);
   const handleVirtualizerChange = useCallback((instance: Virtualizer<HTMLDivElement, HTMLDivElement>, sync: boolean) => {
-    const previous = scrollPositionsRef.current[taskId];
+    const previous = scrollPositionsRef.current[scrollKey];
     const element = conversationRef.current;
     const measurements = sync
       ? previous?.measurements ?? initialSnapshotRef.current?.measurements ?? []
@@ -205,7 +210,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
       ? Math.max(0, element.scrollHeight - element.clientHeight - element.scrollTop) <= 80
       : instance.isAtEnd();
     const effectiveFollow = userScrollOverrideRef.current ? false : follow;
-    scrollPositionsRef.current[taskId] = {
+    scrollPositionsRef.current[scrollKey] = {
       // The browser owns the physical scroll position. TanStack's internal
       // offset can temporarily include an anchor adjustment while a measured
       // row settles; persisting that value makes each task switch drift a few
@@ -215,7 +220,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
       measurements,
     };
     if (active) onAtEndChange(effectiveFollow);
-  }, [active, conversationRef, onAtEndChange, scrollPositionsRef, taskId]);
+  }, [active, conversationRef, onAtEndChange, scrollKey, scrollPositionsRef]);
 
   // This cleanup is intentionally declared before useVirtualizer's own layout
   // effects. React runs layout cleanups in declaration order, so it captures
@@ -224,16 +229,16 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   useLayoutEffect(() => () => {
     const instance = virtualizerRef.current;
     const element = conversationRef.current;
-    const previous = scrollPositionsRef.current[taskId];
+    const previous = scrollPositionsRef.current[scrollKey];
     const domFollow = element
       ? Math.max(0, element.scrollHeight - element.clientHeight - element.scrollTop) <= 80
       : false;
-    scrollPositionsRef.current[taskId] = {
+    scrollPositionsRef.current[scrollKey] = {
       top: element?.scrollTop ?? instance?.scrollOffset ?? previous?.top ?? 0,
       follow: instance ? instance.isAtEnd() : previous?.follow ?? domFollow,
       measurements: instance?.takeSnapshot() ?? previous?.measurements ?? initialSnapshotRef.current?.measurements ?? [],
     };
-  }, [conversationRef, scrollPositionsRef, taskId]);
+  }, [conversationRef, scrollKey, scrollPositionsRef]);
 
   const virtualizer = useVirtualizer({
     count,
@@ -292,12 +297,12 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   // following the conversation; once they scroll away, the saved `follow`
   // flag prevents the assistant from pulling them back down.
   useLayoutEffect(() => {
-    if (!active || !messageReady || !items.length || !scrollPositionsRef.current[taskId]?.follow) return;
+    if (!active || !messageReady || !items.length || !scrollPositionsRef.current[scrollKey]?.follow) return;
     const frame = window.requestAnimationFrame(() => {
-      if (scrollPositionsRef.current[taskId]?.follow) virtualizer.scrollToEnd({ behavior: "auto" });
+      if (scrollPositionsRef.current[scrollKey]?.follow) virtualizer.scrollToEnd({ behavior: "auto" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active, items.length, messageReady, messages, scrollPositionsRef, streamText, taskId, virtualizer]);
+  }, [active, items.length, messageReady, messages, scrollKey, scrollPositionsRef, streamText, taskId, virtualizer]);
 
   useLayoutEffect(() => {
     if (!active) return;
@@ -322,14 +327,14 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   const handleNativeScroll = useCallback(() => {
     const element = conversationRef.current;
     if (!element) return;
-    const previous = scrollPositionsRef.current[taskId];
+    const previous = scrollPositionsRef.current[scrollKey];
     const top = element.scrollTop;
     const movingAwayFromEnd = previous ? top < previous.top - 1 : false;
     const follow = Math.max(0, element.scrollHeight - element.clientHeight - top) <= 80;
     if (movingAwayFromEnd) userScrollOverrideRef.current = true;
     else if (follow) userScrollOverrideRef.current = false;
     const effectiveFollow = userScrollOverrideRef.current ? false : follow;
-    scrollPositionsRef.current[taskId] = {
+    scrollPositionsRef.current[scrollKey] = {
       top,
       // A user-initiated upward wheel gesture must opt out of end-following
       // immediately, even while still inside the 80px end threshold. Without
@@ -339,7 +344,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
       measurements: previous?.measurements ?? initialSnapshotRef.current?.measurements ?? [],
     };
     if (active) onAtEndChange(effectiveFollow);
-  }, [active, conversationRef, onAtEndChange, scrollPositionsRef, taskId]);
+  }, [active, conversationRef, onAtEndChange, scrollKey, scrollPositionsRef]);
 
   useLayoutEffect(() => {
     const element = conversationRef.current;
@@ -370,7 +375,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   </div>;
 }
 
-const MemoMessageTimeline = memo(MessageTimeline, (previous, next) => previous.messages === next.messages && previous.language === next.language && previous.running === next.running && previous.activeActivity === next.activeActivity && previous.streamText === next.streamText && previous.workingPhase === next.workingPhase && previous.toolName === next.toolName && previous.completedActivity === next.completedActivity && previous.steeringMessageKeys === next.steeringMessageKeys && previous.taskId === next.taskId && previous.active === next.active && previous.messageReady === next.messageReady && previous.conversationRef === next.conversationRef && previous.scrollPositionsRef === next.scrollPositionsRef && previous.scrollHandleRef === next.scrollHandleRef && previous.onAtEndChange === next.onAtEndChange && previous.footer === next.footer && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage);
+const MemoMessageTimeline = memo(MessageTimeline, (previous, next) => previous.messages === next.messages && previous.language === next.language && previous.running === next.running && previous.activeActivity === next.activeActivity && previous.streamText === next.streamText && previous.workingPhase === next.workingPhase && previous.toolName === next.toolName && previous.completedActivity === next.completedActivity && previous.steeringMessageKeys === next.steeringMessageKeys && previous.taskId === next.taskId && previous.scrollKey === next.scrollKey && previous.active === next.active && previous.messageReady === next.messageReady && previous.conversationRef === next.conversationRef && previous.scrollPositionsRef === next.scrollPositionsRef && previous.scrollHandleRef === next.scrollHandleRef && previous.onAtEndChange === next.onAtEndChange && previous.footer === next.footer && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage);
 
 function formatTokenCount(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
@@ -627,6 +632,47 @@ function ImagePreview({ image, language, onClose, onContextMenuImage }: { image:
   return <div className="image-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="image-preview-dialog" role="dialog" aria-modal="true" aria-label={t.imagePreview}><button type="button" className="icon-button image-preview-close" onClick={onClose} aria-label={t.closeImagePreview} title={t.closeImagePreview}><Icon name="x" /></button><img src={image.src} alt={image.alt} onContextMenu={(event) => onContextMenuImage(event, image)} /></div></div>;
 }
 
+function CommandResultDialog({ language, title, body, onClose }: { language: Language; title: string; body: string; onClose: () => void }) {
+  const t = copy[language];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
+  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="command-result-title"><span className="eyebrow">Pi</span><h2 id="command-result-title">{title}</h2><p>{body}</p><div className="dialog-actions"><button type="button" className="button primary" onClick={onClose}>{t.commandResultClose}</button></div></div></div>;
+}
+
+function RenameSessionDialog({ language, currentName, onSave, onClose }: { language: Language; currentName: string; onSave: (name: string) => void; onClose: () => void }) {
+  const t = copy[language];
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const [value, setValue] = useState(currentName);
+  const [invalid, setInvalid] = useState(false);
+  useDialogFocus(dialogRef, onClose);
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-session-title" onSubmit={(event) => { event.preventDefault(); const next = value.trim(); if (!next) { setInvalid(true); return; } onSave(next); }}><span className="eyebrow">Pi</span><h2 id="rename-session-title">{t.sessionNamePrompt}</h2><label className="session-name-field"><span>{t.sessionNamePrompt}</span><input autoFocus type="text" value={value} onChange={(event) => { setValue(event.target.value); setInvalid(false); }} /></label>{invalid && <div className="field-error" role="alert">{t.sessionNameRequired}</div>}<div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="submit" className="button primary">{t.save}</button></div></form></div>;
+}
+
+function ResumeSessionDialog({ language, project, tasks, activeTaskId, onSelect, onClose }: { language: Language; project: ProjectSummary | null; tasks: TaskSummary[]; activeTaskId?: string; onSelect: (task: TaskSummary) => void; onClose: () => void }) {
+  const t = copy[language];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
+  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-title"><span className="eyebrow">Pi</span><h2 id="resume-title">{t.resumeTitle}</h2><p>{t.resumeDescription}</p>{!project || tasks.length === 0 ? <p>{t.noSessions}</p> : <div className="resume-list">{tasks.map((task) => <button type="button" className={`resume-row${task.id === activeTaskId ? " selected" : ""}`} key={task.id} onClick={() => onSelect(task)}><strong>{task.title}</strong><small>{task.model}</small></button>)}</div>}<div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button></div></div></div>;
+}
+
+function TrustDialog({ language, onResolve, onClose }: { language: Language; onResolve: (trusted: boolean) => void; onClose: () => void }) {
+  const t = copy[language];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
+  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="trust-title"><span className="eyebrow">Pi</span><h2 id="trust-title">{t.trustTitle}</h2><p>{t.trustDescription}</p><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(false)}>{t.untrustProject}</button><button type="button" className="button primary" onClick={() => onResolve(true)}>{t.trustProject}</button></div></div></div>;
+}
+
+function ScopedModelsDialog({ language, models, selectedIds, onSave, onClose }: { language: Language; models: ModelSummary[]; selectedIds: string[]; onSave: (modelIds: string[] | null, persist: boolean) => void; onClose: () => void }) {
+  const t = copy[language];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [selected, setSelected] = useState(() => new Set(selectedIds));
+  const [persist, setPersist] = useState(false);
+  useDialogFocus(dialogRef, onClose);
+  function toggle(id: string) { setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
+  const allSelected = models.length > 0 && selected.size === models.length;
+  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="scoped-models-title"><span className="eyebrow">Pi</span><h2 id="scoped-models-title">{t.scopedModelsTitle}</h2><p>{t.scopedModelsDescription}</p><div className="model-scope-list">{models.map((model) => { const id = `${model.providerId}/${model.id}`; return <label key={id} className="model-scope-row"><input type="checkbox" checked={selected.has(id)} onChange={() => toggle(id)} /><span><strong>{model.name}</strong><small>{id}</small></span></label>; })}</div><label className="model-scope-persist"><input type="checkbox" checked={persist} onChange={(event) => setPersist(event.target.checked)} />{t.scopedModelsPersist}</label><div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" disabled={models.length === 0} onClick={() => onSave(allSelected || selected.size === 0 ? null : [...selected], persist)}>{t.scopedModelsSave}</button></div></div></div>;
+}
+
 function ExtensionUiDialog({ language, request, onResolve }: { language: Language; request: ExtensionUiRequest; onResolve: (value: string | boolean | undefined) => void }) {
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -656,7 +702,7 @@ function ProjectRemoveDialog({ language, project, busy, onCancel, onConfirm }: {
   return <div className="dialog-backdrop"><div ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="project-remove-title" aria-describedby="project-remove-description"><span className="confirm-icon"><Icon name="alert" /></span><h2 id="project-remove-title">{t.removeProjectTitle}</h2><p id="project-remove-description">{t.removeProjectBody(project.name)}</p><div><button className="button ghost" disabled={busy} onClick={onCancel}>{t.cancel}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? t.removingProject : t.removeProject}</button></div></div></div>;
 }
 
-function PackageSettings({ language, cwd, onClose, onNotice }: { language: Language; cwd: string; onClose: () => void; onNotice: (message: string) => void }) {
+function PackageSettings({ language, cwd, onClose, onNotice, onPackagesChanged }: { language: Language; cwd: string; onClose: () => void; onNotice: (message: string) => void; onPackagesChanged?: () => void }) {
   const t = copy[language];
   const dialogRef = useRef<HTMLElement>(null);
   const [packages, setPackages] = useState<PiPackageSummary[]>([]);
@@ -664,20 +710,26 @@ function PackageSettings({ language, cwd, onClose, onNotice }: { language: Langu
   const [local, setLocal] = useState(Boolean(cwd));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadVersionRef = useRef(0);
   useDialogFocus(dialogRef, onClose);
   async function load() {
+    const loadVersion = ++loadVersionRef.current;
+    const requestCwd = cwd || undefined;
     setError(null);
-    try { setPackages(await window.pideck.packages.list(cwd || undefined)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    try {
+      const next = await window.pideck.packages.list(requestCwd);
+      if (loadVersion === loadVersionRef.current) setPackages(next);
+    }
+    catch (reason) { if (loadVersion === loadVersionRef.current) setError(reason instanceof Error ? reason.message : String(reason)); }
   }
   useEffect(() => { void load(); }, [cwd]);
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>, successMessage: string = t.packageManager) {
     setBusy(true); setError(null);
-    try { await action(); await load(); setSource(""); onNotice(t.packageManager); }
+    try { await action(); onPackagesChanged?.(); await load(); setSource(""); onNotice(successMessage); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
-  return <div className="settings-backdrop"><section ref={dialogRef} className="settings-sheet package-settings" role="dialog" aria-modal="true" aria-labelledby="package-title"><div className="settings-header"><div><span className="eyebrow">Pi</span><h2 id="package-title">{t.packageManager}</h2><p>{t.packageManagerDescription}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><form className="package-install-form" onSubmit={(event) => { event.preventDefault(); if (source.trim()) void run(() => window.pideck.packages.install(source.trim(), local, cwd || undefined)); }}><input value={source} onChange={(event) => setSource(event.target.value)} placeholder={t.packageSource} aria-label={t.packageSource} /><label><input type="checkbox" checked={local} onChange={(event) => setLocal(event.target.checked)} />{local ? t.packageLocal : t.packageUser}</label><button type="submit" className="button primary" disabled={busy || !source.trim()}>{busy ? t.packageBusy : t.packageInstall}</button></form>{error && <div className="auth-error" role="alert"><span>{error}</span><button type="button" className="button ghost" onClick={() => void load()}>{t.retry}</button></div>}<div className="package-list">{packages.length === 0 ? <div className="provider-list-empty">{t.noPackages}</div> : packages.map((item) => <div className="package-row" key={`${item.scope}:${item.source}`}><div><strong>{item.source}</strong><small>{item.scope === "project" ? t.packageLocal : t.packageUser}{item.installedPath ? ` · ${item.installedPath}` : ""}</small></div><div className="package-actions"><button type="button" className="button ghost" disabled={busy} onClick={() => void run(() => window.pideck.packages.configure(item.source, !item.filtered, item.scope === "project", cwd || undefined))}>{item.filtered ? t.packageConfigure : t.packageDisable}</button><button type="button" className="button danger-subtle" disabled={busy} onClick={() => void run(() => window.pideck.packages.remove(item.source, item.scope === "project", cwd || undefined))}>{t.packageRemove}</button></div></div>)}</div><div className="settings-footer"><button type="button" className="button ghost" disabled={busy} onClick={() => void run(() => window.pideck.packages.update(undefined, cwd || undefined))}>{t.packageUpdate}</button><button type="button" className="button ghost" onClick={onClose}>{t.done}</button></div></section></div>;
+  return <div className="settings-backdrop"><section ref={dialogRef} className="settings-sheet package-settings" role="dialog" aria-modal="true" aria-labelledby="package-title"><div className="settings-header"><div><span className="eyebrow">Pi</span><h2 id="package-title">{t.packageManager}</h2><p>{t.packageManagerDescription}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div><form className="package-install-form" onSubmit={(event) => { event.preventDefault(); if (source.trim()) void run(() => window.pideck.packages.install(source.trim(), local, cwd || undefined), t.packageInstalled); }}><input value={source} onChange={(event) => setSource(event.target.value)} placeholder={t.packageSource} aria-label={t.packageSource} /><label><input type="checkbox" checked={local} onChange={(event) => setLocal(event.target.checked)} />{local ? t.packageLocal : t.packageUser}</label><button type="submit" className="button primary" disabled={busy || !source.trim()}>{busy ? t.packageBusy : t.packageInstall}</button></form>{error && <div className="auth-error" role="alert"><span>{error}</span><button type="button" className="button ghost" onClick={() => void load()}>{t.retry}</button></div>}<div className="package-list">{packages.length === 0 ? <div className="provider-list-empty">{t.noPackages}</div> : packages.map((item) => <div className="package-row" key={`${item.scope}:${item.source}`}><div><strong>{item.source}</strong><small>{item.scope === "project" ? t.packageLocal : t.packageUser}{item.installedPath ? ` · ${item.installedPath}` : ""}</small></div><div className="package-actions"><button type="button" className="button ghost" disabled={busy} onClick={() => void run(() => window.pideck.packages.configure(item.source, item.disabled, item.scope === "project", cwd || undefined), item.disabled ? t.packageEnabled : t.packageDisabled)}>{item.disabled ? t.packageConfigure : t.packageDisable}</button><button type="button" className="button danger-subtle" disabled={busy} onClick={() => void run(() => window.pideck.packages.remove(item.source, item.scope === "project", cwd || undefined), t.packageRemoved)}>{t.packageRemove}</button></div></div>)}</div><div className="settings-footer"><button type="button" className="button ghost" disabled={busy} onClick={() => void run(() => window.pideck.packages.update(undefined, cwd || undefined), t.packageUpdated)}>{t.packageUpdate}</button><button type="button" className="button ghost" onClick={onClose}>{t.done}</button></div></section></div>;
 }
 
 function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh }: { language: Language; focusProviderId: string | null; onClose: () => void; onModelsRefresh: (providerId?: string) => Promise<void> | void }) {
@@ -718,11 +770,19 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
     setAuthPrompt(null);
     setAuthError(null);
   }
+  async function cancelAuthPrompt() {
+    if (!authPrompt) return;
+    const requestId = authPrompt.requestId;
+    try { await window.pideck.providers.resolveAuth(requestId, "", true); } catch { /* the login request will surface its cancellation result */ }
+    setAuthPrompt(null);
+    setAuthError(null);
+    setAuthMethod(null);
+  }
   useDialogFocus(dialogRef, () => {
     if (apiKeyProvider) { closeApiKeyForm(); return; }
     onClose();
   }, !authPrompt && !pendingLogout);
-  useDialogFocus(authPromptRef, () => void resolvePrompt(""), Boolean(authPrompt));
+  useDialogFocus(authPromptRef, () => void cancelAuthPrompt(), Boolean(authPrompt));
   useDialogFocus(logoutPromptRef, () => { if (!busyProvider) setPendingLogout(null); }, Boolean(pendingLogout));
 
   async function loadProviders() {
@@ -749,7 +809,11 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
       setAuthError(null);
       setAuthNotice(null);
       setAuthUrl(null);
-      setAuthPrompt({ requestId: runtimeEvent.requestId, message: event.prompt?.message ?? t.authPromptFallback, placeholder: event.prompt?.placeholder ?? "", value: "" });
+      const promptType = event.prompt?.type === "select" || event.prompt?.type === "secret" || event.prompt?.type === "manual_code" ? event.prompt.type : "text";
+      const options = Array.isArray(event.prompt?.options)
+        ? event.prompt.options.filter((option: any) => typeof option?.id === "string" && typeof option?.label === "string").map((option: any) => ({ id: option.id, label: option.label, description: typeof option.description === "string" ? option.description : undefined }))
+        : undefined;
+      setAuthPrompt({ requestId: runtimeEvent.requestId, type: promptType, message: event.prompt?.message ?? t.authPromptFallback, placeholder: event.prompt?.placeholder ?? "", value: "", options });
     }
     else if (event?.type === "notify" && event.event?.type === "auth_url") {
       setAuthUrl(null); setAuthNotice(null);
@@ -786,9 +850,9 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
     <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : filteredProviders.length === 0 ? <div className="provider-list-empty"><Icon name="search" size={17} /><span>{t.providerNoMatches}</span></div> : filteredProviders.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; const oauthLocked = state === "configured"; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button danger-subtle" disabled={busyProvider === provider.id} onClick={() => setPendingLogout(provider)}>{t.removeProviderAuth}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id || oauthLocked} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
     <div className="settings-footer"><span>{providers.length ? providerQuery || providerFilter !== "all" ? t.providerFilteredCount(filteredProviders.length, providers.length) : t.providerCount(providers.length) : ""}</span><button className="button ghost" onClick={onClose}>{t.done}</button></div>
     {pendingLogout && <div className="auth-prompt-backdrop"><div ref={logoutPromptRef} className="auth-prompt provider-logout-prompt" role="alertdialog" aria-modal="true" aria-labelledby="provider-logout-title" aria-describedby="provider-logout-description"><span className="confirm-icon"><Icon name="alert" /></span><h3 id="provider-logout-title">{t.removeProviderAuthTitle(pendingLogout.name)}</h3><p id="provider-logout-description">{t.removeProviderAuthBody(pendingLogout.name)}</p><div><button type="button" className="button ghost" disabled={busyProvider === pendingLogout.id} onClick={() => setPendingLogout(null)}>{t.cancel}</button><button type="button" className="button danger" disabled={busyProvider === pendingLogout.id} onClick={() => void logout(pendingLogout.id)}>{busyProvider === pendingLogout.id ? t.removingProviderAuth : t.removeProviderAuth}</button></div></div></div>}
-    {authPrompt && <div className="auth-prompt-backdrop"><form ref={authPromptRef} className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p>{authError && <div className="inline-error" role="alert">{authError}</div>}<label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type="password" value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label><div><button type="button" className="button ghost" onClick={() => { setAuthPrompt(null); setAuthError(null); setAuthMethod(null); }}>{t.cancel}</button><button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button></div></form></div>}
+    {authPrompt && <div className="auth-prompt-backdrop"><form ref={authPromptRef} className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); if (authPrompt.type !== "select") void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p>{authError && <div className="inline-error" role="alert">{authError}</div>}{authPrompt.type === "select" ? <div className="auth-prompt-options">{(authPrompt.options ?? []).map((option) => <button key={option.id} type="button" className="button ghost auth-prompt-option" onClick={() => void resolvePrompt(option.id)}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</button>)}</div> : <label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type={authPrompt.type === "secret" ? "password" : "text"} value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label>}<div><button type="button" className="button ghost" onClick={() => void cancelAuthPrompt()}>{t.cancel}</button>{authPrompt.type !== "select" && <button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button>}</div></form></div>}
   </section></div>;
 }
 
 
-export { handleRovingMenuKeyDown, copyImageToClipboard, SidebarSkeleton, ConversationSkeleton, StateMark, TaskRow, MessageView, ExecutionSummary, MemoMessageTimeline, ContextRing, ContextRingPopover, PermissionLevelControl, WorkingIndicator, ApprovalCard, Composer, MemoComposer, TerminalPanel, CommandPaletteBoundary, CommandPalette, ImagePreview, ExtensionUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog, PackageSettings, ProviderSettings };
+export { handleRovingMenuKeyDown, copyImageToClipboard, SidebarSkeleton, ConversationSkeleton, StateMark, TaskRow, MessageView, ExecutionSummary, MemoMessageTimeline, ContextRing, ContextRingPopover, PermissionLevelControl, WorkingIndicator, ApprovalCard, Composer, MemoComposer, TerminalPanel, CommandPaletteBoundary, CommandPalette, ImagePreview, CommandResultDialog, RenameSessionDialog, ResumeSessionDialog, TrustDialog, ScopedModelsDialog, ExtensionUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog, PackageSettings, ProviderSettings };
