@@ -8,6 +8,8 @@ PiDeck 不另行实现 Agent、模型目录、会话存储或凭据系统。Prov
 
 左侧项目树支持同时展开多个项目下的 Pi Session；单击项目不会收起其它项目或切换当前会话，单击具体会话后才切换工作区。项目可通过右键菜单从列表移除，该操作不会删除项目文件或 Pi Session。
 
+中央对话区支持长会话虚拟列表、每个 Session 独立的滚动位置缓存、流式回复稳定时间线和 Steering/Follow-up 排队消息。首次打开会话定位到最新消息；用户主动上滑后保留当前位置，不会被后台流式更新抢回。
+
 当前版本：`0.1.0`  
 Pi CLI / SDK 基线：`0.83.0`  
 Electron：`43.2.0`
@@ -49,6 +51,7 @@ npm run dev
 
 ```bash
 npm run typecheck
+npm run test:renderer
 npm run build
 ```
 

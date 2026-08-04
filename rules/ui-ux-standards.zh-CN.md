@@ -61,6 +61,9 @@ PiDeck 是本地开发者工具，不是营销页面。界面采用：
 - 流式消息和执行摘要必须按 `taskId` 隔离。
 - 长参数、结果和代码必须使用 `pre-wrap`、最大高度和独立滚动，不能撑破对话布局。
 - Session 切换直接定位到已保存位置或最新位置，不播放跨会话平滑滚动动画。
+- 思考摘要、流式回复和正式回复必须复用稳定时间线项，不能在 footer、临时消息和正式消息之间反复卸载重建。
+- Pi 原始消息是事实来源；运行时执行摘要在重启后必须从 Pi 的 thinking/tool 内容或消息时间戳恢复，不能假定 Renderer 内存状态会持久化。
+- 长会话、Session pane 缓存、follow 状态和虚拟列表的详细约束见 [Renderer 会话时间线与滚动规则](renderer-session-timeline.zh-CN.md)。
 
 ## 6. 动画与性能
 
@@ -68,7 +71,7 @@ PiDeck 是本地开发者工具，不是营销页面。界面采用：
 - 不使用连续滚动监听制造昂贵重排。
 - 必须实现 `@media (prefers-reduced-motion: reduce)`，禁用非必要动画和滚动动画。
 - 一屏最多保留少量有意义的动态状态：运行 spinner、加载 skeleton、弹层进入动画。
-- 长会话应准备 `content-visibility` 或虚拟列表方案；不要无条件渲染数千条消息。
+- 长会话必须使用虚拟列表或等价的按需渲染方案；不要无条件渲染数千条消息，也不要给需要虚拟器测量的行盲目添加 `content-visibility`。
 - 图片使用缩略图和受限尺寸；不让用户粘贴的原图撑开输入区或对话区。
 - 第三方 Markdown 渲染保持 lazy loading，不能阻塞首屏工作区。
 
@@ -84,7 +87,7 @@ PiDeck 是本地开发者工具，不是营销页面。界面采用：
 
 ## 8. 文案与数据边界
 
-- 所有可见中英文放在 `apps/desktop/src/renderer/i18n.ts`，组件只读取 key。
+- 所有可见中英文放在 `packages/i18n/src/index.ts`，组件只读取 key。
 - 文案要说明当前状态和下一步动作，避免只显示“失败”。
 - Renderer 不保存 Pi 凭据，不直接访问 Node/Pi SDK。
 - UI 展示的上下文用量、模型、权限和 Provider 状态必须来自 Pi Bridge 的真实 API。
@@ -110,3 +113,4 @@ python3 C:/Users/chenyang.wu/.agents/skills/ui-ux-pro-max/scripts/search.py "foc
 - [ ] 新文案已同步中英文 i18n。
 - [ ] 结构或 UI 能力变化已同步更新 `docs/`。
 - [ ] `npm run typecheck` 和 `npm run build` 通过。
+- [ ] `npm run test:renderer` 通过，且覆盖消息顺序、回合分组、稳定 key、重启摘要和长会话边界。

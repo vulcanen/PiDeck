@@ -73,9 +73,24 @@ PiDeck/
 │     ├─ main/index.ts              # Electron Main 与 IPC 编排
 │     ├─ preload/index.ts           # contextBridge
 │     ├─ renderer/
-│     │  ├─ App.tsx                 # 当前工作区、对话、设置和面板
-│     │  ├─ styles.css              # 当前 UI token 与布局样式
+│     │  ├─ App.tsx                 # 仅入口与 Controller/View 组合
+│     │  ├─ app-view.tsx            # 工作区壳层与全局面板组合
+│     │  ├─ app-sidebar.tsx         # 项目树、Session 列表与侧栏交互
+│     │  ├─ app-conversation.tsx    # 会话 pane 缓存、对话区与 Composer 组合
+│     │  ├─ ui-components.tsx       # 消息、时间线、Composer、弹层等 UI
+│     │  ├─ timeline-utils.ts       # 回合分组、执行摘要和稳定时间线项
+│     │  ├─ use-app-controller.tsx  # 页面状态与动作编排
+│     │  ├─ use-session-data.ts     # Session/能力/消息加载
+│     │  ├─ use-runtime-events.ts   # PiHost Agent event 状态归一化
+│     │  ├─ use-conversation-scroll.ts # Session 滚动快照与最新位置
+│     │  ├─ use-global-shortcuts.ts # 全局快捷键与焦点边界
+│     │  ├─ use-sent-images-cache.ts # 待发送图片缓存
+│     │  ├─ ui-performance.ts       # 终端输出等有界性能 helper
+│     │  ├─ message-utils.ts        # 消息 identity、快照合并和时间格式化
+│     │  ├─ types.ts                # Renderer 状态与消息辅助类型
+│     │  ├─ image-cache.ts          # 图片预览缓存
 │     │  ├─ pi-capabilities.ts      # Pi 不可用时的独立命令 fallback
+│     │  ├─ styles.css              # 当前 UI token 与布局样式
 │     │  ├─ main.tsx                # Renderer 入口
 │     │  └─ vite-env.d.ts
 ├─ packages/
@@ -115,6 +130,10 @@ permission-engine → contracts + Pi Permission System 配置
 - 新增 IPC 必须先更新 `packages/contracts`，再实现 Main、Preload 和 Renderer。
 - Pi fallback 能力必须独立于 UI 组件，并标明权威来源仍为 Pi CLI/SDK。
 
+Renderer 的会话时间线由 `app-conversation.tsx` 和 `ui-components.tsx` 组合，使用 `@tanstack/react-virtual` 管理长会话。每个访问过的 Session 保留独立 pane、DOM `scrollTop`、follow 状态和虚拟器测量快照；首次打开无快照时定位到最新消息，有快照时恢复用户位置。用户向上滚动后立即退出 follow，队列变化和流式增长不会抢回用户位置。
+
+PiDeck 的“已处理”执行摘要不是 Pi Session 中的独立字段：运行期间优先使用 `use-runtime-events.ts` 收集的 activity，重启后优先从 Pi 原始 thinking/tool 内容重建；Provider 只保存空 thinking 或正式文本时，`timeline-utils.ts` 使用消息时间戳生成轻量历史摘要。
+
 ## 5. 当前 Bridge 能力
 
 以 `packages/contracts/src/index.ts` 为准，当前已声明：
@@ -122,6 +141,10 @@ permission-engine → contracts + Pi Permission System 配置
 - `runtime.status`
 - `projects.list/chooseDirectory/remove`
 - `sessions.list/create/delete/messages/capabilities/compact/export`
+- `agent.queue/setQueueModes/clearQueue/promoteQueue`
+- `extensions.resolveUi`
+- `packages.list/install/remove/update/configure`
+- `permissions.status/setMode`
 - `models.list`
 - `workspace.snapshot`
 - `terminal.execute`
@@ -143,7 +166,7 @@ PiHost 将以下事件发送到 Renderer：
 { type: "auth.event", requestId, event }
 ```
 
-`agent.event` 当前覆盖 Agent start/end、turn start/end、message update/snapshot、tool execution start/update/end 等事件。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
+`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update 等事件。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
 
 ## 7. Pi 能力映射
 
@@ -152,6 +175,7 @@ PiHost 将以下事件发送到 Renderer：
 - Pi slash command / Prompt / Skill catalog → Composer 建议和命令面板。
 - Pi Agent event → 流式回复、工具过程、审批和运行状态。
 - Pi Session export/compact/tree → 会话操作和命令面板入口。
+- Pi Agent steering/follow-up queue → Composer 队列面板、投递方式和批处理模式。
 - Pi workspace / git status → Files 与 Changes 面板。
 
 对于当前没有稳定 Bridge 或 UI 的能力，必须显示未实现，不能伪造成功状态。PiDeck 不额外维护一套独立的 Pi CLI 执行面板。
@@ -175,5 +199,6 @@ terminal.execute（仅无副作用命令）
 
 ```bash
 npm run typecheck
+npm run test:renderer
 npm run build
 ```

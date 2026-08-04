@@ -13,6 +13,7 @@
 | 会话消息 | 中央对话线程 | `AgentSession.messages`；按 Pi `parseSkillBlock()` 语义将 Skill 引用与用户原文分层展示 |
 | 会话命名 | 会话列表与对话标题 | 从首条用户意图移除 Skill/命令/资源前缀后生成短标题，并通过 `AgentSession.setSessionName()` 持久化 |
 | 会话删除 | 会话更多菜单 | `sessions.delete` |
+| 会话位置与长会话 | 中央虚拟化对话线程 | `@tanstack/react-virtual`；每个 Session 缓存 pane、DOM `scrollTop`、follow 状态和测量快照；首次打开定位最新消息，切换恢复保存位置 |
 | Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
 | API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调 |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
@@ -20,6 +21,7 @@
 | Pi slash command catalog | 行首已知 `/` 前缀建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
 | `@file` 提示 | Composer `@` | `workspace.snapshot` 返回的当前工作区文件快照 |
 | Agent 流式事件 | 中央线程 | `agent_start`、`message_update`、`tool_execution_*` 等 |
+| Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`；队列新增、插入和处理在 follow 状态下自动跟随 |
 | 工具审批 | 中央审批卡 | 当前 PiHost `beforeToolCall` 适配 |
 | 工具过程 | 可折叠过程块 | Tool Result、工具名称、成功/失败状态 |
 | 本地终端 | Composer Terminal / `Ctrl/Cmd + J` | `AgentSession.executeBash()` |
@@ -51,11 +53,10 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 
 当前审批事件只提供工具名和参数，没有独立的风险等级字段；审批卡因此明确标记为“工具调用”，不会根据工具名伪造风险等级。
 
-## 已接入（新增）
+## 已接入的扩展能力
 
 以下能力已经完成基础桌面映射：
 
-- Steering / Follow-up 投递方式，以及 Pi 的 all / one-at-a-time 队列模式；入口位于 Composer 队列菜单。
 - Extension UI request 的 select、confirm、input、editor、notify 请求；请求会在桌面窗口中显示并回传结果。
 - Pi Package install/remove/update/config 管理器；入口位于命令面板中的 Pi packages。
 当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 与本地终端入口完成。

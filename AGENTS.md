@@ -11,6 +11,7 @@ PiDeck 的唯一产品边界是：把 `@earendil-works/pi-coding-agent`（Pi CLI
 - [Electron/PiHost 通信与验证](rules/runtime-compatibility.md)
 - [文档同步规则](rules/documentation-management.md)
 - [UI/UX 开发规范](rules/ui-ux-standards.zh-CN.md)
+- [Renderer 会话时间线与滚动规则](rules/renderer-session-timeline.zh-CN.md)
 
 ## 运行环境
 
@@ -26,6 +27,7 @@ PiDeck 的唯一产品边界是：把 `@earendil-works/pi-coding-agent`（Pi CLI
 - 可见文案必须放在独立的 i18n 配置/模块中，组件只读取 key，不在 JSX 中持续堆积中英文字符串。
 - Pi 能力的 fallback 目录必须独立于 UI 组件，并明确标注权威来源仍是 Pi CLI/SDK。
 - Main 只负责窗口、IPC 编排和 Host 生命周期。
+- `apps/desktop/src/renderer/App.tsx` 只保留入口和组合；页面、控制器、会话时间线、滚动和运行时事件逻辑必须放在对应的 `app-*`、`use-*`、`timeline-*` 或 UI 模块中。
 - PiHost 负责 Session、ModelRuntime、Agent、Tool、Provider、资源和 CLI 兼容能力。
 - 跨进程消息必须是可 JSON/structured-clone 序列化的数据，不传递函数、类实例或 AbortController。
 - 新增 IPC 必须先更新 `packages/contracts`，再实现 Main、Preload 和 Renderer。

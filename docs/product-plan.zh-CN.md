@@ -2,7 +2,7 @@
 
 > 文档状态：与当前代码基线对齐；未实现项单独标记为计划。
 >
-> 更新日期：2026-08-01
+> 更新日期：2026-08-04
 >
 > 目标平台：Windows、macOS、Linux 桌面端；Windows 优先验收。
 
@@ -39,7 +39,22 @@ apps/desktop/src/
 ├─ main/index.ts
 ├─ preload/index.ts
 ├─ renderer/
-│  ├─ App.tsx
+│  ├─ App.tsx                 # 入口与组合
+│  ├─ app-view.tsx            # 工作区与全局面板
+│  ├─ app-sidebar.tsx         # 项目/Session 侧栏
+│  ├─ app-conversation.tsx    # 会话 pane 与 Composer
+│  ├─ ui-components.tsx       # UI 与消息时间线
+│  ├─ timeline-utils.ts       # 回合分组与执行摘要
+│  ├─ use-app-controller.tsx  # 状态与动作编排
+│  ├─ use-session-data.ts     # Session 数据加载
+│  ├─ use-runtime-events.ts   # PiHost 事件归一化
+│  ├─ use-conversation-scroll.ts # 滚动快照与最新位置
+│  ├─ use-global-shortcuts.ts # 全局快捷键与焦点边界
+│  ├─ use-sent-images-cache.ts # 待发送图片缓存
+│  ├─ ui-performance.ts       # 有界性能 helper
+│  ├─ message-utils.ts        # 消息合并与 identity
+│  ├─ types.ts                # Renderer 状态与辅助类型
+│  ├─ image-cache.ts
 │  ├─ styles.css
 │  ├─ pi-capabilities.ts
 │  └─ main.tsx
@@ -72,6 +87,8 @@ packages/
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
 11. 使用 Provider API Key/OAuth 本地认证。
 12. 切换中文/英文和浅色/深色主题。
+13. 使用 Steering / Follow-up 队列、批处理模式和队列消息面板。
+14. 对长会话使用 TanStack Virtual，并按 Session 缓存消息 pane、滚动位置和测量快照。
 
 ## 4. 消息与对话行为
 
@@ -80,8 +97,11 @@ packages/
 - Markdown、代码块、表格和链接由 Renderer 展示层渲染，不改变 Pi 原始消息。
 - 会话标题已经避免直接使用完整 Skill 文本；Skill 展开后的 `<skill>` 内容仍需补充独立的折叠引用卡片，当前不应宣称已经完成。
 - 工具调用和思考过程应作为可折叠 Activity 展示，并显示工具数量、思考块数量和耗时。
+- “已处理”摘要优先由 Pi 原始 thinking/tool 内容重建；Provider 只保存空 thinking 或正式文本时，Renderer 根据消息时间戳生成轻量历史摘要。运行时 `completedActivity` 不视为持久化数据。
+- 思考摘要、流式回复和最终 Assistant 消息复用稳定时间线项，避免回复完成时卸载/重建整段消息列表。
 - 切换 Session 时立即定位到该会话的最新位置或保存的位置，不播放跨会话滚动动画。
 - 用户手动离开底部时显示“回到最新消息”，不强制抢夺滚动位置。
+- 排队消息新增、插入和处理时，只有在用户仍处于 follow 状态才自动滚动；用户向上滚动后立即退出 follow。
 
 ## 5. 当前 Bridge 契约
 
@@ -96,8 +116,12 @@ workspace.snapshot
 terminal.execute
 providers.list/login/logout/setApiKey/auth-response/open-auth-url
 agent.prompt/abort/setThinkingLevel/setModel
+agent.queue/setQueueModes/clearQueue/promoteQueue
 approvals.resolve
 events.subscribe
+extensions.resolveUi
+packages.list/install/remove/update/configure
+permissions.status/setMode
 ```
 
 Renderer → Preload → Main → PiHost 是唯一通信链路。新增 IPC 必须先更新 contracts，再实现 Main、Preload 和 Renderer。
@@ -153,12 +177,9 @@ PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Ex
 
 以下仍是计划，不是当前产品承诺：
 
-- Steering/Follow-up 队列模式。
-- Extension UI request 的完整映射。
-- Pi Package install/remove/update/config 管理器。
 - Print、JSON、RPC、stdin、Auth Print 兼容通道。
 - Monaco Diff、任务级基线和逐块审阅。
-- 10,000 条消息虚拟列表。
+- Extension 的 TUI 专属 `custom` 组件、主题、Widget、Footer、Header 等无法跨进程传递组件实例的能力。
 
 ## 9. 技术与安全约束
 
@@ -179,6 +200,7 @@ PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Ex
 npm install
 npm ls --depth=0 --workspaces
 npm run typecheck
+npm run test:renderer
 npm run build
 ```
 

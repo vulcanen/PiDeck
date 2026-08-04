@@ -1,11 +1,14 @@
-import { Component, lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
 import Editor from "react-simple-code-editor";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import type { AgentQueueState, AuthMethod, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionMode, PermissionStatus, PiPackageSummary, ProviderSummary, QueueDelivery, QueueMode } from "@pideck/contracts";
 import { parseSkillInvocation, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import { copyText, Icon, useDialogFocus } from "@pideck/ui-system";
 import type { ActivityStep, AuthPromptState, ImageAttachment, ImageContextMenuState, PreviewImage, ProviderFilter, SentImageMessage, SuggestionMode, WorkingPhase } from "./types";
 import { formatMessageTime, messageIdentity, textFromMessage } from "./message-utils";
+import { buildMessageTimelineItems } from "./timeline-utils";
+import type { ConversationScrollHandle, ConversationScrollSnapshot } from "./use-conversation-scroll";
 
 async function copyImageToClipboard(src: string): Promise<boolean> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") return false;
@@ -63,9 +66,9 @@ const MarkdownRenderer = lazy(async () => {
   } };
 });
 
-export function MarkdownContent({ text, language }: { text: string; language: Language }) {
+export const MarkdownContent = memo(function MarkdownContent({ text, language }: { text: string; language: Language }) {
   return <div className="markdown-content"><Suspense fallback={<p>{text}</p>}><MarkdownRenderer text={text} language={language} /></Suspense></div>;
-}
+});
 function SidebarSkeleton() {
   return <div className="sidebar-skeleton" aria-hidden="true">{[0, 1, 2, 3].map((item) => <span key={item} />)}</div>;
 }
@@ -105,6 +108,8 @@ function MessageView({ message, language, onPreviewImage, onContextMenuImage }: 
   return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{skillInvocation && <div className="message-invocations"><code className="message-invocation">/skill:{skillInvocation.name}</code></div>}{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <button type="button" className="image-preview-trigger" key={`${message.id ?? "image"}-${index}`} aria-label={t.imagePreview} onClick={() => onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })} onContextMenu={(event) => onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} /></button>)}</div>}{visibleText && <MarkdownContent text={visibleText} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
 }
 
+const MemoMessageView = memo(MessageView, (previous, next) => previous.message === next.message && previous.language === next.language && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage);
+
 function activityValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "";
   if (typeof value === "string") return value;
@@ -119,34 +124,6 @@ function formatActivityDuration(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
-}
-
-function activityFromMessages(messages: any[], language: Language): ActivityStep[] {
-  const steps: ActivityStep[] = [];
-  const toolSteps = new Map<string, ActivityStep>();
-  for (const message of messages) {
-    const timestamp = typeof message?.timestamp === "number" ? message.timestamp : Date.parse(message?.timestamp ?? "") || Date.now();
-    if (message?.role === "assistant" && Array.isArray(message.content)) {
-      for (const part of message.content) {
-        if (part?.type === "thinking" && part.thinking) steps.push({ id: `${message.id ?? timestamp}:thinking:${steps.length}`, kind: "thinking", label: copy[language].executionThinking, detail: part.thinking, startedAt: timestamp, endedAt: timestamp });
-        if (part?.type === "toolCall" || part?.type === "tool_call") {
-          const step = { id: part.id ?? part.toolCallId ?? `${message.id ?? timestamp}:tool:${steps.length}`, kind: "tool" as const, label: part.name ?? part.toolName ?? copy[language].toolResult, args: part.arguments ?? part.args ?? {}, startedAt: timestamp };
-          steps.push(step);
-          toolSteps.set(step.id, step);
-        }
-      }
-    }
-    if (message?.role === "toolResult") {
-      const toolId = message.toolCallId ?? message.tool_call_id;
-      const step = toolSteps.get(toolId);
-      if (step) {
-        step.result = textFromMessage(message);
-        step.endedAt = timestamp;
-        step.isError = Boolean(message.isError);
-      }
-    }
-  }
-  return steps;
 }
 
 function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[]; language: Language; running: boolean }) {
@@ -176,87 +153,224 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
   </details>;
 }
 
-function MessageTimeline({ messages, language, running, completedActivity, steeringMessageKeys, onPreviewImage, onContextMenuImage }: { messages: any[]; language: Language; running: boolean; completedActivity: ActivityStep[][]; steeringMessageKeys: string[]; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
-  const items: Array<{ type: "message"; message: any; index: number } | { type: "execution"; steps: ActivityStep[]; index: number }> = [];
-  let turn: any[] = [];
-  let turnIndex = 0;
-  const steeringKeys = new Set(steeringMessageKeys);
-  // A steering message is delivered inside the current agent run, so it does
-  // not create another logical turn or another completed activity summary.
-  let userTurnCount = 0;
-  let hasAssistantInLogicalTurn = false;
-  let hasMessageInLogicalTurn = false;
-  for (const message of messages) {
-    const isSteeringMessage = message?.role === "user" && steeringKeys.has(messageIdentity(message) ?? "");
-    if (message?.role === "user") {
-      if (!hasMessageInLogicalTurn) {
-        userTurnCount += 1;
-        hasMessageInLogicalTurn = true;
-      } else if (hasAssistantInLogicalTurn && !isSteeringMessage) {
-        userTurnCount += 1;
-        hasAssistantInLogicalTurn = false;
-      }
-    } else if (message?.role === "assistant") {
-      hasAssistantInLogicalTurn = true;
-    }
-  }
-  // completedActivity only covers turns observed during the current app
-  // lifetime. Align it to the newest persisted turns when the session already
-  // contains older history.
-  const observedTurnCount = completedActivity.length + (running ? 1 : 0);
-  const activityOffset = Math.max(0, userTurnCount - observedTurnCount);
-  const flushTurn = (isFinal = false) => {
-    if (!turn.length) return;
-    // Runtime activity has the real start/end times. Persisted messages only
-    // retain a result timestamp, which would make every historical summary
-    // appear as 0s and can associate a queued turn with the previous one.
-    const recordedActivity = completedActivity[turnIndex - activityOffset];
-    const steps = recordedActivity?.length
-      ? recordedActivity
-      : activityFromMessages(turn, language);
-    if (!steps.length) {
-      for (const [index, message] of turn.entries()) if (message?.role !== "toolResult") items.push({ type: "message", message, index: items.length + index });
-      turn = [];
-      turnIndex += 1;
-      return;
-    }
-    // Keep every user message in a shared steering turn. The summary is
-    // inserted once immediately before the first assistant reply, so all
-    // inputs are visible above it and the response follows below it.
-    let summaryInserted = false;
-    for (const message of turn) {
-      if (message?.role === "user") {
-        items.push({ type: "message", message, index: items.length });
-      } else if (message?.role === "assistant" && textFromMessage(message)) {
-        // While a queued turn is running, keep earlier turns (which are no
-        // longer the final turn) visible with their completed execution summary.
-        if (!summaryInserted && (!running || !isFinal)) {
-          items.push({ type: "execution", steps, index: items.length });
-          summaryInserted = true;
-        }
-        items.push({ type: "message", message, index: items.length });
-      }
-    }
-    // A completed turn can contain user messages without a textual assistant
-    // reply (for example an interrupted/empty response). Keep its summary
-    // visible after the inputs instead of dropping it.
-    if (!summaryInserted && (!running || !isFinal)) items.push({ type: "execution", steps, index: items.length });
-    turn = [];
-    turnIndex += 1;
-  };
-  for (const message of messages) {
-    // Steering messages are delivered inside the current agent run. Keep
-    // them in the same timeline turn so the run has one shared summary.
-    const isSteeringMessage = message?.role === "user" && steeringKeys.has(messageIdentity(message) ?? "");
-    const hasAssistant = turn.some((item) => item?.role === "assistant");
-    if (message?.role === "user" && turn.length && !isSteeringMessage && hasAssistant) flushTurn();
-    turn.push(message);
-  }
-  flushTurn(true);
-  return <>{items.map((item) => item.type === "execution" ? <ExecutionSummary key={`execution-${item.index}`} steps={item.steps} language={language} running={false} /> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />)}</>;
+interface MessageTimelineProps {
+  messages: any[];
+  language: Language;
+  running: boolean;
+  activeActivity: ActivityStep[];
+  streamText: string;
+  workingPhase: WorkingPhase;
+  toolName?: string;
+  completedActivity: ActivityStep[][];
+  steeringMessageKeys: string[];
+  taskId: string;
+  active: boolean;
+  messageReady: boolean;
+  conversationRef: RefObject<HTMLDivElement | null>;
+  scrollPositionsRef: { current: Record<string, ConversationScrollSnapshot> };
+  scrollHandleRef: { current: ConversationScrollHandle | null };
+  onAtEndChange: (atEnd: boolean) => void;
+  footer?: ReactNode;
+  onPreviewImage: (image: PreviewImage) => void;
+  onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void;
 }
 
-const MemoMessageTimeline = memo(MessageTimeline, (previous, next) => previous.messages === next.messages && previous.language === next.language && previous.running === next.running && previous.completedActivity === next.completedActivity && previous.steeringMessageKeys === next.steeringMessageKeys);
+// Long conversations use TanStack Virtual's chat contract: dynamic row
+// measurement, stable message keys, end anchoring, and follow-on-append.
+// This component is the single owner of timeline scrolling. It snapshots both
+// the virtualizer measurements and offset on unmount, then consumes them once
+// as the next mount's initial state. No parent effect writes scrollTop.
+function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, completedActivity, steeringMessageKeys, taskId, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage }: MessageTimelineProps) {
+  const items = useMemo(() => buildMessageTimelineItems({ messages, language, running, completedActivity, steeringMessageKeys, taskId, liveText: streamText, activeActivity, workingPhase, toolName }), [activeActivity, completedActivity, language, messages, running, steeringMessageKeys, streamText, taskId, toolName, workingPhase]);
+  const count = items.length + (footer ? 1 : 0);
+  const initialSnapshotRef = useRef<ConversationScrollSnapshot | undefined>(scrollPositionsRef.current[taskId]);
+  const initializedRef = useRef(false);
+  const virtualizerRef = useRef<Virtualizer<HTMLDivElement, HTMLDivElement> | null>(null);
+  const userScrollOverrideRef = useRef(false);
+  const getScrollElement = useCallback(() => conversationRef.current, [conversationRef]);
+  const getItemKey = useCallback((index: number) => {
+    if (index >= items.length) return `footer-${taskId}`;
+    const item = items[index];
+    if (item.type === "execution") return item.stableKey ?? `execution-${item.steps[0]?.id ?? item.index}`;
+    if (item.type === "live") return item.stableKey;
+    return item.stableKey ?? messageIdentity(item.message) ?? `message-${item.index}`;
+  }, [items, taskId]);
+  const handleVirtualizerChange = useCallback((instance: Virtualizer<HTMLDivElement, HTMLDivElement>, sync: boolean) => {
+    const previous = scrollPositionsRef.current[taskId];
+    const element = conversationRef.current;
+    const measurements = sync
+      ? previous?.measurements ?? initialSnapshotRef.current?.measurements ?? []
+      : instance.takeSnapshot();
+    const follow = element
+      ? Math.max(0, element.scrollHeight - element.clientHeight - element.scrollTop) <= 80
+      : instance.isAtEnd();
+    const effectiveFollow = userScrollOverrideRef.current ? false : follow;
+    scrollPositionsRef.current[taskId] = {
+      // The browser owns the physical scroll position. TanStack's internal
+      // offset can temporarily include an anchor adjustment while a measured
+      // row settles; persisting that value makes each task switch drift a few
+      // pixels farther down. Prefer the actual DOM scrollTop whenever it exists.
+      top: conversationRef.current?.scrollTop ?? instance.scrollOffset ?? 0,
+      follow: effectiveFollow,
+      measurements,
+    };
+    if (active) onAtEndChange(effectiveFollow);
+  }, [active, conversationRef, onAtEndChange, scrollPositionsRef, taskId]);
+
+  // This cleanup is intentionally declared before useVirtualizer's own layout
+  // effects. React runs layout cleanups in declaration order, so it captures
+  // the offset and end state while TanStack is still attached to the shared
+  // scroll element.
+  useLayoutEffect(() => () => {
+    const instance = virtualizerRef.current;
+    const element = conversationRef.current;
+    const previous = scrollPositionsRef.current[taskId];
+    const domFollow = element
+      ? Math.max(0, element.scrollHeight - element.clientHeight - element.scrollTop) <= 80
+      : false;
+    scrollPositionsRef.current[taskId] = {
+      top: element?.scrollTop ?? instance?.scrollOffset ?? previous?.top ?? 0,
+      follow: instance ? instance.isAtEnd() : previous?.follow ?? domFollow,
+      measurements: instance?.takeSnapshot() ?? previous?.measurements ?? initialSnapshotRef.current?.measurements ?? [],
+    };
+  }, [conversationRef, scrollPositionsRef, taskId]);
+
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement,
+    estimateSize: (index) => index >= items.length ? 80 : items[index]?.type === "execution" ? 56 : 120,
+    getItemKey,
+    measureElement: (element) => element.getBoundingClientRect().height,
+    // When switching to a cached task, defer restoring its offset until the
+    // fresh message snapshot is ready. Applying the old offset to stale row
+    // heights is what causes a small cumulative drift in variable-height
+    // conversations after each switch.
+    // A task without a snapshot is being opened for the first time. Seed the
+    // virtualizer at an intentionally oversized offset so the browser clamps
+    // it to the real bottom during TanStack's own mount pass. Starting at 0
+    // and calling scrollToEnd only afterwards can render the first range and
+    // let that top position win before the scroll container is measured.
+    initialOffset: messageReady
+      ? initialSnapshotRef.current && !initialSnapshotRef.current.follow
+        ? initialSnapshotRef.current.top
+        : Number.MAX_SAFE_INTEGER
+      : 0,
+    initialMeasurementsCache: messageReady ? initialSnapshotRef.current?.measurements ?? [] : [],
+    overscan: 6,
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollEndThreshold: 80,
+    onChange: handleVirtualizerChange,
+  });
+  virtualizerRef.current = virtualizer;
+  const renderedItems = virtualizer.getVirtualItems();
+
+  useLayoutEffect(() => {
+    if (initializedRef.current || !messageReady || count === 0) return;
+    initializedRef.current = true;
+    const initial = initialSnapshotRef.current;
+    if (!initial || initial.follow) {
+      virtualizer.scrollToEnd();
+      // Re-assert the initial latest position after the first browser layout.
+      // This catches a zero-sized flex viewport during Electron's startup
+      // without changing later user-controlled positions.
+      const frame = window.requestAnimationFrame(() => virtualizer.scrollToEnd());
+      return () => window.cancelAnimationFrame(frame);
+    } else {
+      // The scroll element is intentionally shared between task mounts. TanStack
+      // restores its internal offset from `initialOffset`, but an existing DOM
+      // scrollTop can still win during the first layout pass. Re-apply the
+      // historical offset after the new measurements are installed so switching
+      // away from a task at the bottom cannot force this task to the bottom too.
+      virtualizer.scrollToOffset(initial.top, { behavior: "auto" });
+      if (active) onAtEndChange(false);
+    }
+  }, [active, count, messageReady, onAtEndChange, virtualizer]);
+
+  // A streaming response grows an existing virtual row instead of appending
+  // a new row. Keep the viewport at the latest content while the user is
+  // following the conversation; once they scroll away, the saved `follow`
+  // flag prevents the assistant from pulling them back down.
+  useLayoutEffect(() => {
+    if (!active || !messageReady || !items.length || !scrollPositionsRef.current[taskId]?.follow) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (scrollPositionsRef.current[taskId]?.follow) virtualizer.scrollToEnd({ behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [active, items.length, messageReady, messages, scrollPositionsRef, streamText, taskId, virtualizer]);
+
+  useLayoutEffect(() => {
+    if (!active) return;
+    onAtEndChange(virtualizer.isAtEnd());
+    const handle: ConversationScrollHandle = {
+      scrollToLatest: (behavior) => {
+        userScrollOverrideRef.current = false;
+        virtualizer.scrollToEnd({ behavior });
+        onAtEndChange(true);
+      },
+    };
+    scrollHandleRef.current = handle;
+    return () => {
+      if (scrollHandleRef.current === handle) scrollHandleRef.current = null;
+    };
+  }, [active, onAtEndChange, scrollHandleRef, virtualizer]);
+
+  // Keep the task snapshot and the jump affordance in sync with the browser's
+  // actual scrollTop as well as TanStack's virtual offset. This covers a wheel
+  // event that lands before the virtualizer publishes its next range and avoids
+  // losing the user's position when they switch tasks immediately afterward.
+  const handleNativeScroll = useCallback(() => {
+    const element = conversationRef.current;
+    if (!element) return;
+    const previous = scrollPositionsRef.current[taskId];
+    const top = element.scrollTop;
+    const movingAwayFromEnd = previous ? top < previous.top - 1 : false;
+    const follow = Math.max(0, element.scrollHeight - element.clientHeight - top) <= 80;
+    if (movingAwayFromEnd) userScrollOverrideRef.current = true;
+    else if (follow) userScrollOverrideRef.current = false;
+    const effectiveFollow = userScrollOverrideRef.current ? false : follow;
+    scrollPositionsRef.current[taskId] = {
+      top,
+      // A user-initiated upward wheel gesture must opt out of end-following
+      // immediately, even while still inside the 80px end threshold. Without
+      // this distinction the next virtualizer measurement snaps the wheel
+      // back to the bottom and feels like scroll resistance.
+      follow: effectiveFollow,
+      measurements: previous?.measurements ?? initialSnapshotRef.current?.measurements ?? [],
+    };
+    if (active) onAtEndChange(effectiveFollow);
+  }, [active, conversationRef, onAtEndChange, scrollPositionsRef, taskId]);
+
+  useLayoutEffect(() => {
+    const element = conversationRef.current;
+    if (!element) return;
+    element.addEventListener("scroll", handleNativeScroll, { passive: true, capture: true });
+    return () => element.removeEventListener("scroll", handleNativeScroll, true);
+  }, [conversationRef, handleNativeScroll]);
+
+  const renderItem = useCallback((index: number) => {
+    if (index >= items.length) return footer;
+    const item = items[index];
+    return item.type === "execution"
+      ? <ExecutionSummary steps={item.steps} language={language} running={Boolean(item.running)} />
+      : item.type === "live"
+        ? <article className="message assistant-message live-message"><div className="live-message-status">{item.text ? <span className="live-pill"><span className="live-dot" />{copy[language].working}</span> : null}</div>{item.text ? <div className="message-content"><MarkdownContent text={item.text} language={language} /></div> : <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} />}</article>
+      : <MemoMessageView message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />;
+  }, [footer, items, language, onContextMenuImage, onPreviewImage]);
+
+  if (count === 0) return null;
+  return <div className="timeline-virtual-host" style={{ height: virtualizer.getTotalSize() }}>
+    {renderedItems.map((virtualItem) => <div
+      key={virtualItem.key}
+      ref={virtualizer.measureElement}
+      data-index={virtualItem.index}
+      className="timeline-item"
+      style={{ transform: `translateY(${virtualItem.start}px)` }}
+    >{renderItem(virtualItem.index)}</div>)}
+  </div>;
+}
+
+const MemoMessageTimeline = memo(MessageTimeline, (previous, next) => previous.messages === next.messages && previous.language === next.language && previous.running === next.running && previous.activeActivity === next.activeActivity && previous.streamText === next.streamText && previous.workingPhase === next.workingPhase && previous.toolName === next.toolName && previous.completedActivity === next.completedActivity && previous.steeringMessageKeys === next.steeringMessageKeys && previous.taskId === next.taskId && previous.active === next.active && previous.messageReady === next.messageReady && previous.conversationRef === next.conversationRef && previous.scrollPositionsRef === next.scrollPositionsRef && previous.scrollHandleRef === next.scrollHandleRef && previous.onAtEndChange === next.onAtEndChange && previous.footer === next.footer && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage);
 
 function formatTokenCount(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
@@ -358,7 +472,9 @@ function highlightComposerText(value: string, commandNames: string[]): ReactNode
   return result;
 }
 
-function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; onStop: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void; queueDelivery: QueueDelivery; queueState: AgentQueueState | null; queueMutationBusy: boolean; onQueueDelivery: (delivery: QueueDelivery) => void; onQueueModes: (modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }) => void; onClearQueue: () => void; onPromoteQueue: (followUpIndex: number) => void }) {
+export type ComposerProps = { sessionKey: string; value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; onStop: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void; queueDelivery: QueueDelivery; queueState: AgentQueueState | null; queueMutationBusy: boolean; onQueueDelivery: (delivery: QueueDelivery) => void; onQueueModes: (modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }) => void; onClearQueue: () => void; onPromoteQueue: (followUpIndex: number) => void };
+
+function Composer(props: ComposerProps) {
   const t = copy[props.language];
   const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const queueMenuRef = useRef<HTMLDivElement>(null);
@@ -432,6 +548,28 @@ function Composer(props: { value: string; onChange: (value: string) => void; onK
     </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !hasDraft} aria-label={stopOnly ? t.stop : t.send} title={stopOnly ? t.stop : t.send} onClick={stopOnly ? props.onStop : props.onSend}><Icon name={stopOnly ? "stop" : "send"} size={16} /></button></div></div>
   </div></div>;
 }
+
+const MemoComposer = memo(Composer, (previous, next) =>
+  previous.sessionKey === next.sessionKey
+  && previous.value === next.value
+  && previous.isSending === next.isSending
+  && previous.language === next.language
+  && previous.activeModel === next.activeModel
+  && previous.modelOptions === next.modelOptions
+  && previous.thinkingLevel === next.thinkingLevel
+  && previous.thinkingLevels === next.thinkingLevels
+  && previous.thinkingMenuOpen === next.thinkingMenuOpen
+  && previous.modelMenuOpen === next.modelMenuOpen
+  && previous.suggestionMode === next.suggestionMode
+  && previous.suggestions === next.suggestions
+  && previous.suggestionIndex === next.suggestionIndex
+  && previous.contextUsage === next.contextUsage
+  && previous.commandNames === next.commandNames
+  && previous.attachments === next.attachments
+  && previous.queueDelivery === next.queueDelivery
+  && previous.queueState === next.queueState
+  && previous.queueMutationBusy === next.queueMutationBusy
+);
 
 function TerminalPanel({ language, cwd, output, command, running, onCommand, onExecute, onClose }: { language: Language; cwd: string; output: string[]; command: string; running: boolean; onCommand: (value: string) => void; onExecute: () => void; onClose: () => void }) {
   const t = copy[language];
@@ -653,4 +791,4 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
 }
 
 
-export { handleRovingMenuKeyDown, copyImageToClipboard, SidebarSkeleton, ConversationSkeleton, StateMark, TaskRow, MessageView, ExecutionSummary, MemoMessageTimeline, ContextRing, ContextRingPopover, PermissionLevelControl, WorkingIndicator, ApprovalCard, Composer, TerminalPanel, CommandPaletteBoundary, CommandPalette, ImagePreview, ExtensionUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog, PackageSettings, ProviderSettings };
+export { handleRovingMenuKeyDown, copyImageToClipboard, SidebarSkeleton, ConversationSkeleton, StateMark, TaskRow, MessageView, ExecutionSummary, MemoMessageTimeline, ContextRing, ContextRingPopover, PermissionLevelControl, WorkingIndicator, ApprovalCard, Composer, MemoComposer, TerminalPanel, CommandPaletteBoundary, CommandPalette, ImagePreview, ExtensionUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog, PackageSettings, ProviderSettings };
