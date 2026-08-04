@@ -40,9 +40,9 @@ Main 只负责：
 - 在 Renderer IPC 与 PiHost 请求之间做编排。
 - 为请求设置超时，处理 Host 断开。
 - 通过系统浏览器打开经过协议校验的 HTTP(S) URL。
-- 在 Electron `userData/projects.json` 中记录项目目录引用及其显示顺序。
+- 在 Electron `userData/projects.json` 中记录项目目录引用、隐藏引用及其显示顺序。
 
-项目目录清单只保存 `cwd`，不保存 Session 或工作区内容。Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
+项目目录清单只保存 `cwd`，不保存 Session 或工作区内容。Renderer 单击项目时通过 `sessions.list(cwd)` 按需展开会话列表，并以独立展开状态保留其它项目，不改变当前中央会话；只有单击具体会话才切换工作区。项目右键“移除”只把 `cwd` 加入隐藏引用，不删除项目文件或 Pi Session。Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
 
 ### 2.2 Preload
 
@@ -52,18 +52,17 @@ Preload 通过 `contextBridge` 暴露 capability-scoped 的 `window.pideck`。Re
 
 ### 2.3 PiHost
 
-`apps/desktop/src/utility/pi-host/index.ts`
+`packages/pi-host/src/index.ts`
 
 PiHost 负责：
 
-- 定位并动态加载 Pi SDK。
-- 创建和缓存 `SessionManager`、`AgentSession` 和 `ModelRuntime`。
+- 编排 `@pideck/pi-adapter`、SessionManager、AgentSession 和 ModelRuntime。
 - 读取/恢复 Pi Session。
 - 转发 Agent event、Approval event、Auth event。
 - 执行 Pi built-in tools、Bash、Provider 登录和会话操作。
 - 将跨进程数据转换成可 JSON 序列化的响应。
 
-当前 PiHost 会通过 Pi Extension 机制加载 `@gotgenes/pi-permission-system`（若运行时资源可用），并将其 `allow/ask/deny`、`yoloMode` 和审批 UI 请求桥接到桌面。PiDeck 只保留兼容 fallback：当 Extension 不可加载时，才使用 `beforeToolCall` 的安全工具直通与审批卡。
+Pi SDK 的动态定位、加载和模型/Session 适配集中在 `packages/pi-adapter`。Pi 权限配置、Extension UI 绑定、审批等待和策略切换集中在 `packages/permission-engine`。两者都不创建第二套 Agent、Provider 或 Session 存储；权威来源仍是 Pi SDK 和 `@gotgenes/pi-permission-system`。
 
 ## 3. 当前仓库结构
 
@@ -76,30 +75,36 @@ PiDeck/
 │     ├─ renderer/
 │     │  ├─ App.tsx                 # 当前工作区、对话、设置和面板
 │     │  ├─ styles.css              # 当前 UI token 与布局样式
-│     │  ├─ i18n.ts                 # zh/en 文案
-│     │  ├─ ui.tsx                  # Icon、焦点管理、剪贴板等共享基元
 │     │  ├─ pi-capabilities.ts      # Pi 不可用时的独立命令 fallback
 │     │  ├─ main.tsx                # Renderer 入口
 │     │  └─ vite-env.d.ts
-│     └─ utility/pi-host/index.ts   # PiHost 入口
 ├─ packages/
 │  ├─ contracts/                    # Bridge、IPC command、runtime event 类型
-│  └─ domain/                       # Task、Project 等纯领域类型
+│  ├─ domain/                       # Task、Project 类型及共享运行时 helper
+│  ├─ pi-adapter/                   # Pi SDK 定位、加载及模型/Session 适配
+│  ├─ pi-host/                      # PiHost 进程入口和 Host command 编排
+│  ├─ permission-engine/            # Pi 权限配置、Extension UI 和审批等待
+│  ├─ ui-system/                    # Renderer 共享 Icon、焦点和剪贴板基元
+│  └─ i18n/                         # zh/en 文案和命令描述
 ├─ docs/
 ├─ rules/
 └─ package.json
 ```
 
-目前尚未存在 `packages/pi-adapter`、`packages/pi-host`、`packages/permission-engine`、`packages/ui-system`、`packages/i18n` 等独立包。它们是未来拆分方向，不应在当前文档中被写成已存在模块。
+上述 `packages/pi-adapter`、`packages/pi-host`、`packages/permission-engine`、`packages/ui-system`、`packages/i18n` 已作为当前实现的独立 workspace 包存在；它们负责代码边界拆分，不引入第二套 Agent、权限、会话或凭据系统。
 
 ## 4. 依赖方向与边界
 
 ```text
-renderer → contracts/domain
+renderer → contracts/domain/i18n/ui-system
 preload  → contracts
-main     → contracts
-pi-host  → contracts + Pi SDK
+main     → contracts + pi-host（仅启动进程）
+pi-host  → contracts + domain + pi-adapter + permission-engine
+pi-adapter → Pi SDK（仅动态加载和公开 API 适配）
+permission-engine → contracts + Pi Permission System 配置
 ```
+
+这些 workspace 包的类型入口保留在 `src/index.ts` / `src/index.tsx`，运行时入口指向构建生成的 `dist/index.js`。桌面开发和生产构建会先编译 `domain`、`pi-adapter`、`permission-engine`、`pi-host`、`i18n` 和 `ui-system`，避免系统 Node 或 Renderer 直接加载未编译的 TypeScript。
 
 必须遵守：
 
@@ -115,8 +120,8 @@ pi-host  → contracts + Pi SDK
 以 `packages/contracts/src/index.ts` 为准，当前已声明：
 
 - `runtime.status`
-- `projects.list/chooseDirectory`
-- `sessions.list/create/delete/messages/capabilities/tree/navigate/fork/compact/export`
+- `projects.list/chooseDirectory/remove`
+- `sessions.list/create/delete/messages/capabilities/compact/export`
 - `models.list`
 - `workspace.snapshot`
 - `terminal.execute`
@@ -149,7 +154,7 @@ PiHost 将以下事件发送到 Renderer：
 - Pi Session export/compact/tree → 会话操作和命令面板入口。
 - Pi workspace / git status → Files 与 Changes 面板。
 
-对于当前没有稳定 Bridge 或 UI 的能力，必须显示未实现或通过 Pi CLI 兼容通道提供，不能伪造成功状态。
+对于当前没有稳定 Bridge 或 UI 的能力，必须显示未实现，不能伪造成功状态。PiDeck 不额外维护一套独立的 Pi CLI 执行面板。
 
 ## 8. 运行时验证
 

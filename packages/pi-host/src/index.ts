@@ -1,5 +1,7 @@
 import type { PermissionMode, PiHostRequest, PiHostResponse } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
+import { getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel, type PiSdk } from "@pideck/pi-adapter";
+import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
@@ -7,29 +9,6 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-type PiSdk = {
-  ModelRuntime: {
-    create(options?: { allowModelNetwork?: boolean }): Promise<any>;
-  };
-  DefaultResourceLoader?: new (options: { cwd: string; agentDir: string; additionalExtensionPaths?: string[] }) => any;
-  getAgentDir?: () => string;
-  parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
-  SessionManager: {
-    list(cwd: string): Promise<any[]>;
-    listAll(): Promise<any[]>;
-    create(cwd: string): {
-      appendSessionInfo(name: string): void;
-      getSessionId(): string;
-      getSessionFile?: () => string | undefined;
-    };
-    open(path: string): any;
-    inMemory(cwd?: string): any;
-  };
-  createAgentSession(options: { cwd: string; sessionManager: any; modelRuntime: any; resourceLoader?: any }): Promise<{ session: any }>;
-};
-
-let sdkPromise: Promise<PiSdk> | undefined;
-let modelRuntimePromise: Promise<any> | undefined;
 const parentPort = (process as typeof process & {
   parentPort?: {
     on(event: "message", listener: (event: { data: unknown }) => void): void;
@@ -41,78 +20,22 @@ const sessionFiles = new Map<string, string>();
 const titledSessions = new Set<string>();
 const agentSessions = new Map<string, any>();
 const agentSessionPromises = new Map<string, Promise<any>>();
+// `session.isStreaming` is updated by Pi asynchronously. Reserve a task as
+// soon as a direct prompt is accepted so a second prompt arriving in that
+// small window is queued instead of starting a competing run.
+const agentRunReservations = new Set<string>();
 const capabilitySessions = new Map<string, any>();
 const authWaiters = new Map<string, (value: string) => void>();
-const approvalWaiters = new Map<string, (allow: boolean) => void>();
-let permissionMode: PermissionMode = "ask";
-let permissionRevision = 0;
 const agentSessionRevisions = new Map<string, number>();
-
-function permissionConfigPath(): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
-  return path.join(agentDir, "extensions", "pi-permission-system", "config.json");
-}
-
-function loadPermissionMode() {
-  try {
-    const config = JSON.parse(readFileSync(permissionConfigPath(), "utf8")) as { yoloMode?: boolean; permission?: Record<string, unknown> };
-    if (config.yoloMode) return "yolo" as const;
-    const fallback = config.permission?.["*"];
-    if (fallback === "allow" || fallback === "ask" || fallback === "deny") return fallback;
-  } catch {
-    // Use PiDeck's safe ask default when no plugin config exists.
-  }
-  return "ask" as const;
-}
-
-function permissionStatus() {
-  return {
-    mode: permissionMode,
-    source: existsSync(path.resolve(process.cwd(), "node_modules/@gotgenes/pi-permission-system/src/index.ts")) ? "pi-permission-system" : "pideck-fallback",
-    configPath: permissionConfigPath(),
-  } as const;
-}
-
-function persistPermissionMode(mode: PermissionMode) {
-  const configPath = permissionConfigPath();
-  let config: Record<string, unknown> = {};
-  try { if (existsSync(configPath)) config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>; } catch { config = {}; }
-  const policy = mode === "yolo" ? "ask" : mode;
-  config.permission = { ...(typeof config.permission === "object" && config.permission ? config.permission : {}), "*": policy };
-  config.yoloMode = mode === "yolo";
-  mkdirSync(path.dirname(configPath), { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\\n`, "utf8");
-}
-
-async function setPermissionMode(mode: PermissionMode) {
-  permissionMode = mode;
-  permissionRevision += 1;
-  // Apply a changed policy to an approval that is already waiting without
-  // aborting or disposing the running AgentSession. Idle sessions are lazily
-  // rebuilt by ensureAgentSession on the next prompt.
-  if (mode === "allow" || mode === "yolo" || mode === "deny") {
-    const decision = mode === "deny" ? "deny" : "allow-once";
-    for (const [requestId, resolve] of approvalWaiters.entries()) {
-      resolve(decision === "allow-once");
-      const separator = requestId.indexOf(":");
-      const taskId = separator > 0 ? requestId.slice(0, separator) : requestId;
-      emit(taskId, { type: "approval.resolved", requestId, decision, source: "permission-mode" });
-    }
-    approvalWaiters.clear();
-  }
-  capabilitySessions.clear();
-  persistPermissionMode(mode);
-  return permissionStatus();
-}
-
-function resolvePermissionExtensionPath(): string | undefined {
-  const candidates = [
-    process.env.PIDECK_PERMISSION_EXTENSION,
-    path.resolve(process.cwd(), "node_modules/@gotgenes/pi-permission-system/src/index.ts"),
-    path.resolve(process.cwd(), "apps/desktop/node_modules/@gotgenes/pi-permission-system/src/index.ts"),
-    path.resolve(__dirname, "../../../node_modules/@gotgenes/pi-permission-system/src/index.ts"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => existsSync(candidate));
+const extensionUiWaiters = new Map<string, (value: string | boolean | undefined) => void>();
+function normalizePackageInstallSource(source: string): string {
+  const trimmed = source.trim();
+  // Pi's package manager distinguishes npm packages with the `npm:` prefix.
+  // Keep explicit paths and Git/URL sources untouched; a bare package name is
+  // the common input users expect in the desktop package panel.
+  if (/^(?:npm:|https?:\/\/|git\+|git@|ssh:\/\/|file:|~[\\/]|\.{0,2}[\\/]|[A-Za-z]:[\\/]|[\\/])/.test(trimmed)) return trimmed;
+  if (/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+(?:@[^\s]+)?$/.test(trimmed)) return `npm:${trimmed}`;
+  return trimmed;
 }
 
 function resolveWorkspaceCwd(): string {
@@ -135,68 +58,6 @@ function resolveWorkspaceCwd(): string {
   }
 }
 
-function resolvePiModule(): string {
-  if (process.env.PIDECK_PI_MODULE && existsSync(process.env.PIDECK_PI_MODULE)) return process.env.PIDECK_PI_MODULE;
-  const candidates: string[] = [];
-  const addRoot = (root: string) => {
-    const normalized = root.trim().replace(/^['\"]|['\"]$/g, "");
-    if (!normalized) return;
-    candidates.push(path.join(normalized, "@earendil-works", "pi-coding-agent", "dist", "index.js"));
-    candidates.push(path.join(normalized, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"));
-  };
-  const addExecutable = (executable: string) => {
-    const clean = executable.trim();
-    if (!clean) return;
-    addRoot(path.dirname(clean));
-    if (process.platform === "win32" && existsSync(`${clean}.cmd`)) addRoot(path.dirname(`${clean}.cmd`));
-    try {
-      const shim = readFileSync(existsSync(clean) ? clean : `${clean}.cmd`, "utf8");
-      const match = /([A-Za-z]:[^\"\r\n]*@earendil-works[\\/]pi-coding-agent[\\/]dist[\\/]index\.js)/i.exec(shim);
-      if (match) candidates.push(match[1].replaceAll("\\\\", path.sep));
-    } catch {
-      // A shell shim is optional; the prefix candidates are sufficient.
-    }
-  };
-  try {
-    const executable = process.platform === "win32"
-      ? execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "where.exe"), ["pi"], { encoding: "utf8" }).split(/\r?\n/).find(Boolean) ?? ""
-      : execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
-    addExecutable(executable);
-  } catch {
-    // Continue with PATH and npm-prefix discovery.
-  }
-  for (const bin of (process.env.PATH ?? "").split(path.delimiter)) if (bin) addRoot(path.join(bin, "node_modules"));
-  for (const prefix of [process.env.PIDECK_PI_GLOBAL_ROOT, process.env.npm_config_prefix, process.env.NPM_CONFIG_PREFIX, process.env.APPDATA ? path.join(process.env.APPDATA, "npm") : "", process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "npm") : ""]) if (prefix) addRoot(prefix);
-  for (const npmCommand of process.platform === "win32" ? ["npm.cmd", "npm"] : ["npm"]) {
-    try { addRoot(execFileSync(npmCommand, ["root", "-g"], { encoding: "utf8" })); } catch { /* npm is optional in packaged builds */ }
-  }
-  addRoot(path.resolve(process.cwd(), "node_modules"));
-  addRoot(path.resolve(__dirname, "../../../node_modules"));
-  const resolved = candidates.find((candidate) => existsSync(candidate));
-  if (!resolved) {
-    throw new Error(`Could not locate Pi SDK. Set PIDECK_PI_MODULE to @earendil-works/pi-coding-agent/dist/index.js. Searched ${candidates.length} locations.`);
-  }
-  return resolved;
-}
-
-function loadPiSdk(): Promise<PiSdk> {
-  sdkPromise ??= import(pathToFileURL(resolvePiModule()).href).catch((error) => {
-    sdkPromise = undefined;
-    throw error;
-  }) as Promise<PiSdk>;
-  return sdkPromise;
-}
-
-async function getModelRuntime() {
-  modelRuntimePromise ??= loadPiSdk().then((sdk) => sdk.ModelRuntime.create({ allowModelNetwork: false })).catch((error) => {
-    modelRuntimePromise = undefined;
-    throw error;
-  });
-  return modelRuntimePromise;
-}
-
-permissionMode = loadPermissionMode();
-
 function send(response: PiHostResponse) {
   parentPort?.postMessage(response);
   process.send?.(response);
@@ -218,43 +79,13 @@ function emitApproval(requestId: string, taskId: string, toolName: string, args:
   process.send?.(message);
 }
 
-function createPermissionUi(taskId: string) {
-  return {
-    select: (title: string, options: string[]) => new Promise<string | undefined>((resolve) => {
-      const requestId = `${taskId}:permission:${Date.now()}`;
-      emitApproval(requestId, taskId, "permission-system", { title, options });
-      approvalWaiters.set(requestId, (allowed) => resolve(allowed ? options[0] : options[options.length - 1]));
-    }),
-    confirm: async () => false,
-    input: async () => undefined,
-    notify: (message: string) => emit(taskId, { type: "permission.notice", message }),
-    onTerminalInput: () => () => undefined,
-    setStatus: () => undefined,
-    setWorkingMessage: () => undefined,
-    setWorkingVisible: () => undefined,
-    setWorkingIndicator: () => undefined,
-    setHiddenThinkingLabel: () => undefined,
-    setWidget: () => undefined,
-    setFooter: () => undefined,
-    setHeader: () => undefined,
-    setTitle: () => undefined,
-    custom: async () => undefined,
-    pasteToEditor: () => undefined,
-    setEditorText: () => undefined,
-    getEditorText: () => "",
-    editor: async () => undefined,
-    addAutocompleteProvider: () => undefined,
-    setEditorComponent: () => undefined,
-    getEditorComponent: () => undefined,
-    theme: undefined,
-    getAllThemes: () => [],
-    getTheme: () => undefined,
-    setTheme: () => ({ success: false }),
-    getToolsExpanded: () => false,
-    setToolsExpanded: () => undefined,
-  };
+function emitExtensionUiRequest(requestId: string, taskId: string, request: Record<string, unknown>) {
+  const message = { type: "extension.ui.request", requestId, taskId, event: { requestId, taskId, ...jsonSafe(request) } };
+  parentPort?.postMessage(message);
+  process.send?.(message);
 }
 
+const permissionEngine = new PermissionEngine({ emitApproval, emitEvent: emit, emitUiRequest: emitExtensionUiRequest });
 function jsonSafe<T>(value: T): T {
   try {
     return JSON.parse(JSON.stringify(value)) as T;
@@ -314,16 +145,132 @@ function normalizeSessionImages(sessionManager: any): boolean {
   return true;
 }
 
-function modelSummary(provider: any, model: any, authConfigured: boolean) {
+function queueState(session: any) {
   return {
-    id: model.id,
-    providerId: provider.id,
-    providerName: provider.name ?? provider.id,
-    name: model.name ?? model.id,
-    reasoning: Boolean(model.reasoning),
-    thinkingLevels: model.reasoning ? ["off", "minimal", "low", "medium", "high", "xhigh"] : ["off"],
-    authConfigured,
+    steering: [...(session.getSteeringMessages?.() ?? [])],
+    followUp: [...(session.getFollowUpMessages?.() ?? [])],
+    steeringMode: session.steeringMode ?? "one-at-a-time",
+    followUpMode: session.followUpMode ?? "one-at-a-time",
   };
+}
+
+type QueuedPromptImage = { text: string; images: NormalizedPromptImage[] };
+type QueuedPromptImageState = { steering: QueuedPromptImage[]; followUp: QueuedPromptImage[] };
+type QueueDeliveryHint = { text: string; delivery: "steer" | "followUp" };
+
+// AgentSession exposes queue text for display, while its internal queue also
+// carries images. Keep the image sidecar here so promoteQueue can rebuild a
+// queue without silently dropping attachments.
+const queuedPromptImages = new Map<string, QueuedPromptImageState>();
+const queueDeliveryHints = new Map<string, QueueDeliveryHint[]>();
+const queueMutationLocks = new Map<string, Promise<void>>();
+const queueRebuilds = new Set<string>();
+
+function emptyQueuedPromptImageState(): QueuedPromptImageState {
+  return { steering: [], followUp: [] };
+}
+
+function queuedPromptImageState(taskId: string): QueuedPromptImageState {
+  return queuedPromptImages.get(taskId) ?? emptyQueuedPromptImageState();
+}
+
+function reconcileQueuedPromptImages(taskId: string, steering: string[], followUp: string[]) {
+  const previous = queuedPromptImageState(taskId);
+  const reconcile = (texts: string[], entries: QueuedPromptImage[]) => {
+    const remaining = [...entries];
+    return texts.map((text) => {
+      const index = remaining.findIndex((entry) => entry.text === text);
+      if (index < 0) return { text, images: [] };
+      const [entry] = remaining.splice(index, 1);
+      return entry;
+    });
+  };
+  queuedPromptImages.set(taskId, {
+    steering: reconcile(steering, previous.steering),
+    followUp: reconcile(followUp, previous.followUp),
+  });
+}
+
+function setQueuedPromptImages(taskId: string, steering: QueuedPromptImage[], followUp: QueuedPromptImage[]) {
+  queuedPromptImages.set(taskId, {
+    steering: steering.map((entry) => ({ text: entry.text, images: [...entry.images] })),
+    followUp: followUp.map((entry) => ({ text: entry.text, images: [...entry.images] })),
+  });
+}
+
+function queuedPromptImagesForTexts(texts: string[], candidates: QueuedPromptImage[]): QueuedPromptImage[] {
+  const remaining = [...candidates];
+  return texts.map((text) => {
+    const index = remaining.findIndex((entry) => entry.text === text);
+    if (index < 0) return { text, images: [] };
+    const [entry] = remaining.splice(index, 1);
+    return entry;
+  });
+}
+
+function queueMessageText(message: any): string {
+  if (typeof message?.content === "string") return message.content;
+  if (!Array.isArray(message?.content)) return "";
+  return message.content.map((part: any) => part?.type === "text" ? part.text : "").filter(Boolean).join("\n");
+}
+
+function recordQueueDeliveryHints(taskId: string, steering: string[], followUp: string[]) {
+  if (queueRebuilds.has(taskId)) return;
+  const previous = queuedPromptImageState(taskId);
+  const pending = queueDeliveryHints.get(taskId) ?? [];
+  const recordRemoved = (previousEntries: QueuedPromptImage[], currentTexts: string[], delivery: "steer" | "followUp") => {
+    const remaining = [...currentTexts];
+    for (const entry of previousEntries) {
+      const index = remaining.indexOf(entry.text);
+      if (index >= 0) remaining.splice(index, 1);
+      else pending.push({ text: entry.text, delivery });
+    }
+  };
+  recordRemoved(previous.steering, steering, "steer");
+  recordRemoved(previous.followUp, followUp, "followUp");
+  if (pending.length > 0) queueDeliveryHints.set(taskId, pending);
+}
+
+function consumeQueueDeliveryHint(taskId: string, text: string): "steer" | "followUp" | undefined {
+  const pending = queueDeliveryHints.get(taskId);
+  if (!pending?.length) return undefined;
+  const index = pending.findIndex((hint) => hint.text === text);
+  if (index < 0) return undefined;
+  const [hint] = pending.splice(index, 1);
+  if (pending.length > 0) queueDeliveryHints.set(taskId, pending);
+  else queueDeliveryHints.delete(taskId);
+  return hint.delivery;
+}
+
+function trackQueuedPrompt(taskId: string, delivery: "steer" | "followUp", text: string, images?: NormalizedPromptImage[]) {
+  const state = queuedPromptImageState(taskId);
+  const bucket = delivery === "steer" ? state.steering : state.followUp;
+  bucket.push({ text, images: images ? [...images] : [] });
+  queuedPromptImages.set(taskId, state);
+}
+
+async function withQueueMutationLock<T>(taskId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = queueMutationLocks.get(taskId);
+  let release!: () => void;
+  const lock = new Promise<void>((resolve) => { release = resolve; });
+  queueMutationLocks.set(taskId, lock);
+  try {
+    // Queue mutations are serialized rather than rejected, so rapid user
+    // prompts remain ordered while promote/clear cannot interleave with them.
+    await previous?.catch(() => undefined);
+    return await operation();
+  } finally {
+    release();
+    if (queueMutationLocks.get(taskId) === lock) queueMutationLocks.delete(taskId);
+  }
+}
+
+async function createPackageManager(cwd: string): Promise<any> {
+  const sdk = await loadPiSdk();
+  if (!sdk.DefaultPackageManager || !sdk.SettingsManager) throw new Error("Pi PackageManager is not available in this Pi runtime");
+  const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+  const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
+  return new sdk.DefaultPackageManager({ cwd, agentDir, settingsManager });
 }
 
 async function listWorkspaceFiles(cwd: string): Promise<Array<{ path: string; kind: "file" | "directory"; size?: number }>> {
@@ -387,7 +334,7 @@ async function listSlashCommands(session: any) {
   return { builtins: jsonSafe([...builtins, ...extensionCommands]), prompts: jsonSafe(prompts), skills: jsonSafe(skills) };
 }
 
-function normalizeAgentEvent(event: any): unknown {
+function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "followUp"): unknown {
   if (event.type === "message_update") {
     const streamEvent = event.assistantMessageEvent ?? {};
     return {
@@ -401,7 +348,7 @@ function normalizeAgentEvent(event: any): unknown {
     };
   }
   if (event.type === "message_start" || event.type === "message_end") {
-    return { type: event.type, message: jsonSafe(event.message) };
+    return { type: event.type, message: jsonSafe(event.message), ...(queueDelivery ? { queueDelivery } : {}) };
   }
   if (event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") {
     return {
@@ -433,22 +380,11 @@ function normalizeAgentEvent(event: any): unknown {
   return jsonSafe(event);
 }
 
-function sessionModelLabel(sessionInfo: any, sdk: PiSdk): string {
-  try {
-    const manager = sdk.SessionManager.open(sessionInfo.path);
-    const model = manager.buildSessionContext?.().model;
-    if (model?.provider && model?.id) return `${model.provider}/${model.id}`;
-  } catch {
-    // Older or partially written session files may not have a model entry.
-  }
-  return "未选择模型";
-}
-
 async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   const existing = agentSessions.get(taskId);
   if (existing) {
     const sessionRevision = agentSessionRevisions.get(taskId);
-    if (sessionRevision === permissionRevision || existing.isStreaming) {
+    if (sessionRevision === permissionEngine.revision || existing.isStreaming || agentRunReservations.has(taskId)) {
       if (!existing.isStreaming) normalizeSessionImages(existing.sessionManager);
       return existing;
     }
@@ -457,11 +393,17 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     existing.dispose?.();
     agentSessions.delete(taskId);
     agentSessionRevisions.delete(taskId);
+    // Queue contents live only on AgentSession. Drop renderer-side queue
+    // sidecars and delivery hints when the idle session is recreated.
+    queuedPromptImages.delete(taskId);
+    queueDeliveryHints.delete(taskId);
+    queueRebuilds.delete(taskId);
+    agentRunReservations.delete(taskId);
   }
   const pending = agentSessionPromises.get(taskId);
   if (pending) return pending;
 
-  const creationRevision = permissionRevision;
+  const creationRevision = permissionEngine.revision;
   const creation = (async () => {
     const sdk = await loadPiSdk();
     let manager = sessionManagers.get(taskId);
@@ -483,28 +425,42 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       resourceLoader,
     });
     const permissionExtensionLoaded = Boolean(permissionExtensionPath && session.extensionRunner?.getRegisteredCommands?.().some((command: any) => (command.invocationName ?? command.name) === "permission-system"));
-    if (permissionExtensionLoaded) {
-      await session.bindExtensions?.({ uiContext: createPermissionUi(taskId) });
-    }
+    // Give every loaded Pi extension the desktop UI bridge. The permission
+    // extension uses the same select/input/confirm primitives as other
+    // extensions, so it no longer needs a separate TUI-only implementation.
+    await session.bindExtensions?.({ uiContext: permissionEngine.createUi(taskId) });
     const previousBeforeToolCall = session.agent.beforeToolCall;
-    session.agent.beforeToolCall = async (context: any, signal?: AbortSignal) => {
-      const toolName = context.toolCall?.name ?? "unknown";
-      if (permissionMode === "deny") return { block: true, reason: "PiDeck 权限模式已禁止工具调用。" };
-      // Explicit allow/yolo modes override the extension's previously loaded
-      // config immediately; do not wait for a session rebuild to allow tools.
-      if (permissionMode === "allow" || permissionMode === "yolo") return undefined;
-      if (permissionExtensionLoaded) return previousBeforeToolCall?.(context, signal);
-      const safeTools = new Set(["read", "grep", "find", "ls"]);
-      if (safeTools.has(toolName)) return previousBeforeToolCall?.(context, signal);
-      const requestId = `${taskId}:${context.toolCall?.id ?? Date.now()}`;
-      emitApproval(requestId, taskId, toolName, context.args);
-      const allowed = await new Promise<boolean>((resolve) => approvalWaiters.set(requestId, resolve));
-      if (!allowed) return { block: true, reason: "PiDeck 用户拒绝了这次工具调用。" };
-      return previousBeforeToolCall?.(context, signal);
-    };
-    session.subscribe((event: unknown) => emit(taskId, normalizeAgentEvent(event)));
+    session.agent.beforeToolCall = (context: any, signal?: AbortSignal) => permissionEngine.beforeToolCallWithExtension(
+      taskId,
+      context,
+      previousBeforeToolCall,
+      permissionExtensionLoaded,
+      signal,
+    );
     session.subscribe((event: any) => {
-      if (event.type === "message_end" || event.type === "agent_settled") {
+      if (event.type === "queue_update" && !queueRebuilds.has(taskId)) {
+        recordQueueDeliveryHints(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
+        reconcileQueuedPromptImages(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
+      }
+      // A delivery hint is only meaningful until the current agent run is
+      // settled. If Pi aborts or drops a queued message without emitting its
+      // message_start event, discard the hint so a later identical prompt
+      // cannot inherit the wrong steering/follow-up classification.
+      if (event.type === "agent_settled") queueDeliveryHints.delete(taskId);
+      if (event.type === "message_start" && event.message?.role === "user") {
+        const queueDelivery = consumeQueueDeliveryHint(taskId, queueMessageText(event.message));
+        emit(taskId, normalizeAgentEvent(event, queueDelivery));
+        return;
+      }
+      emit(taskId, normalizeAgentEvent(event));
+    });
+    session.subscribe((event: any) => {
+      if (event.type === "message_end") {
+        // AgentSession persists the message immediately after notifying its
+        // subscribers. Defer the snapshot one tick so the renderer receives
+        // the completed assistant reply before the next queued message starts.
+        setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) }), 0);
+      } else if (event.type === "agent_settled") {
         emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
       }
     });
@@ -714,47 +670,6 @@ async function handle(request: PiHostRequest): Promise<void> {
         });
         return;
       }
-      case "sessions.tree": {
-        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
-        if (!payload?.taskId) throw new Error("taskId is required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        send({ id: request.id, ok: true, result: jsonSafe(session.sessionManager.getTree()) });
-        return;
-      }
-      case "sessions.navigate": {
-        const payload = request.payload as { taskId?: string; entryId?: string; cwd?: string } | undefined;
-        if (!payload?.taskId || !payload.entryId) throw new Error("taskId and entryId are required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        const result = await session.navigateTree(payload.entryId);
-        emit(payload.taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
-        send({ id: request.id, ok: true, result: jsonSafe(result) });
-        return;
-      }
-      case "sessions.fork": {
-        const payload = request.payload as { taskId?: string; entryId?: string; cwd?: string } | undefined;
-        if (!payload?.taskId || !payload.entryId) throw new Error("taskId and entryId are required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        const sessionPath = session.sessionManager.createBranchedSession(payload.entryId);
-        if (!sessionPath) throw new Error("Pi did not persist a branched session");
-        const sdk = await loadPiSdk();
-        const manager = sdk.SessionManager.open(sessionPath);
-        const taskId = manager.getSessionId();
-        sessionManagers.set(taskId, manager);
-        sessionFiles.set(taskId, sessionPath);
-        send({
-          id: request.id,
-          ok: true,
-          result: {
-            id: taskId,
-            title: "分支会话",
-            projectId: payload.cwd ?? resolveWorkspaceCwd(),
-            state: "idle",
-            model: sessionModelLabel({ path: sessionPath }, sdk),
-            updatedAt: new Date().toISOString(),
-          },
-        });
-        return;
-      }
       case "sessions.compact": {
         const payload = request.payload as { taskId?: string; instructions?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
@@ -773,7 +688,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         return;
       }
       case "agent.prompt": {
-        const payload = request.payload as { taskId?: string; text?: string; cwd?: string; images?: Array<{ data: string; mimeType: string }> } | undefined;
+        const payload = request.payload as { taskId?: string; text?: string; cwd?: string; images?: Array<{ data: string; mimeType: string }>; delivery?: "steer" | "followUp" } | undefined;
         const images = normalizePromptImages(payload?.images);
         if (!payload?.taskId || (!payload.text && !images?.length)) throw new Error("taskId and text or images are required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
@@ -786,11 +701,38 @@ async function handle(request: PiHostRequest): Promise<void> {
             titledSessions.add(payload.taskId);
           }
         }
-        await session.prompt(payload.text ?? "", {
-          source: "interactive",
-          images,
-          ...(session.isStreaming ? { streamingBehavior: "steer" as const } : {}),
-        });
+        const wasStreaming = Boolean(session.isStreaming || agentRunReservations.has(payload.taskId));
+        const queuedDelivery = wasStreaming ? payload.delivery ?? "followUp" as const : undefined;
+        if (!queuedDelivery) agentRunReservations.add(payload.taskId);
+        const runPrompt = async () => {
+          if (queuedDelivery) trackQueuedPrompt(payload.taskId!, queuedDelivery, payload.text ?? "", images);
+          await session.prompt(payload.text ?? "", {
+            source: "interactive",
+            images,
+            ...(queuedDelivery ? { streamingBehavior: queuedDelivery } : {}),
+          });
+          if (queuedDelivery) {
+            const current = queueState(session);
+            reconcileQueuedPromptImages(payload.taskId!, current.steering, current.followUp);
+          }
+        };
+        try {
+          if (queuedDelivery) await withQueueMutationLock(payload.taskId, runPrompt);
+          else await runPrompt();
+        } catch (error) {
+          if (queuedDelivery) {
+            const current = queueState(session);
+            reconcileQueuedPromptImages(payload.taskId!, current.steering, current.followUp);
+          }
+          // A failed prompt must not leave Pi's AgentSession streaming. Aborting
+          // here lets the next user prompt start a fresh execution group.
+          if (session.isStreaming) {
+            try { await session.abort(); } catch { /* Preserve the original prompt error. */ }
+          }
+          throw error;
+        } finally {
+          if (!queuedDelivery) agentRunReservations.delete(payload.taskId!);
+        }
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -805,6 +747,11 @@ async function handle(request: PiHostRequest): Promise<void> {
         titledSessions.delete(payload.taskId);
         sessionManagers.delete(payload.taskId);
         agentSessions.delete(payload.taskId);
+        queuedPromptImages.delete(payload.taskId);
+        queueDeliveryHints.delete(payload.taskId);
+        queueMutationLocks.delete(payload.taskId);
+        queueRebuilds.delete(payload.taskId);
+        agentRunReservations.delete(payload.taskId);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -841,6 +788,157 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!model) throw new Error(`Unknown model: ${payload.providerId}/${payload.modelId}`);
         await session.setModel(model);
         send({ id: request.id, ok: true, result: { providerId: model.provider, modelId: model.id, name: model.name } });
+        return;
+      }
+      case "agent.queue": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const current = queueState(session);
+        reconcileQueuedPromptImages(payload.taskId, current.steering, current.followUp);
+        send({ id: request.id, ok: true, result: current });
+        return;
+      }
+      case "agent.setQueueModes": {
+        const payload = request.payload as { taskId?: string; cwd?: string; steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        if (payload.steeringMode) session.setSteeringMode(payload.steeringMode);
+        if (payload.followUpMode) session.setFollowUpMode(payload.followUpMode);
+        send({ id: request.id, ok: true, result: queueState(session) });
+        return;
+      }
+      case "agent.clearQueue": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        await withQueueMutationLock(payload.taskId, async () => {
+          queueRebuilds.add(payload.taskId!);
+          try {
+            session.clearQueue();
+            setQueuedPromptImages(payload.taskId!, [], []);
+            queueDeliveryHints.delete(payload.taskId!);
+            send({ id: request.id, ok: true, result: queueState(session) });
+          } finally {
+            queueRebuilds.delete(payload.taskId!);
+          }
+        });
+        return;
+      }
+      case "agent.promoteQueue": {
+        const payload = request.payload as { taskId?: string; cwd?: string; followUpIndex?: number } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        if (!Number.isInteger(payload.followUpIndex) || (payload.followUpIndex ?? -1) < 0) throw new Error("followUpIndex is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const taskId = payload.taskId;
+        await withQueueMutationLock(taskId, async () => {
+          // Validate against the live queue before clearing it. A stale UI
+          // index must never cause a different message to be promoted.
+          const liveQueue = queueState(session);
+          const followUpIndex = payload.followUpIndex!;
+          if (typeof liveQueue.followUp[followUpIndex] !== "string") throw new Error("Queued message is no longer available");
+
+          const imageState = queuedPromptImageState(taskId);
+          const queued = {
+            steering: liveQueue.steering.map((text, index) => imageState.steering[index] ?? { text, images: [] }),
+            followUp: liveQueue.followUp.map((text, index) => imageState.followUp[index] ?? { text, images: [] }),
+          };
+          const selected = queued.followUp[followUpIndex];
+          if (!selected) throw new Error("Queued message is no longer available");
+          queueRebuilds.add(taskId);
+          try {
+            session.clearQueue();
+            try {
+              // Promote means the selected follow-up is first in the steering
+              // queue, ahead of any older steering messages.
+              await session.steer(selected.text, selected.images);
+              for (const message of queued.steering) await session.steer(message.text, message.images);
+              for (const [index, message] of queued.followUp.entries()) {
+                if (index !== followUpIndex) await session.followUp(message.text, message.images);
+              }
+            } catch (error) {
+              // Rebuild the original queue if any requeue operation fails. Keep
+              // the operation failure visible while making the queue recoverable.
+              try {
+                session.clearQueue();
+                for (const message of queued.steering) await session.steer(message.text, message.images);
+                for (const message of queued.followUp) await session.followUp(message.text, message.images);
+                const restored = queueState(session);
+                setQueuedPromptImages(
+                  taskId,
+                  queuedPromptImagesForTexts(restored.steering, queued.steering),
+                  queuedPromptImagesForTexts(restored.followUp, queued.followUp),
+                );
+              } catch (restoreError) {
+                throw new Error(`${error instanceof Error ? error.message : String(error)}; queue restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+              }
+              throw error;
+            }
+            const next = queueState(session);
+            setQueuedPromptImages(
+              taskId,
+              queuedPromptImagesForTexts(next.steering, [selected, ...queued.steering]),
+              queuedPromptImagesForTexts(next.followUp, queued.followUp.filter((_message, index) => index !== followUpIndex)),
+            );
+            send({ id: request.id, ok: true, result: next });
+          } finally {
+            queueRebuilds.delete(taskId);
+          }
+        });
+        return;
+      }
+      case "extension.ui.resolve": {
+        const payload = request.payload as { requestId?: string; value?: string | boolean } | undefined;
+        if (!payload?.requestId) throw new Error("requestId is required");
+        permissionEngine.resolveUi(payload.requestId, payload.value);
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "packages.list": {
+        const payload = request.payload as { cwd?: string } | undefined;
+        const manager = await createPackageManager(payload?.cwd ?? resolveWorkspaceCwd());
+        const packages = manager.listConfiguredPackages?.() ?? [];
+        send({ id: request.id, ok: true, result: jsonSafe(packages.map((item: any) => ({
+          source: item.source,
+          scope: item.scope,
+          filtered: Boolean(item.filtered),
+          installedPath: item.installedPath,
+        }))) });
+        return;
+      }
+      case "packages.install": {
+        const payload = request.payload as { source?: string; local?: boolean; cwd?: string } | undefined;
+        if (!payload?.source?.trim()) throw new Error("source is required");
+        const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
+        const source = normalizePackageInstallSource(payload.source);
+        await manager.installAndPersist(source, { local: Boolean(payload.local) });
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "packages.remove": {
+        const payload = request.payload as { source?: string; local?: boolean; cwd?: string } | undefined;
+        if (!payload?.source?.trim()) throw new Error("source is required");
+        const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
+        await manager.removeAndPersist(payload.source.trim(), { local: Boolean(payload.local) });
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "packages.update": {
+        const payload = request.payload as { source?: string; cwd?: string } | undefined;
+        const manager = await createPackageManager(payload?.cwd ?? resolveWorkspaceCwd());
+        await manager.update(payload?.source?.trim() || undefined);
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "packages.configure": {
+        const payload = request.payload as { source?: string; enabled?: boolean; local?: boolean; cwd?: string } | undefined;
+        if (!payload?.source?.trim()) throw new Error("source is required");
+        const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
+        const changed = payload.enabled
+          ? manager.addSourceToSettings(payload.source.trim(), { local: Boolean(payload.local) })
+          : manager.removeSourceFromSettings(payload.source.trim(), { local: Boolean(payload.local) });
+        if (!changed) throw new Error(`Could not ${payload.enabled ? "add" : "remove"} package source`);
+        send({ id: request.id, ok: true, result: undefined });
         return;
       }
       case "providers.list": {
@@ -923,27 +1021,21 @@ async function handle(request: PiHostRequest): Promise<void> {
         return;
       }
       case "permissions.status":
-        send({ id: request.id, ok: true, result: permissionStatus() });
+        send({ id: request.id, ok: true, result: permissionEngine.status() });
         return;
       case "permissions.setMode": {
         const payload = request.payload as { mode?: PermissionMode } | undefined;
         if (!payload?.mode || !["ask", "allow", "deny", "yolo"].includes(payload.mode)) throw new Error("Invalid permission mode");
-        send({ id: request.id, ok: true, result: await setPermissionMode(payload.mode) });
+        capabilitySessions.clear();
+        send({ id: request.id, ok: true, result: await permissionEngine.setMode(payload.mode) });
         return;
       }
       case "approval.resolve": {
         const payload = request.payload as { requestId?: string; decision?: "allow-once" | "deny" } | undefined;
         if (!payload?.requestId || !payload.decision) throw new Error("requestId and decision are required");
-        const resolve = approvalWaiters.get(payload.requestId);
         // A permission-level switch may have already resolved this request.
-        // Treat a late UI click as an idempotent no-op instead of surfacing a
-        // remote-method error for a decision that was already applied.
-        if (!resolve) {
-          send({ id: request.id, ok: true, result: undefined });
-          return;
-        }
-        approvalWaiters.delete(payload.requestId);
-        resolve(payload.decision === "allow-once");
+        // Treat a late UI click as an idempotent no-op.
+        try { permissionEngine.resolve(payload.requestId, payload.decision); } catch { /* Already resolved. */ }
         send({ id: request.id, ok: true, result: undefined });
         return;
       }

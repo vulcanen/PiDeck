@@ -30,7 +30,7 @@ React Renderer
   → @earendil-works/pi-coding-agent
 ```
 
-当前代码不是 Electron `utilityProcess`，也不是 MessagePort。PiHost 使用普通 Node `process.send/process.on("message")`，以满足 Pi SDK 的 Node engines。
+当前代码不是 Electron `utilityProcess`，也不是 MessagePort。`packages/pi-host` 使用普通 Node `process.send/process.on("message")`，以满足 Pi SDK 的 Node engines。
 
 ### 2.1 当前目录
 
@@ -41,15 +41,17 @@ apps/desktop/src/
 ├─ renderer/
 │  ├─ App.tsx
 │  ├─ styles.css
-│  ├─ i18n.ts
-│  ├─ ui.tsx
 │  ├─ pi-capabilities.ts
 │  └─ main.tsx
-└─ utility/pi-host/index.ts
 
 packages/
 ├─ contracts/src/index.ts
-└─ domain/src/index.ts
+├─ domain/                       # 类型与共享领域 helper
+├─ pi-adapter/                   # Pi SDK 定位、加载和公开 API 适配
+├─ pi-host/                      # PiHost 进程入口
+├─ permission-engine/            # 权限配置与审批适配
+├─ i18n/                         # zh/en 文案
+└─ ui-system/                    # Renderer 共享 UI 基元
 ```
 
 完整边界见 [当前架构说明](architecture.zh-CN.md)。
@@ -59,8 +61,8 @@ packages/
 当前已支持：
 
 1. 启动 PiHost 并显示 Runtime 状态。
-2. 自动发现 Pi Session 所属项目，并记住用户手动添加的项目目录。
-3. 创建、切换、删除本地 Session。
+2. 自动发现 Pi Session 所属项目，记住用户手动添加的项目目录，并支持通过项目右键菜单隐藏目录引用（不删除文件或 Session）。
+3. 按需同时展开多个项目的会话列表；项目展开状态彼此独立，仅在用户单击具体会话时切换中央工作区；无会话项目可在其展开区域直接创建首个 Session，并支持创建、切换、删除本地 Session。
 4. 读取和显示 Session 消息。
 5. 选择已认证 Provider/Model 和思考等级。
 6. 发送 Prompt、查看流式回复和停止运行。
@@ -87,8 +89,8 @@ packages/
 
 ```text
 runtime.status
-projects.list
-sessions.list/create/delete/messages/capabilities/tree/navigate/fork/compact/export
+projects.list/chooseDirectory/remove
+sessions.list/create/delete/messages/capabilities/compact/export
 models.list
 workspace.snapshot
 terminal.execute
@@ -151,7 +153,6 @@ PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Ex
 
 以下仍是计划，不是当前产品承诺：
 
-- Session tree 可视化导航、克隆和分支选择器。
 - Steering/Follow-up 队列模式。
 - Extension UI request 的完整映射。
 - Pi Package install/remove/update/config 管理器。
@@ -194,9 +195,6 @@ workspace.snapshot
 terminal.execute（无副作用命令）
 ```
 
-## 11. 后续设计原则
+## 11. 开发说明
 
-- 先保证 Pi 语义和状态正确，再做视觉装饰。
-- 不把规划中的目录、包、IPC 或能力写成当前已实现。
-- 所有新能力必须能追溯到 Pi SDK/CLI 的真实 API、事件或资源。
-- 项目结构、contracts、运行时边界、依赖和用户可见能力发生变化时，必须同步更新相关文档。
+项目开发边界、代码规范、依赖管理和验收要求见 [AGENTS.md](../AGENTS.md)。

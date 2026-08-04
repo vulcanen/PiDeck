@@ -9,6 +9,10 @@ import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contrac
 app.setName("PiDeck");
 
 type RuntimeStatus = "connected" | "starting" | "disconnected";
+type ProjectRegistry = {
+  cwds: string[];
+  hiddenCwds: string[];
+};
 
 let host: ChildProcess | undefined;
 let hostAlive = false;
@@ -30,30 +34,58 @@ function projectRegistryPath(): string {
   return path.join(app.getPath("userData"), "projects.json");
 }
 
-function readProjectRegistry(): string[] {
-  try {
-    const parsed = JSON.parse(readFileSync(projectRegistryPath(), "utf8")) as { cwds?: unknown };
-    return Array.isArray(parsed.cwds) ? parsed.cwds.filter((cwd): cwd is string => typeof cwd === "string" && cwd.length > 0) : [];
-  } catch {
-    return [];
-  }
+function normalizeProjectCwd(cwd: string): string {
+  return path.resolve(cwd);
 }
 
-function writeProjectRegistry(cwds: string[]): void {
+function projectCwdKey(cwd: string): string {
+  const normalized = normalizeProjectCwd(cwd);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function normalizeProjectCwds(cwds: string[]): string[] {
   const seen = new Set<string>();
-  const normalizedCwds = cwds.map((cwd) => path.resolve(cwd)).filter((cwd) => {
-    const key = process.platform === "win32" ? cwd.toLowerCase() : cwd;
+  return cwds.map(normalizeProjectCwd).filter((cwd) => {
+    const key = projectCwdKey(cwd);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function readProjectRegistry(): ProjectRegistry {
+  try {
+    const parsed = JSON.parse(readFileSync(projectRegistryPath(), "utf8")) as { cwds?: unknown; hiddenCwds?: unknown };
+    const cwds = Array.isArray(parsed.cwds) ? parsed.cwds.filter((cwd): cwd is string => typeof cwd === "string" && cwd.length > 0) : [];
+    const hiddenCwds = Array.isArray(parsed.hiddenCwds) ? parsed.hiddenCwds.filter((cwd): cwd is string => typeof cwd === "string" && cwd.length > 0) : [];
+    return { cwds: normalizeProjectCwds(cwds), hiddenCwds: normalizeProjectCwds(hiddenCwds) };
+  } catch {
+    return { cwds: [], hiddenCwds: [] };
+  }
+}
+
+function writeProjectRegistry(registry: ProjectRegistry): void {
   const registryPath = projectRegistryPath();
   mkdirSync(path.dirname(registryPath), { recursive: true });
-  writeFileSync(registryPath, `${JSON.stringify({ cwds: normalizedCwds }, null, 2)}\n`, "utf8");
+  writeFileSync(registryPath, `${JSON.stringify({ cwds: normalizeProjectCwds(registry.cwds), hiddenCwds: normalizeProjectCwds(registry.hiddenCwds) }, null, 2)}\n`, "utf8");
 }
 
 function rememberProjectCwd(cwd: string): void {
-  writeProjectRegistry([cwd, ...readProjectRegistry()]);
+  const registry = readProjectRegistry();
+  const key = projectCwdKey(cwd);
+  writeProjectRegistry({
+    cwds: [cwd, ...registry.cwds.filter((item) => projectCwdKey(item) !== key)],
+    hiddenCwds: registry.hiddenCwds.filter((item) => projectCwdKey(item) !== key),
+  });
+}
+
+function hideProjectCwd(cwd: string): void {
+  const registry = readProjectRegistry();
+  const key = projectCwdKey(cwd);
+  writeProjectRegistry({
+    cwds: registry.cwds.filter((item) => projectCwdKey(item) !== key),
+    hiddenCwds: [cwd, ...registry.hiddenCwds.filter((item) => projectCwdKey(item) !== key)],
+  });
 }
 
 const menuCopy = {
@@ -183,7 +215,7 @@ function startHost(window: BrowserWindow) {
   }
 
   publishRuntimeStatus("starting");
-  const hostPath = path.join(__dirname, "../utility/pi-host/index.js");
+  const hostPath = path.join(__dirname, "../../../../packages/pi-host/dist/index.js");
   host = forkNode(hostPath, [], {
     execPath: resolveNodeExecutable(),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -232,6 +264,8 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
       ? 15 * 60_000
       : command === "agent.prompt"
         ? 10 * 60_000
+        : command.startsWith("packages.")
+          ? 10 * 60_000
         : 60_000;
     const timer = setTimeout(() => {
       pending.delete(id);
@@ -250,11 +284,17 @@ function registerIpcHandlers() {
   });
   ipcMain.handle("runtime:status", () => hostStatus);
   ipcMain.handle("projects:list", async (_event, preferredCwd?: string) => {
-    const knownCwds = readProjectRegistry();
-    if (preferredCwd) knownCwds.push(preferredCwd);
+    const registry = readProjectRegistry();
+    const hiddenProjectKeys = new Set(registry.hiddenCwds.map(projectCwdKey));
+    const knownCwds = registry.cwds.filter((cwd) => !hiddenProjectKeys.has(projectCwdKey(cwd)));
+    if (preferredCwd && !hiddenProjectKeys.has(projectCwdKey(preferredCwd))) knownCwds.push(preferredCwd);
     const projects = await requestHost("projects.list", { knownCwds }) as Array<{ cwd: string }>;
-    writeProjectRegistry(projects.map((project) => project.cwd));
-    return projects;
+    const visibleProjects = projects.filter((project) => !hiddenProjectKeys.has(projectCwdKey(project.cwd)));
+    writeProjectRegistry({
+      cwds: visibleProjects.map((project) => project.cwd),
+      hiddenCwds: registry.hiddenCwds,
+    });
+    return visibleProjects;
   });
   ipcMain.handle("projects:choose-directory", async () => {
     if (!hostWindow) return null;
@@ -268,14 +308,16 @@ function registerIpcHandlers() {
     rememberProjectCwd(cwd);
     return { id: cwd, cwd, name: path.basename(cwd) || cwd, taskCount: sessions.length };
   });
+  ipcMain.handle("projects:remove", (_event, cwd: string) => {
+    if (typeof cwd !== "string" || !cwd.trim()) return null;
+    hideProjectCwd(cwd);
+    return null;
+  });
   ipcMain.handle("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: projectId }));
   ipcMain.handle("sessions:create", (_event, input?: { cwd?: string; name?: string }) => requestHost("sessions.create", input));
   ipcMain.handle("sessions:delete", (_event, taskId: string, cwd?: string) => requestHost("sessions.delete", { taskId, cwd }));
   ipcMain.handle("sessions:messages", (_event, taskId: string, cwd?: string) => requestHost("sessions.messages", { taskId, cwd }));
   ipcMain.handle("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd }));
-  ipcMain.handle("sessions:tree", (_event, taskId: string, cwd?: string) => requestHost("sessions.tree", { taskId, cwd }));
-  ipcMain.handle("sessions:navigate", (_event, taskId: string, entryId: string, cwd?: string) => requestHost("sessions.navigate", { taskId, entryId, cwd }));
-  ipcMain.handle("sessions:fork", (_event, taskId: string, entryId: string, cwd?: string) => requestHost("sessions.fork", { taskId, entryId, cwd }));
   ipcMain.handle("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd }));
   ipcMain.handle("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd }));
   ipcMain.handle("models:list", () => requestHost("models.list"));
@@ -291,10 +333,20 @@ function registerIpcHandlers() {
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) auth URLs can be opened");
     await shell.openExternal(parsed.toString());
   });
-  ipcMain.handle("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>) => requestHost("agent.prompt", { taskId, text, cwd: cwd ?? process.cwd(), images }));
+  ipcMain.handle("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>, delivery?: "steer" | "followUp") => requestHost("agent.prompt", { taskId, text, cwd: cwd ?? process.cwd(), images, delivery }));
   ipcMain.handle("agent:abort", (_event, taskId: string) => requestHost("agent.abort", { taskId }));
   ipcMain.handle("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("agent:queue", (_event, taskId: string, cwd?: string) => requestHost("agent.queue", { taskId, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("agent:set-queue-modes", (_event, taskId: string, modes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" }, cwd?: string) => requestHost("agent.setQueueModes", { taskId, cwd: cwd ?? process.cwd(), ...modes }));
+  ipcMain.handle("agent:clear-queue", (_event, taskId: string, cwd?: string) => requestHost("agent.clearQueue", { taskId, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("agent:promote-queue", (_event, taskId: string, followUpIndex: number, cwd?: string) => requestHost("agent.promoteQueue", { taskId, followUpIndex, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
+  ipcMain.handle("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("packages:remove", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.remove", { source, local, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("packages:update", (_event, source?: string, cwd?: string) => requestHost("packages.update", { source, cwd: cwd ?? process.cwd() }));
+  ipcMain.handle("packages:configure", (_event, source: string, enabled: boolean, local?: boolean, cwd?: string) => requestHost("packages.configure", { source, enabled, local, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("approval:resolve", (_event, requestId: string, decision: "allow-once" | "deny") => requestHost("approval.resolve", { requestId, decision }));
   ipcMain.handle("permissions:status", () => requestHost("permissions.status"));
   ipcMain.handle("permissions:set-mode", (_event, mode: "ask" | "allow" | "deny" | "yolo") => requestHost("permissions.setMode", { mode }));

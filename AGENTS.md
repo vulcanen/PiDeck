@@ -18,6 +18,7 @@ PiDeck 的唯一产品边界是：把 `@earendil-works/pi-coding-agent`（Pi CLI
 - Electron：使用当前稳定版；Pi SDK 不应直接运行在低于其 Node engines 的 Electron 内置 Node 中。
 - Pi SDK 路径优先使用 `PIDECK_PI_MODULE`；开发机可从全局 `pi` / npm root 定位。
 - 修改依赖后必须更新 `package-lock.json`，并运行 `npm run typecheck`、`npm run build`。
+- Windows 和 macOS 本地打包分别使用 `npm run package:win` 和 `npm run package:mac`；前者生成 NSIS 安装程序，后者生成 DMG。两者均未签名，正式分发前还需配置签名、公证或安装包发布流程。
 
 ## 代码边界
 

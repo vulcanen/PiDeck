@@ -52,6 +52,37 @@ export interface SessionCapabilities {
   contextUsage?: ContextUsage;
 }
 
+export type QueueDelivery = "steer" | "followUp";
+export type QueueMode = "all" | "one-at-a-time";
+
+export interface AgentQueueState {
+  steering: string[];
+  followUp: string[];
+  steeringMode: QueueMode;
+  followUpMode: QueueMode;
+}
+
+export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
+
+export interface ExtensionUiRequest {
+  requestId: string;
+  taskId: string;
+  kind: ExtensionUiRequestKind;
+  title: string;
+  message?: string;
+  options?: string[];
+  placeholder?: string;
+  prefill?: string;
+}
+
+export interface PiPackageSummary {
+  source: string;
+  scope: "user" | "project";
+  filtered: boolean;
+  installedPath?: string;
+  updateAvailable?: boolean;
+}
+
 export interface WorkspaceFile {
   path: string;
   kind: "file" | "directory";
@@ -82,6 +113,7 @@ export interface PideckBridge {
   projects: {
     list(preferredCwd?: string): Promise<ProjectSummary[]>;
     chooseDirectory(): Promise<ProjectSummary | null>;
+    remove(cwd: string): Promise<void>;
   };
   sessions: {
     list(projectId?: string): Promise<TaskSummary[]>;
@@ -90,9 +122,6 @@ export interface PideckBridge {
     remove(taskId: string, cwd?: string): Promise<void>;
     messages(taskId: string, cwd?: string): Promise<unknown[]>;
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
-    tree(taskId: string, cwd?: string): Promise<unknown[]>;
-    navigate(taskId: string, entryId: string, cwd?: string): Promise<{ cancelled: boolean; editorText?: string }>;
-    fork(taskId: string, entryId: string, cwd?: string): Promise<TaskSummary>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string }>;
   };
@@ -114,10 +143,24 @@ export interface PideckBridge {
     openAuthUrl(url: string): Promise<void>;
   };
   agent: {
-    prompt(taskId: string, text: string, cwd?: string, images?: PromptImage[]): Promise<void>;
+    prompt(taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery): Promise<void>;
     abort(taskId: string): Promise<void>;
     setThinkingLevel(taskId: string, level: string, cwd?: string): Promise<void>;
     setModel(taskId: string, providerId: string, modelId: string, cwd?: string): Promise<void>;
+    queue(taskId: string, cwd?: string): Promise<AgentQueueState>;
+    setQueueModes(taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string): Promise<AgentQueueState>;
+    clearQueue(taskId: string, cwd?: string): Promise<AgentQueueState>;
+    promoteQueue(taskId: string, followUpIndex: number, cwd?: string): Promise<AgentQueueState>;
+  };
+  extensions: {
+    resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
+  };
+  packages: {
+    list(cwd?: string): Promise<PiPackageSummary[]>;
+    install(source: string, local?: boolean, cwd?: string): Promise<void>;
+    remove(source: string, local?: boolean, cwd?: string): Promise<void>;
+    update(source?: string, cwd?: string): Promise<void>;
+    configure(source: string, enabled: boolean, local?: boolean, cwd?: string): Promise<void>;
   };
   events: {
     subscribe(listener: (event: PiDeckRuntimeEvent) => void): () => void;
@@ -132,7 +175,7 @@ export interface PideckBridge {
 }
 
 export interface PiDeckRuntimeEvent {
-  type: "agent.event" | "runtime.status" | "auth.event" | "approval.requested" | "approval.resolved";
+  type: "agent.event" | "runtime.status" | "auth.event" | "approval.requested" | "approval.resolved" | "extension.ui.request" | "extension.ui.notify";
   taskId?: string;
   requestId?: string;
   event?: unknown;
@@ -147,9 +190,6 @@ export type PiHostCommand =
   | "sessions.delete"
   | "sessions.messages"
   | "sessions.capabilities"
-  | "sessions.tree"
-  | "sessions.navigate"
-  | "sessions.fork"
   | "sessions.compact"
   | "sessions.export"
   | "models.list"
@@ -164,6 +204,16 @@ export type PiHostCommand =
   | "agent.abort"
   | "agent.setThinkingLevel"
   | "agent.setModel"
+  | "agent.queue"
+  | "agent.setQueueModes"
+  | "agent.clearQueue"
+  | "agent.promoteQueue"
+  | "extension.ui.resolve"
+  | "packages.list"
+  | "packages.install"
+  | "packages.remove"
+  | "packages.update"
+  | "packages.configure"
   | "approval.resolve"
   | "permissions.status"
   | "permissions.setMode";

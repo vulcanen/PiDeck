@@ -15,8 +15,6 @@ export const fallbackSlashCommands: FallbackCommand[] = [
   { name: "import", description: "Import a JSONL session" },
   { name: "name", description: "Rename the current session" },
   { name: "session", description: "Show session information" },
-  { name: "fork", description: "Create a branch from the session tree" },
-  { name: "tree", description: "Navigate the session tree" },
   { name: "login", description: "Configure Provider authentication" },
   { name: "logout", description: "Remove Provider authentication" },
   { name: "new", description: "Start a new session" },

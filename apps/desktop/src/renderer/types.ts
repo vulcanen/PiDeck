@@ -1,0 +1,31 @@
+export type Theme = "light" | "dark";
+export type SuggestionMode = "slash" | "mention" | null;
+export type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | null;
+export type MessageLoad = { status: "idle" | "loading" | "ready" | "error"; error?: string };
+export type ActivityStep = {
+  id: string;
+  kind: "thinking" | "tool";
+  label: string;
+  detail?: string;
+  args?: unknown;
+  result?: unknown;
+  startedAt: number;
+  endedAt?: number;
+  isError?: boolean;
+};
+export type TaskUiState = {
+  isSending: boolean;
+  isCompacting: boolean;
+  streamText: string;
+  workingPhase: WorkingPhase;
+  activity: ActivityStep[];
+  completedActivity: ActivityStep[][];
+  toolName?: string;
+  approval?: { requestId: string; toolName: string; args?: unknown };
+};
+export type AuthPromptState = { requestId: string; message: string; placeholder: string; value: string };
+export type ImageAttachment = { id: string; data: string; mimeType: string; name: string };
+export type SentImageMessage = { text: string; images: ImageAttachment[] };
+export type PreviewImage = { src: string; alt: string };
+export type ImageContextMenuState = { x: number; y: number; image: PreviewImage };
+export type ProviderFilter = "all" | "configured" | "expired" | "missing";

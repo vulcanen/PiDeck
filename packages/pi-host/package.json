@@ -1,5 +1,5 @@
 {
-  "name": "@pideck/domain",
+  "name": "@pideck/pi-host",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",
@@ -13,5 +13,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.0"
+  },
+  "dependencies": {
+    "@pideck/contracts": "0.1.0",
+    "@pideck/domain": "0.1.0",
+    "@pideck/permission-engine": "0.1.0",
+    "@pideck/pi-adapter": "0.1.0"
   }
 }

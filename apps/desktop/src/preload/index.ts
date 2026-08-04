@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage } from "@pideck/contracts";
+import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage, QueueDelivery, QueueMode } from "@pideck/contracts";
 
 const bridge: PideckBridge = {
   app: {
@@ -11,6 +11,7 @@ const bridge: PideckBridge = {
   projects: {
     list: (preferredCwd?: string) => ipcRenderer.invoke("projects:list", preferredCwd),
     chooseDirectory: () => ipcRenderer.invoke("projects:choose-directory"),
+    remove: (cwd: string) => ipcRenderer.invoke("projects:remove", cwd),
   },
   sessions: {
     list: (projectId?: string) => ipcRenderer.invoke("sessions:list", projectId),
@@ -19,9 +20,6 @@ const bridge: PideckBridge = {
     remove: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:delete", taskId, cwd),
     messages: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:messages", taskId, cwd),
     capabilities: (taskId?: string, cwd?: string) => ipcRenderer.invoke("sessions:capabilities", taskId, cwd),
-    tree: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:tree", taskId, cwd),
-    navigate: (taskId: string, entryId: string, cwd?: string) => ipcRenderer.invoke("sessions:navigate", taskId, entryId, cwd),
-    fork: (taskId: string, entryId: string, cwd?: string) => ipcRenderer.invoke("sessions:fork", taskId, entryId, cwd),
     compact: (taskId: string, instructions?: string, cwd?: string) => ipcRenderer.invoke("sessions:compact", taskId, instructions, cwd),
     export: (taskId: string, format: "jsonl" | "html", cwd?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd),
   },
@@ -43,10 +41,24 @@ const bridge: PideckBridge = {
     openAuthUrl: (url: string) => ipcRenderer.invoke("providers:open-auth-url", url),
   },
   agent: {
-    prompt: (taskId: string, text: string, cwd?: string, images?: PromptImage[]) => ipcRenderer.invoke("agent:prompt", taskId, text, cwd, images),
+    prompt: (taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery) => ipcRenderer.invoke("agent:prompt", taskId, text, cwd, images, delivery),
     abort: (taskId: string) => ipcRenderer.invoke("agent:abort", taskId),
     setThinkingLevel: (taskId: string, level: string, cwd?: string) => ipcRenderer.invoke("agent:set-thinking-level", taskId, level, cwd),
     setModel: (taskId: string, providerId: string, modelId: string, cwd?: string) => ipcRenderer.invoke("agent:set-model", taskId, providerId, modelId, cwd),
+    queue: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:queue", taskId, cwd),
+    setQueueModes: (taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string) => ipcRenderer.invoke("agent:set-queue-modes", taskId, modes, cwd),
+    clearQueue: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:clear-queue", taskId, cwd),
+    promoteQueue: (taskId: string, followUpIndex: number, cwd?: string) => ipcRenderer.invoke("agent:promote-queue", taskId, followUpIndex, cwd),
+  },
+  extensions: {
+    resolveUi: (requestId: string, value: string | boolean | undefined) => ipcRenderer.invoke("extension-ui:resolve", requestId, value),
+  },
+  packages: {
+    list: (cwd?: string) => ipcRenderer.invoke("packages:list", cwd),
+    install: (source: string, local?: boolean, cwd?: string) => ipcRenderer.invoke("packages:install", source, local, cwd),
+    remove: (source: string, local?: boolean, cwd?: string) => ipcRenderer.invoke("packages:remove", source, local, cwd),
+    update: (source?: string, cwd?: string) => ipcRenderer.invoke("packages:update", source, cwd),
+    configure: (source: string, enabled: boolean, local?: boolean, cwd?: string) => ipcRenderer.invoke("packages:configure", source, enabled, local, cwd),
   },
   events: {
     subscribe: (listener: (event: PiDeckRuntimeEvent) => void) => {

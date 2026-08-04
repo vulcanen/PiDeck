@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
-import { copy, type Language } from "./i18n";
+import { copy, type Language } from "@pideck/i18n";
 import "./styles.css";
 
 class AppErrorBoundary extends React.Component<React.PropsWithChildren, { error: Error | null }> {

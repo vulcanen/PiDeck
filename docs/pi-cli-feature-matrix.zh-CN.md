@@ -7,9 +7,9 @@
 
 | Pi 能力 | PiDeck 入口 | 当前实现 |
 | --- | --- | --- |
-| 项目发现与切换 | 左侧项目树；560px 以下通过顶部按钮打开会话抽屉 | `SessionManager.listAll()` + Main 有序 `cwd` 清单 → `projects.list` |
-| 会话列表 | 展开当前项目后按最近更新时间倒序显示会话 | `SessionManager.list(cwd)` / `updatedAt` |
-| 新建会话 | New task / 空状态按钮 | `SessionManager.create(cwd)` |
+| 项目发现、浏览与移除 | 左侧项目树；多个项目可同时展开，单击项目只切换自身展开状态，右键项目可从列表移除；560px 以下通过顶部按钮打开会话抽屉 | `SessionManager.listAll()` + Main 有序/隐藏 `cwd` 清单 → `projects.list` / `projects.remove`；移除不删除项目文件或 Pi Session |
+| 会话列表与切换 | 展开任意项目后按最近更新时间倒序显示会话；只有单击具体会话才切换中央工作区 | `SessionManager.list(cwd)` / `updatedAt` |
+| 新建会话 | New task；展开无会话项目时的“新建任务”按钮；空状态按钮 | `SessionManager.create(cwd)` |
 | 会话消息 | 中央对话线程 | `AgentSession.messages`；按 Pi `parseSkillBlock()` 语义将 Skill 引用与用户原文分层展示 |
 | 会话命名 | 会话列表与对话标题 | 从首条用户意图移除 Skill/命令/资源前缀后生成短标题，并通过 `AgentSession.setSessionName()` 持久化 |
 | 会话删除 | 会话更多菜单 | `sessions.delete` |
@@ -51,15 +51,15 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 
 当前审批事件只提供工具名和参数，没有独立的风险等级字段；审批卡因此明确标记为“工具调用”，不会根据工具名伪造风险等级。
 
-## 尚未接入
+## 已接入（新增）
 
-以下能力目前只有 PiHost/SDK 类型或产品计划，不能在当前 UI 中宣称已完成：
+以下能力已经完成基础桌面映射：
 
-- Session tree 可视化、树导航、克隆、分支选择器。
-- Steering / Follow-up 队列模式切换。
-- Extension UI request 的完整桌面映射。
-- Pi Package install/remove/update/config 管理器。
-- Print、JSON、RPC、stdin、Auth Print 等 CLI 兼容通道。
-- 完整 Monaco Diff、任务基线 diff、逐块审阅。
+- Steering / Follow-up 投递方式，以及 Pi 的 all / one-at-a-time 队列模式；入口位于 Composer 队列菜单。
+- Extension UI request 的 select、confirm、input、editor、notify 请求；请求会在桌面窗口中显示并回传结果。
+- Pi Package install/remove/update/config 管理器；入口位于命令面板中的 Pi packages。
+当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 与本地终端入口完成。
+
+Diff 预览、任务基线 diff 和逐块审阅仍未接入。Pi 提供编辑工具的底层 diff 计算，但 Monaco 编辑器和审阅工作流属于 PiDeck 的桌面产品能力。
 
 新增能力必须先更新 `packages/contracts`，再更新 PiHost、Preload、Renderer 和本文矩阵。

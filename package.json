@@ -12,13 +12,68 @@
   "scripts": {
     "dev": "npm --workspace @pideck/desktop run dev",
     "build": "npm --workspace @pideck/desktop run build",
-    "typecheck": "npm --workspace @pideck/desktop run typecheck",
-    "package:mac": "npm run build && electron-packager . PiDeck --platform=darwin --electron-version=43.2.0 --out=release --overwrite --icon=apps/desktop/assets/pideck-icon.icns --app-bundle-id=com.pideck.desktop --build-version=6 --extend-info=apps/desktop/assets/mac-info.plist --no-asar --no-prune --ignore='^/(\\.git|release|docs|rules|\\.codex|\\.agents)'"
+    "typecheck": "npm --workspace @pideck/domain run typecheck && npm --workspace @pideck/pi-adapter run typecheck && npm --workspace @pideck/permission-engine run typecheck && npm --workspace @pideck/pi-host run typecheck && npm --workspace @pideck/i18n run typecheck && npm --workspace @pideck/ui-system run typecheck && npm --workspace @pideck/desktop run typecheck",
+    "package:win": "npm run build && npm exec -- electron-builder --win nsis --x64",
+    "package:mac": "npm run build && npm exec -- electron-builder --mac dmg"
   },
   "engines": {
     "node": ">=22.19.0"
   },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@gotgenes/pi-permission-system": "^24.0.0",
+    "@pideck/domain": "0.1.0"
+  },
+  "build": {
+    "appId": "com.pideck.desktop",
+    "productName": "PiDeck",
+    "directories": {
+      "output": "release"
+    },
+    "asar": false,
+    "npmRebuild": false,
+    "files": [
+      "apps/desktop/dist/**/*",
+      "apps/desktop/assets/**/*",
+      "dist-renderer/**/*",
+      "packages/domain/dist/**/*",
+      "packages/domain/package.json",
+      "packages/pi-adapter/dist/**/*",
+      "packages/pi-adapter/package.json",
+      "packages/pi-host/dist/**/*",
+      "packages/pi-host/package.json",
+      "packages/permission-engine/dist/**/*",
+      "packages/permission-engine/package.json",
+      "packages/i18n/dist/**/*",
+      "packages/i18n/package.json",
+      "packages/ui-system/dist/**/*",
+      "packages/ui-system/package.json",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      "icon": "apps/desktop/assets/pideck-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "apps/desktop/assets/pideck-icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "dmg": {
+      "title": "PiDeck"
+    }
+  },
   "devDependencies": {
-    "@electron/packager": "^20.0.4"
+    "@electron/packager": "^20.0.4",
+    "electron-builder": "^26.15.3"
   }
 }

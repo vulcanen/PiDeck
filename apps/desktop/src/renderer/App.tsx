@@ -1,143 +1,16 @@
-import { Component, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
-import Editor from "react-simple-code-editor";
-import type {
-  AuthMethod,
-  ContextUsage,
-  ModelSummary,
-  PermissionMode,
-  PermissionStatus,
-  ProviderSummary,
-  SessionCapabilities,
-  WorkspaceSnapshot,
-} from "@pideck/contracts";
-import { deriveSessionTitle, parseSkillInvocation, type ProjectSummary, type TaskSummary } from "@pideck/domain";
-import { copy, localizeCommandDescription, type Language } from "./i18n";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionMode, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
+import { deriveSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
+import { copy, localizeCommandDescription, type Language } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
-import { copyText, Icon, useDialogFocus } from "./ui";
+import { Icon, useDialogFocus } from "@pideck/ui-system";
+import type { ActivityStep, ImageAttachment, ImageContextMenuState, MessageLoad, PreviewImage, SentImageMessage, SuggestionMode, TaskUiState, Theme, WorkingPhase } from "./types";
+import { createDefaultTaskUiState, mergeMessageSnapshot, messageIdentity, sortTasksByUpdatedAt, textFromMessage } from "./message-utils";
+import { ApprovalCard, CommandPalette, CommandPaletteBoundary, Composer, ConfirmDialog, ConversationSkeleton, ExecutionSummary, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, MarkdownContent, MemoMessageTimeline, PackageSettings, PermissionLevelControl, ProjectRemoveDialog, ProviderSettings, SidebarSkeleton, TaskRow, TerminalPanel, WorkingIndicator, copyImageToClipboard } from "./ui-components";
 
-type Theme = "light" | "dark";
-type SuggestionMode = "slash" | "mention" | null;
-type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | null;
-type MessageLoad = { status: "idle" | "loading" | "ready" | "error"; error?: string };
-type ActivityStep = {
-  id: string;
-  kind: "thinking" | "tool";
-  label: string;
-  detail?: string;
-  args?: unknown;
-  result?: unknown;
-  startedAt: number;
-  endedAt?: number;
-  isError?: boolean;
-};
-type TaskUiState = {
-  isSending: boolean;
-  isCompacting: boolean;
-  streamText: string;
-  workingPhase: WorkingPhase;
-  activity: ActivityStep[];
-  toolName?: string;
-  approval?: { requestId: string; toolName: string; args?: unknown };
-};
-type AuthPromptState = { requestId: string; message: string; placeholder: string; value: string };
-type ImageAttachment = { id: string; data: string; mimeType: string; name: string };
-type SentImageMessage = { text: string; images: ImageAttachment[] };
-type PreviewImage = { src: string; alt: string };
-type ImageContextMenuState = { x: number; y: number; image: PreviewImage };
-type ProviderFilter = "all" | "configured" | "expired" | "missing";
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-}
-
-function handleRovingMenuKeyDown(event: React.KeyboardEvent<HTMLElement>) {
-  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-  const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem'], [role='menuitemradio']"));
-  if (!items.length) return;
-  const currentIndex = items.findIndex((item) => item === document.activeElement);
-  const nextIndex = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? items.length - 1
-      : event.key === "ArrowDown"
-        ? (currentIndex + 1 + items.length) % items.length
-        : (currentIndex - 1 + items.length) % items.length;
-  event.preventDefault();
-  items[nextIndex]?.focus();
-}
-
-function createDefaultTaskUiState(): TaskUiState {
-  return { isSending: false, isCompacting: false, streamText: "", workingPhase: null, activity: [] };
-}
-
-function sortTasksByUpdatedAt(tasks: TaskSummary[]): TaskSummary[] {
-  return [...tasks].sort((a, b) => {
-    const aTime = Date.parse(a.updatedAt);
-    const bTime = Date.parse(b.updatedAt);
-    return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
-  });
-}
-
-function textFromMessage(message: any): string {
-  if (typeof message?.content === "string") return message.content;
-  if (!Array.isArray(message?.content)) return "";
-  return message.content.map((part: any) => part?.type === "text" ? part.text : "").filter(Boolean).join("\n");
-}
-
-function formatMessageTime(value: string | number | undefined, language: Language) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", {
-    weekday: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-async function copyImageToClipboard(src: string): Promise<boolean> {
-  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") return false;
-  try {
-    const blob = await fetch(src).then((response) => response.blob());
-    await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
-    return true;
-  } catch { return false; }
-}
-
-function reactNodeText(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(reactNodeText).join("");
-  if (node && typeof node === "object" && "props" in node) return reactNodeText((node as { props?: { children?: ReactNode } }).props?.children);
-  return "";
-}
-
-function CodeBlock({ children, language }: { children: ReactNode; language: Language }) {
-  const [copied, setCopied] = useState(false);
-  const t = copy[language];
-  async function copyCode() {
-    try {
-      if (!await copyText(reactNodeText(children).replace(/\n$/, ""))) return;
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      setCopied(false);
-    }
-  }
-  return <div className="code-block"><button type="button" onClick={() => void copyCode()}><Icon name="copy" size={13} />{copied ? t.copiedCode : t.copyCode}</button><pre>{children}</pre></div>;
-}
-
-const MarkdownRenderer = lazy(async () => {
-  const [{ default: ReactMarkdown }, { default: remarkGfm }] = await Promise.all([import("react-markdown"), import("remark-gfm")]);
-  return { default: function LoadedMarkdown({ text, language }: { text: string; language: Language }) {
-    return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-      pre: ({ children }) => <CodeBlock language={language}>{children}</CodeBlock>,
-      a: ({ children, href, ...props }) => <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>,
-    }}>{text}</ReactMarkdown>;
-  } };
-});
-
-function MarkdownContent({ text, language }: { text: string; language: Language }) {
-  return <div className="markdown-content"><Suspense fallback={<p>{text}</p>}><MarkdownRenderer text={text} language={language} /></Suspense></div>;
 }
 
 export function App() {
@@ -149,10 +22,20 @@ export function App() {
   });
   const [projectCwd, setProjectCwd] = useState(() => localStorage.getItem("pideck.project-cwd") ?? "");
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [expandedProjectCwd, setExpandedProjectCwd] = useState<string | null>(() => localStorage.getItem("pideck.expanded-project-cwd") || null);
+  const [expandedProjectCwds, setExpandedProjectCwds] = useState<string[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("pideck.expanded-project-cwds") ?? "[]");
+      if (Array.isArray(stored)) return stored.filter((cwd): cwd is string => typeof cwd === "string" && cwd.length > 0);
+    } catch { /* Fall through to the legacy single-project preference. */ }
+    const legacy = localStorage.getItem("pideck.expanded-project-cwd");
+    return legacy ? [legacy] : [];
+  });
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [projectTasksByCwd, setProjectTasksByCwd] = useState<Record<string, TaskSummary[]>>({});
+  const [projectTaskLoads, setProjectTaskLoads] = useState<Record<string, MessageLoad>>({});
   const [activeTask, setActiveTask] = useState<TaskSummary | null>(null);
   const [messagesByTask, setMessagesByTask] = useState<Record<string, any[]>>({});
+  const [steeringMessageKeysByTask, setSteeringMessageKeysByTask] = useState<Record<string, string[]>>({});
   const [sentImagesByTask, setSentImagesByTask] = useState<Record<string, SentImageMessage[]>>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("pideck.sent-images.v1") ?? "null");
@@ -181,6 +64,11 @@ export function App() {
   const [activeModel, setActiveModel] = useState<ModelSummary | null>(null);
   const [contextUsage, setContextUsage] = useState<ContextUsage | undefined>(undefined);
   const [permissionStatus, setPermissionStatus] = useState<PermissionStatus | null>(null);
+  const [queueState, setQueueState] = useState<AgentQueueState | null>(null);
+  const [queueMutationBusy, setQueueMutationBusy] = useState(false);
+  const [queueDelivery, setQueueDelivery] = useState<QueueDelivery>("followUp");
+  const [extensionUiRequest, setExtensionUiRequest] = useState<ExtensionUiRequest | null>(null);
+  const [packagesOpen, setPackagesOpen] = useState(false);
   const [thinkingLevel, setThinkingLevel] = useState("off");
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(["off"]);
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
@@ -190,9 +78,12 @@ export function App() {
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [runtimeStatus, setRuntimeStatus] = useState<"connected" | "starting" | "disconnected">("starting");
   const [contextMenu, setContextMenu] = useState<{ task: TaskSummary; x: number; y: number } | null>(null);
+  const [projectContextMenu, setProjectContextMenu] = useState<{ project: ProjectSummary; x: number; y: number } | null>(null);
   const [imageContextMenu, setImageContextMenu] = useState<ImageContextMenuState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TaskSummary | null>(null);
+  const [pendingProjectRemove, setPendingProjectRemove] = useState<ProjectSummary | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [removingProjectCwd, setRemovingProjectCwd] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -202,6 +93,10 @@ export function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const followConversationRef = useRef(true);
   const noticeTimerRef = useRef<number | null>(null);
+  const streamDeltasRef = useRef<Record<string, string>>({});
+  const streamFrameRef = useRef<number | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const optimisticTaskIdsRef = useRef<Record<string, Set<string>>>({});
   const initialLoadStartedRef = useRef(false);
   const t = copy[language];
   useDialogFocus(sidebarRef, () => setMobileSidebarOpen(false), mobileSidebarOpen && window.matchMedia("(max-width: 560px)").matches);
@@ -230,6 +125,18 @@ export function App() {
   const messageLoad = activeTask ? messageLoads[activeTask.id] ?? { status: "idle" as const } : { status: "idle" as const };
   const activeProject = projects.find((project) => project.cwd === projectCwd) ?? null;
 
+  function mergeLiveTaskState(task: TaskSummary): TaskSummary {
+    const ui = taskUi[task.id];
+    if (ui?.approval) return { ...task, state: "waiting-approval" };
+    if (ui?.isSending || ui?.isCompacting) return { ...task, state: "running" };
+    return task;
+  }
+
+  function updateTaskLists(update: (tasks: TaskSummary[]) => TaskSummary[]) {
+    setTasks(update);
+    setProjectTasksByCwd((current) => Object.fromEntries(Object.entries(current).map(([cwd, projectTasks]) => [cwd, update(projectTasks)])));
+  }
+
   function patchTaskUi(taskId: string, patch: Partial<TaskUiState>) {
     setTaskUi((current) => {
       const previous = current[taskId] ?? createDefaultTaskUiState();
@@ -241,6 +148,26 @@ export function App() {
     setTaskUi((current) => {
       const previous = current[taskId] ?? { ...createDefaultTaskUiState(), isSending: true, workingPhase: "thinking" as const };
       return { ...current, [taskId]: { ...previous, activity: update(previous.activity) } };
+    });
+  }
+
+  function queueStreamDelta(taskId: string, delta: string) {
+    streamDeltasRef.current[taskId] = `${streamDeltasRef.current[taskId] ?? ""}${delta}`;
+    if (streamFrameRef.current !== null) return;
+    // Markdown rendering is comparatively expensive. Cap live updates so a
+    // fast provider cannot force the whole desktop shell to render per token.
+    streamFrameRef.current = window.setTimeout(() => {
+      streamFrameRef.current = null;
+      const pending = streamDeltasRef.current;
+      streamDeltasRef.current = {};
+      setTaskUi((current) => {
+        const next = { ...current };
+        for (const [pendingTaskId, text] of Object.entries(pending)) {
+          const previous = next[pendingTaskId] ?? { ...createDefaultTaskUiState(), isSending: true, workingPhase: "responding" as const };
+          next[pendingTaskId] = { ...previous, isSending: true, isCompacting: false, workingPhase: "responding", streamText: previous.streamText + text, toolName: undefined };
+        }
+        return next;
+      });
     });
   }
 
@@ -262,13 +189,27 @@ export function App() {
     setPermissionStatus(status);
     if (status.mode === "ask") return;
     setTaskUi((current) => Object.fromEntries(Object.entries(current).map(([taskId, state]) => [taskId, state.approval ? { ...state, approval: undefined, workingPhase: state.isSending ? "thinking" as const : state.workingPhase } : state])));
-    setTasks((current) => current.map((task) => task.state === "waiting-approval" ? { ...task, state: "running" } : task));
+    updateTaskLists((current) => current.map((task) => task.state === "waiting-approval" ? { ...task, state: "running" } : task));
   }
 
   function showNotice(message: string) {
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
     setNotice(message);
     noticeTimerRef.current = window.setTimeout(() => { setNotice(null); noticeTimerRef.current = null; }, 3600);
+  }
+
+  function clearProjectState() {
+    setActiveTask(null);
+    setTasks([]);
+    setWorkspace(null);
+    setCapabilities(null);
+    setContextUsage(undefined);
+    setComposer("");
+    setComposerImages([]);
+    setActiveModel(null);
+    setThinkingLevel("off");
+    setThinkingLevels(["off"]);
+    setMessageLoads({});
   }
 
   async function refreshWorkspace() {
@@ -294,7 +235,7 @@ export function App() {
     } catch (error) { showNotice(`Pi models.list: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
-  async function loadProjectData(cwd: string, preferredTaskId?: string) {
+  async function loadProjectData(cwd: string, preferredTaskId?: string, selectDefaultTask = true, fallbackTask?: TaskSummary) {
     setInitialLoading(true);
     setLoadError(null);
     try {
@@ -306,9 +247,17 @@ export function App() {
         window.pideck.workspace.snapshot(cwd),
         window.pideck.sessions.capabilities(undefined, cwd),
       ]);
-      const remoteTasks = tasksResult.status === "fulfilled" ? sortTasksByUpdatedAt(tasksResult.value) : [];
-      if (tasksResult.status === "fulfilled") setTasks(remoteTasks);
-      else setLoadError(`${t.initialLoadFailed}: ${tasksResult.reason instanceof Error ? tasksResult.reason.message : String(tasksResult.reason)}`);
+      const listedTasks = tasksResult.status === "fulfilled" ? tasksResult.value.map(mergeLiveTaskState) : [];
+      // A newly-created empty session can briefly be missing from Pi's
+      // persisted SessionManager list while its session file is flushed. Keep
+      // the task supplied by the sidebar visible/selectable during that gap.
+      const previousTasks = [...(projectTasksByCwd[cwd] ?? []), ...(fallbackTask ? [fallbackTask] : [])];
+      const remoteTasks = mergeProjectTasks(cwd, listedTasks, previousTasks);
+      if (tasksResult.status === "fulfilled") {
+        setTasks(remoteTasks);
+        setProjectTasksByCwd((current) => ({ ...current, [cwd]: remoteTasks }));
+        setProjectTaskLoads((current) => ({ ...current, [cwd]: { status: "ready" } }));
+      } else setLoadError(`${t.initialLoadFailed}: ${tasksResult.reason instanceof Error ? tasksResult.reason.message : String(tasksResult.reason)}`);
       if (modelsResult.status === "fulfilled") setModels(modelsResult.value);
       else showNotice(`Pi models.list: ${modelsResult.reason instanceof Error ? modelsResult.reason.message : String(modelsResult.reason)}`);
       if (snapshotResult.status === "fulfilled") setWorkspace(snapshotResult.value);
@@ -320,7 +269,8 @@ export function App() {
         setContextUsage(capabilitiesResult.value.contextUsage);
         setActiveModel(capabilitiesResult.value.model?.authConfigured ? capabilitiesResult.value.model : modelsResult.status === "fulfilled" ? modelsResult.value.find((model) => model.authConfigured) ?? null : null);
       } else showNotice(`Pi capabilities: ${capabilitiesResult.reason instanceof Error ? capabilitiesResult.reason.message : String(capabilitiesResult.reason)}`);
-      setActiveTask(remoteTasks.find((task) => task.id === preferredTaskId) ?? remoteTasks[0] ?? null);
+      const preferredTask = preferredTaskId ? remoteTasks.find((task) => task.id === preferredTaskId) ?? fallbackTask ?? null : null;
+      setActiveTask(selectDefaultTask ? preferredTask ?? remoteTasks[0] ?? null : preferredTask);
     } catch (error) {
       setLoadError(`${t.initialLoadFailed}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -335,8 +285,15 @@ export function App() {
       const discoveredProjects = await window.pideck.projects.list(projectCwd || undefined);
       setProjects(discoveredProjects);
       const selectedProject = discoveredProjects.find((project) => project.cwd === projectCwd) ?? discoveredProjects[0];
-      if (!selectedProject) throw new Error(t.noProjects);
-      setExpandedProjectCwd((current) => current === selectedProject.cwd ? current : null);
+      if (!selectedProject) {
+        clearProjectState();
+        setProjectCwd("");
+        localStorage.removeItem("pideck.project-cwd");
+        setExpandedProjectCwds([]);
+        setInitialLoading(false);
+        return;
+      }
+      setExpandedProjectCwds((current) => current.includes(selectedProject.cwd) ? current : [...current, selectedProject.cwd]);
       await loadProjectData(selectedProject.cwd, activeTask?.projectId === selectedProject.id ? activeTask.id : undefined);
     } catch (error) {
       setLoadError(`${t.initialLoadFailed}: ${error instanceof Error ? error.message : String(error)}`);
@@ -344,21 +301,72 @@ export function App() {
     }
   }
 
+  async function loadProjectSessions(project: ProjectSummary) {
+    setProjectTaskLoads((current) => ({ ...current, [project.cwd]: { status: "loading" } }));
+    try {
+      const listedTasks = (await window.pideck.sessions.list(project.cwd)).map(mergeLiveTaskState);
+      setProjectTasksByCwd((current) => ({
+        ...current,
+        [project.cwd]: mergeProjectTasks(project.cwd, listedTasks, current[project.cwd] ?? []),
+      }));
+      setProjectTaskLoads((current) => ({ ...current, [project.cwd]: { status: "ready" } }));
+    } catch (error) {
+      setProjectTaskLoads((current) => ({ ...current, [project.cwd]: { status: "error", error: error instanceof Error ? error.message : String(error) } }));
+    }
+  }
+
   async function selectProject(project: ProjectSummary) {
     if (initialLoading) return;
-    if (project.cwd === projectCwd) {
-      setExpandedProjectCwd((current) => current === project.cwd ? null : project.cwd);
+    if (expandedProjectCwds.includes(project.cwd)) {
+      setExpandedProjectCwds((current) => current.filter((cwd) => cwd !== project.cwd));
       return;
     }
-    setExpandedProjectCwd(project.cwd);
-    setActiveTask(null);
-    setTasks([]);
-    setWorkspace(null);
-    setCapabilities(null);
-    setContextUsage(undefined);
-    setComposer("");
-    setComposerImages([]);
-    await loadProjectData(project.cwd);
+    setExpandedProjectCwds((current) => [...current, project.cwd]);
+    if (project.cwd !== projectCwd) await loadProjectSessions(project);
+  }
+
+  async function selectTask(project: ProjectSummary, task: TaskSummary) {
+    if (initialLoading) return;
+    setMobileSidebarOpen(false);
+    setExpandedProjectCwds((current) => current.includes(project.cwd) ? current : [...current, project.cwd]);
+    if (project.cwd === projectCwd) {
+      setActiveTask(task);
+      updateTaskLists((current) => current.map((item) => item.id === task.id ? { ...item, unread: false } : item));
+      return;
+    }
+    clearProjectState();
+    await loadProjectData(project.cwd, task.id, false, task);
+  }
+
+  async function createTaskForProject(project: ProjectSummary) {
+    if (initialLoading) return null;
+    try {
+      const task = await window.pideck.sessions.create({ cwd: project.cwd, name: t.newTaskName });
+      rememberOptimisticTask(task);
+      setProjectTasksByCwd((current) => ({ ...current, [project.cwd]: sortTasksByUpdatedAt([task, ...(current[project.cwd] ?? []).filter((item) => item.id !== task.id)]) }));
+      setProjects((current) => current.map((item) => item.cwd === project.cwd ? { ...item, taskCount: item.taskCount + 1 } : item));
+      setExpandedProjectCwds((current) => current.includes(project.cwd) ? current : [...current, project.cwd]);
+      setMobileSidebarOpen(false);
+      clearProjectState();
+      setProjectCwd(project.cwd);
+      localStorage.setItem("pideck.project-cwd", project.cwd);
+      setTasks([task]);
+      setMessagesByTask((current) => ({ ...current, [task.id]: [] }));
+      setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
+      setActiveTask(task);
+      await loadProjectData(project.cwd, task.id, false, task);
+      // SessionManager.list may not expose a just-created session until its
+      // session file is flushed. Keep the optimistic task selected instead of
+      // letting the reload return to the empty-project state.
+      setTasks((current) => sortTasksByUpdatedAt([task, ...current.filter((item) => item.id !== task.id)]));
+      setProjectTasksByCwd((current) => ({ ...current, [project.cwd]: sortTasksByUpdatedAt([task, ...(current[project.cwd] ?? []).filter((item) => item.id !== task.id)]) }));
+      setActiveTask((current) => current?.id === task.id ? current : task);
+      showNotice(t.sessionCreated);
+      return task;
+    } catch (error) {
+      showNotice(`${t.sessionCreateFailed}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   async function chooseProjectDirectory() {
@@ -374,30 +382,76 @@ export function App() {
     }
   }
 
+  async function removeProject(project: ProjectSummary) {
+    if (removingProjectCwd) return;
+    try {
+      const removeProjectBridge = window.pideck.projects.remove;
+      if (typeof removeProjectBridge !== "function") throw new Error(t.projectRemoveBridgeError);
+      setRemovingProjectCwd(project.cwd);
+      await removeProjectBridge(project.cwd);
+      setProjects((current) => current.filter((item) => item.cwd !== project.cwd));
+      setProjectTasksByCwd((current) => { const next = { ...current }; delete next[project.cwd]; return next; });
+      setProjectTaskLoads((current) => { const next = { ...current }; delete next[project.cwd]; return next; });
+      setExpandedProjectCwds((current) => current.filter((cwd) => cwd !== project.cwd));
+      if (projectCwd === project.cwd) {
+        clearProjectState();
+        setProjectCwd("");
+        localStorage.removeItem("pideck.project-cwd");
+      }
+      setPendingProjectRemove(null);
+    } catch (error) {
+      showNotice(`${t.projectRemoveFailed}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRemovingProjectCwd(null);
+    }
+  }
+
   useEffect(() => { localStorage.setItem("pideck.language", language); document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; }, [language]);
   useEffect(() => { localStorage.setItem("pideck.theme", theme); document.documentElement.style.colorScheme = theme; }, [theme]);
   useEffect(() => {
-    if (expandedProjectCwd) localStorage.setItem("pideck.expanded-project-cwd", expandedProjectCwd);
-    else localStorage.removeItem("pideck.expanded-project-cwd");
-  }, [expandedProjectCwd]);
+    localStorage.setItem("pideck.expanded-project-cwds", JSON.stringify(expandedProjectCwds));
+    localStorage.removeItem("pideck.expanded-project-cwd");
+  }, [expandedProjectCwds]);
   useEffect(() => { void window.pideck.app.setLanguage(language).catch(() => undefined); }, [language]);
   useEffect(() => {
     try { localStorage.setItem("pideck.sent-images.v1", JSON.stringify(sentImagesByTask)); }
     catch { /* Image history is a UI fallback; Pi remains the authoritative session store. */ }
   }, [sentImagesByTask]);
-  useEffect(() => () => { if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current); }, []);
+  useEffect(() => () => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    if (streamFrameRef.current !== null) window.clearTimeout(streamFrameRef.current);
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+  }, []);
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
     void loadInitialData();
   }, []);
   useEffect(() => { followConversationRef.current = true; setShowJumpToLatest(false); }, [activeTask?.id]);
+  useEffect(() => {
+    setQueueState(null);
+    if (activeTask && projectCwd) void refreshQueue(activeTask);
+  }, [activeTask?.id, projectCwd]);
 
   useEffect(() => {
     const element = conversationRef.current;
     if (!element) return;
-    if (followConversationRef.current) element.scrollTop = element.scrollHeight;
-    else if (streamText || isSending) setShowJumpToLatest(true);
+    if (!followConversationRef.current) {
+      if (streamText || isSending) setShowJumpToLatest(true);
+      return;
+    }
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const current = conversationRef.current;
+      if (current) current.scrollTop = current.scrollHeight;
+    });
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
   }, [messages, streamText, isSending]);
 
   useLayoutEffect(() => {
@@ -442,15 +496,16 @@ export function App() {
     element.scrollTo({ top: element.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }
 
-  const filteredTasks = useMemo(() => tasks.filter((task) => task.title.toLowerCase().includes(searchQuery.toLowerCase())), [tasks, searchQuery]);
   const modelOptions = useMemo(() => [...models].filter((model) => model.authConfigured).sort((a, b) => a.providerName.localeCompare(b.providerName) || a.name.localeCompare(b.name)), [models]);
+  const hiddenSlashCommandNames = useMemo(() => new Set(["fork", "tree"]), []);
   const suggestions = useMemo(() => {
     if (suggestionMode === "mention") return (workspace?.files ?? []).filter((file) => file.kind === "file" && file.path.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
+    const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const slashItems = [
-      ...slashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...visibleSlashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
       ...prompts.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
       ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
     ];
@@ -460,13 +515,14 @@ export function App() {
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
+    const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const commands = [
-      ...slashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...visibleSlashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
       ...prompts.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language), source: "prompt" })),
       ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language), source: "skill" })),
     ];
     return Array.from(new Map(commands.map((command) => [command.name, command])).values());
-  }, [capabilities, language]);
+  }, [capabilities, hiddenSlashCommandNames, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -520,27 +576,84 @@ export function App() {
       if (status === "connected" || status === "starting" || status === "disconnected") setRuntimeStatus(status);
       return;
     }
+    if (runtimeEvent.type === "extension.ui.request" && runtimeEvent.event && typeof runtimeEvent.event === "object") {
+      setExtensionUiRequest(runtimeEvent.event as ExtensionUiRequest);
+      return;
+    }
+    if (runtimeEvent.type === "extension.ui.notify") {
+      const event = runtimeEvent.event as { message?: string } | undefined;
+      if (event?.message) showNotice(event.message);
+      return;
+    }
+    if (runtimeEvent.type === "agent.event" && (runtimeEvent.event as any)?.type === "extension.ui.notify") {
+      const event = runtimeEvent.event as { message?: string } | undefined;
+      if (event?.message) showNotice(event.message);
+      return;
+    }
     const taskId = runtimeEvent.taskId;
     if (!taskId) return;
     if (runtimeEvent.type === "approval.requested" && runtimeEvent.requestId) {
       const event = runtimeEvent.event as { toolName?: string; args?: unknown } | undefined;
       patchTaskUi(taskId, { approval: { requestId: runtimeEvent.requestId, toolName: event?.toolName ?? copy[language].toolResult, args: event?.args }, workingPhase: null });
-      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: "waiting-approval" } : task));
+      updateTaskLists((current) => current.map((task) => task.id === taskId ? { ...task, state: "waiting-approval" } : task));
       return;
     }
     if (runtimeEvent.type === "approval.resolved" && runtimeEvent.requestId) {
       const event = runtimeEvent.event as { decision?: "allow-once" | "deny" } | undefined;
       patchTaskUi(taskId, { approval: undefined, workingPhase: event?.decision === "allow-once" ? "thinking" : null });
-      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, state: event?.decision === "allow-once" ? "running" : task.state } : task));
+      updateTaskLists((current) => current.map((task) => task.id === taskId ? { ...task, state: event?.decision === "allow-once" ? "running" : task.state } : task));
       return;
     }
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
+    if (event?.type === "queue_update") {
+      if (taskId === activeTask?.id) setQueueState({
+        steering: Array.isArray(event.steering) ? [...event.steering] : [],
+        followUp: Array.isArray(event.followUp) ? [...event.followUp] : [],
+        steeringMode: queueState?.steeringMode ?? "one-at-a-time",
+        followUpMode: queueState?.followUpMode ?? "one-at-a-time",
+      });
+      return;
+    }
     if (event?.type === "agent_start") {
-      patchTaskUi(taskId, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", toolName: undefined, activity: [] });
+      setTaskUi((current) => {
+        const previous = current[taskId] ?? createDefaultTaskUiState();
+        const startedAt = Date.now();
+        const activity = previous.activity.length > 0
+          ? previous.activity
+          : [{ id: `${taskId}:thinking:${startedAt}`, kind: "thinking" as const, label: copy[language].executionThinking, startedAt }];
+        return { ...current, [taskId]: { ...previous, isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", toolName: undefined, activity } };
+      });
       const updatedAt = new Date().toISOString();
-      setTasks((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "running", updatedAt } : task)));
+      updateTaskLists((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "running", updatedAt } : task)));
       void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+    } else if (event?.type === "message_start" && event.message?.role === "user") {
+      // Pi keeps one outer agent run alive while it drains follow-up messages.
+      // A queued user message is the real boundary for the next timer. Add it
+      // to the visible timeline immediately so the previous turn can render
+      // its reply and completed duration before the new live summary.
+      const queueDelivery = event.queueDelivery === "steer" ? "steer" : "followUp";
+      const steeringMessageKey = queueDelivery === "steer" ? messageIdentity(event.message) : undefined;
+      if (steeringMessageKey) setSteeringMessageKeysByTask((current) => ({ ...current, [taskId]: [...new Set([...(current[taskId] ?? []), steeringMessageKey])] }));
+      setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], [event.message]) }));
+      setTaskUi((current) => {
+        const previous = current[taskId] ?? { ...createDefaultTaskUiState(), isSending: true };
+        const isSteeringMessage = queueDelivery === "steer";
+        const hasCompletedWork = previous.activity.some((step) => step.endedAt || step.kind === "tool" || Boolean(step.detail));
+        const startedAt = Date.now();
+        return { ...current, [taskId]: {
+          ...previous,
+          isSending: true,
+          isCompacting: false,
+          workingPhase: "thinking",
+          streamText: "",
+          toolName: undefined,
+          activity: isSteeringMessage && previous.activity.length > 0
+            ? previous.activity
+            : [{ id: `${taskId}:thinking:${startedAt}`, kind: "thinking", label: copy[language].executionThinking, startedAt }],
+          completedActivity: !isSteeringMessage && hasCompletedWork ? [...previous.completedActivity, previous.activity] : previous.completedActivity,
+        } };
+      });
     } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
     else if (event?.type === "compaction_start") patchTaskUi(taskId, { isCompacting: true, workingPhase: "compacting", toolName: undefined });
     else if (event?.type === "compaction_end") {
@@ -559,10 +672,7 @@ export function App() {
       patchTaskUi(taskId, { workingPhase: "thinking" });
     } else if (event?.type === "message_update" && event.stream?.type === "text_delta" && event.stream.delta) {
       updateActivity(taskId, (steps) => steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: Date.now() } : step));
-      setTaskUi((current) => {
-        const previous = current[taskId] ?? { ...createDefaultTaskUiState(), isSending: true, workingPhase: "responding" as const };
-        return { ...current, [taskId]: { ...previous, isSending: true, isCompacting: false, workingPhase: "responding", streamText: previous.streamText + event.stream.delta, toolName: undefined } };
-      });
+      queueStreamDelta(taskId, event.stream.delta);
     } else if (event?.type === "tool_execution_start") {
       const startedAt = Date.now();
       updateActivity(taskId, (steps) => [...steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: startedAt } : step), { id: event.toolCallId ?? `${taskId}:tool:${startedAt}`, kind: "tool", label: event.toolName ?? copy[language].toolResult, args: event.args, startedAt }]);
@@ -576,33 +686,44 @@ export function App() {
     }
     else if (event?.type === "session_info_changed" && typeof event.name === "string" && event.name.trim()) {
       const title = event.name.trim();
-      setTasks((current) => current.map((task) => task.id === taskId ? { ...task, title } : task));
+      updateTaskLists((current) => current.map((task) => task.id === taskId ? { ...task, title } : task));
       setActiveTask((current) => current?.id === taskId ? { ...current, title } : current);
     }
     else if (event?.type === "message.snapshot") {
-      setMessagesByTask((current) => ({ ...current, [taskId]: (event.messages ?? []) as any[] }));
+      setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], Array.isArray(event.messages) ? event.messages : [], true) }));
       setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
       patchTaskUi(taskId, { streamText: "" });
-    } else if (event?.type === "agent_settled" || event?.type === "agent_end") {
+    } else if (event?.type === "agent_end") {
+      // agent_end marks the end of one model turn. Pi may still have queued
+      // follow-up/steering messages, so do not stop the execution timer here.
+      updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt: Date.now() }));
+      patchTaskUi(taskId, { workingPhase: "thinking", streamText: "", toolName: undefined });
+    } else if (event?.type === "agent_settled") {
       const endedAt = Date.now();
       updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt }));
-      patchTaskUi(taskId, { isSending: false, isCompacting: false, workingPhase: null, streamText: "", toolName: undefined });
+      setTaskUi((current) => {
+        const previous = current[taskId] ?? createDefaultTaskUiState();
+        const completedActivity = previous.activity.length > 0
+          ? [...previous.completedActivity, previous.activity.map((step) => step.endedAt ? step : { ...step, endedAt })]
+          : previous.completedActivity;
+        return { ...current, [taskId]: { ...previous, isSending: false, isCompacting: false, workingPhase: null, streamText: "", toolName: undefined, activity: [], completedActivity } };
+      });
       void window.pideck.sessions.messages(taskId, projectCwd).then((next) => {
-        setMessagesByTask((current) => ({ ...current, [taskId]: next as any[] }));
+        setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], next as any[], true) }));
         setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
       }).catch((error) => setMessageLoads((current) => ({ ...current, [taskId]: { status: "error", error: error instanceof Error ? error.message : String(error) } })));
       void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
       void refreshWorkspace();
-      setTasks((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "idle", updatedAt: new Date().toISOString() } : task)));
+      updateTaskLists((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "idle", updatedAt: new Date().toISOString() } : task)));
     }
-  }), [projectCwd, language]);
+  }), [projectCwd, language, activeTask?.id, queueState?.steeringMode, queueState?.followUpMode]);
 
   useEffect(() => { void window.pideck.runtime.status().then(setRuntimeStatus).catch(() => setRuntimeStatus("disconnected")); void window.pideck.permissions.status().then(setPermissionStatus).catch(() => undefined); }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
-      const modalOpen = paletteOpen || settingsOpen || Boolean(pendingDelete) || Boolean(previewImage);
+      const modalOpen = paletteOpen || settingsOpen || Boolean(pendingDelete) || Boolean(pendingProjectRemove) || Boolean(previewImage);
       if (modalOpen) return;
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); openCommandPalette(); return; }
       if (modifier && event.key.toLowerCase() === "j") { event.preventDefault(); setTerminalOpen((current) => !current); return; }
@@ -612,18 +733,18 @@ export function App() {
       const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
       if (event.key === "/" && !typing) { event.preventDefault(); searchInputRef.current?.focus(); return; }
       if (event.key === "Escape") {
-        if (thinkingMenuOpen || modelMenuOpen || suggestionMode || contextMenu || imageContextMenu) {
-          setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); setImageContextMenu(null); return;
+        if (thinkingMenuOpen || modelMenuOpen || suggestionMode || contextMenu || projectContextMenu || imageContextMenu) {
+          setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); return;
         }
         if (terminalOpen) setTerminalOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [paletteOpen, settingsOpen, pendingDelete, previewImage, thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, imageContextMenu, terminalOpen, projectCwd, language]);
+  }, [paletteOpen, settingsOpen, pendingDelete, pendingProjectRemove, previewImage, thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, projectContextMenu, imageContextMenu, terminalOpen, projectCwd, language]);
 
   useEffect(() => {
-    const close = () => { setContextMenu(null); setImageContextMenu(null); };
+    const close = () => { setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); };
     window.addEventListener("click", close);
     window.addEventListener("blur", close);
     return () => { window.removeEventListener("click", close); window.removeEventListener("blur", close); };
@@ -647,11 +768,13 @@ export function App() {
     }
     try {
       const task = await window.pideck.sessions.create({ cwd: projectCwd, name: t.newTaskName });
-      setTasks((current) => sortTasksByUpdatedAt([task, ...current.filter((item) => item.id !== task.id)]));
+      rememberOptimisticTask(task);
+      updateTaskLists((current) => sortTasksByUpdatedAt([task, ...current.filter((item) => item.id !== task.id)]));
+      setProjectTasksByCwd((current) => ({ ...current, [projectCwd]: sortTasksByUpdatedAt([task, ...(current[projectCwd] ?? []).filter((item) => item.id !== task.id)]) }));
       setProjects((current) => current.map((project) => project.cwd === projectCwd ? { ...project, taskCount: project.taskCount + 1 } : project));
       setMessagesByTask((current) => ({ ...current, [task.id]: [] }));
       setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
-      setExpandedProjectCwd(projectCwd);
+      setExpandedProjectCwds((current) => current.includes(projectCwd) ? current : [...current, projectCwd]);
       setActiveTask(task);
       showNotice(t.sessionCreated);
       return task;
@@ -662,15 +785,21 @@ export function App() {
   }
 
   async function deleteTask(task: TaskSummary) {
+    const taskCwd = task.projectId || projectCwd;
     setDeletingTaskId(task.id);
     try {
       const removeSession = window.pideck.sessions.remove ?? window.pideck.sessions.delete;
       if (typeof removeSession !== "function") throw new Error(t.sessionBridgeError);
-      await removeSession(task.id, projectCwd);
-      setTasks((current) => current.filter((item) => item.id !== task.id));
-      setProjects((current) => current.map((project) => project.cwd === projectCwd ? { ...project, taskCount: Math.max(0, project.taskCount - 1) } : project));
+      await removeSession(task.id, taskCwd);
+      const optimisticIds = optimisticTaskIdsRef.current[taskCwd];
+      optimisticIds?.delete(task.id);
+      if (optimisticIds && optimisticIds.size === 0) delete optimisticTaskIdsRef.current[taskCwd];
+      if (taskCwd === projectCwd) setTasks((current) => current.filter((item) => item.id !== task.id));
+      setProjectTasksByCwd((current) => ({ ...current, [taskCwd]: (current[taskCwd] ?? []).filter((item) => item.id !== task.id) }));
+      setProjects((current) => current.map((project) => project.cwd === taskCwd ? { ...project, taskCount: Math.max(0, project.taskCount - 1) } : project));
       setMessagesByTask((current) => { const next = { ...current }; delete next[task.id]; return next; });
       setSentImagesByTask((current) => { const next = { ...current }; delete next[task.id]; return next; });
+      setSteeringMessageKeysByTask((current) => { const next = { ...current }; delete next[task.id]; return next; });
       setTaskUi((current) => { const next = { ...current }; delete next[task.id]; return next; });
       setPendingDelete(null);
       if (activeTask?.id === task.id) setActiveTask(null);
@@ -707,28 +836,33 @@ export function App() {
     const desiredModel = activeModel;
     const desiredThinking = thinkingLevel;
     const images = composerImages;
+    // Sending a new prompt is an explicit request to follow the new turn,
+    // even if the user had previously scrolled up to inspect older history.
+    followConversationRef.current = true;
+    setShowJumpToLatest(false);
     const task = activeTask ?? await createTask();
     if (!task) return;
     const optimisticId = `local-${Date.now()}`;
+    const continuingExecution = Boolean(activeTaskUi?.isSending);
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
     if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { text, images }] }));
-    setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
+    if (!continuingExecution) setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
-    patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "" });
+    patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", activity: continuingExecution ? activeTaskUi?.activity ?? [] : [], completedActivity: activeTaskUi?.completedActivity ?? [] });
     const taskTitle = deriveSessionTitle(text);
     const shouldNameTask = !task.title || task.title === copy.zh.newTaskName || task.title === copy.en.newTaskName;
     const updatedAt = new Date().toISOString();
-    setTasks((current) => sortTasksByUpdatedAt(current.map((item) => item.id === task.id ? { ...item, title: shouldNameTask ? taskTitle || item.title : item.title, state: "running", updatedAt } : item)));
+    updateTaskLists((current) => sortTasksByUpdatedAt(current.map((item) => item.id === task.id ? { ...item, title: shouldNameTask ? taskTitle || item.title : item.title, state: "running", updatedAt } : item)));
     setActiveTask((current) => current?.id === task.id ? { ...current, title: shouldNameTask ? taskTitle || current.title : current.title, state: "running", updatedAt } : current);
     try {
       if (creating && desiredModel) await window.pideck.agent.setModel(task.id, desiredModel.providerId, desiredModel.id, projectCwd);
       if (creating && desiredThinking !== "off") await window.pideck.agent.setThinkingLevel(task.id, desiredThinking, projectCwd);
-      await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })));
+      await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })), queueDelivery);
     } catch (error) {
-      patchTaskUi(task.id, { isSending: false, isCompacting: false, workingPhase: null });
+      patchTaskUi(task.id, { isSending: false, isCompacting: false, workingPhase: null, activity: [] });
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
       if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
-      setTasks((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
+      updateTaskLists((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
       showNotice(error instanceof Error ? error.message : String(error));
     }
   }
@@ -797,6 +931,61 @@ export function App() {
     } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
+  function rememberOptimisticTask(task: TaskSummary) {
+    const ids = optimisticTaskIdsRef.current[task.projectId] ?? new Set<string>();
+    ids.add(task.id);
+    optimisticTaskIdsRef.current[task.projectId] = ids;
+  }
+
+  function mergeProjectTasks(cwd: string, listedTasks: TaskSummary[], previousTasks: TaskSummary[] = []): TaskSummary[] {
+    const listedById = new Map<string, TaskSummary>();
+    for (const task of listedTasks) listedById.set(task.id, task);
+    const optimisticIds = optimisticTaskIdsRef.current[cwd] ?? new Set<string>();
+    const optimisticById = new Map<string, TaskSummary>();
+    for (const task of previousTasks) {
+      if (!optimisticIds.has(task.id) || listedById.has(task.id) || optimisticById.has(task.id)) continue;
+      optimisticById.set(task.id, task);
+    }
+    for (const task of listedTasks) optimisticIds.delete(task.id);
+    if (optimisticIds.size === 0) delete optimisticTaskIdsRef.current[cwd];
+    return sortTasksByUpdatedAt([...listedById.values(), ...optimisticById.values()]);
+  }
+
+  async function refreshQueue(task = activeTask) {
+    if (!task) { setQueueState(null); return; }
+    try {
+      const next = await window.pideck.agent.queue(task.id, projectCwd);
+      setQueueState(next);
+      setQueueDelivery(next.steering.length > 0 ? "steer" : queueDelivery);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function setQueueModes(modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }) {
+    if (!activeTask) return;
+    try { setQueueState(await window.pideck.agent.setQueueModes(activeTask.id, modes, projectCwd)); }
+    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function clearQueue() {
+    if (!activeTask) return;
+    try { setQueueState(await window.pideck.agent.clearQueue(activeTask.id, projectCwd)); }
+    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function promoteQueuedMessage(followUpIndex: number) {
+    if (!activeTask || queueMutationBusy) return;
+    setQueueMutationBusy(true);
+    try {
+      const next = await window.pideck.agent.promoteQueue(activeTask.id, followUpIndex, projectCwd);
+      setQueueState(next);
+      if (next.steering.length > 0) setQueueDelivery("steer");
+    }
+    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setQueueMutationBusy(false); }
+  }
+
   async function executeTerminal() {
     const command = terminalCommand.trim();
     if (!command) return;
@@ -828,12 +1017,19 @@ export function App() {
   }
 
   function openContextMenu(task: TaskSummary, x: number, y: number) {
+    setProjectContextMenu(null);
     setContextMenu({ task, x: Math.max(8, Math.min(x, window.innerWidth - 174)), y: Math.max(8, Math.min(y, window.innerHeight - 58)) });
+  }
+
+  function openProjectContextMenu(project: ProjectSummary, x: number, y: number) {
+    setContextMenu(null);
+    setProjectContextMenu({ project, x: Math.max(8, Math.min(x, window.innerWidth - 174)), y: Math.max(8, Math.min(y, window.innerHeight - 58)) });
   }
 
   function openImageContextMenu(event: React.MouseEvent, image: PreviewImage) {
     event.preventDefault();
     setContextMenu(null);
+    setProjectContextMenu(null);
     setImageContextMenu({ image, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 174)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 58)) });
   }
 
@@ -860,19 +1056,24 @@ export function App() {
           <div className="section-label"><span>{t.projects}</span><button className="project-add" type="button" title={t.openProject} aria-label={t.openProject} disabled={initialLoading} onClick={() => void chooseProjectDirectory()}><Icon name="plus" size={13} /></button></div>
           <div className="project-list">
             {initialLoading && projects.length === 0 && <SidebarSkeleton />}
+            {!initialLoading && projects.length === 0 && <div className="empty-sidebar"><strong>{t.noProjects}</strong><button className="button primary" type="button" onClick={() => void chooseProjectDirectory()}><Icon name="plus" size={14} />{t.openProject}</button></div>}
             {projects.map((project) => {
               const selected = project.cwd === projectCwd;
-              const expanded = selected && expandedProjectCwd === project.cwd;
+              const expanded = expandedProjectCwds.includes(project.cwd);
+              const projectTasks = selected ? tasks : projectTasksByCwd[project.cwd] ?? [];
+              const filteredProjectTasks = projectTasks.filter((task) => task.title.toLowerCase().includes(searchQuery.toLowerCase()));
+              const projectTaskLoad = selected ? { status: initialLoading ? "loading" as const : "ready" as const } : projectTaskLoads[project.cwd] ?? { status: "idle" as const };
               return <section className={`project-group ${selected ? "selected" : ""} ${expanded ? "expanded" : ""}`} key={project.id}>
-                <button className="project-row" type="button" disabled={initialLoading} aria-expanded={expanded} title={project.cwd} onClick={() => void selectProject(project)}>
+                <button className="project-row" type="button" disabled={initialLoading} aria-expanded={expanded} title={project.cwd} onClick={() => void selectProject(project)} onContextMenu={(event) => { event.preventDefault(); openProjectContextMenu(project, event.clientX, event.clientY); }} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openProjectContextMenu(project, rect.left + 24, rect.bottom - 4); } }}>
                   <Icon name={expanded ? "folderOpen" : "folder"} size={17} />
                   <span className="project-row-copy"><strong>{project.name}</strong></span>
                   <Icon name="chevron" size={14} />
                 </button>
                 {expanded && <div className="project-sessions">
                   <div className="task-list">
-                    {initialLoading && tasks.length === 0 ? <SidebarSkeleton /> : filteredTasks.map((task) => <TaskRow key={task.id} task={task} active={activeTask?.id === task.id} language={language} onClick={() => { setMobileSidebarOpen(false); setActiveTask(task); setTasks((current) => current.map((item) => item.id === task.id ? { ...item, unread: false } : item)); }} onContextMenu={(event) => { event.preventDefault(); openContextMenu(task, event.clientX, event.clientY); }} onMenu={(rect) => openContextMenu(task, rect.right - 160, rect.bottom + 4)} />)}
-                    {!initialLoading && filteredTasks.length === 0 && <div className="empty-sidebar"><strong>{searchQuery ? t.noSessionMatches : t.noSessions}</strong><span>{searchQuery ? t.tryAnotherSearch : t.createFirst}</span></div>}
+                    {projectTaskLoad.status === "loading" && projectTasks.length === 0 ? <SidebarSkeleton /> : filteredProjectTasks.map((task) => <TaskRow key={task.id} task={task} active={selected && activeTask?.id === task.id} language={language} onClick={() => void selectTask(project, task)} onContextMenu={(event) => { event.preventDefault(); openContextMenu(task, event.clientX, event.clientY); }} onMenu={(rect) => openContextMenu(task, rect.right - 160, rect.bottom + 4)} />)}
+                    {projectTaskLoad.status === "error" && <div className="empty-sidebar" role="alert"><strong>{t.projectSessionsLoadFailed}</strong><span>{projectTaskLoad.error}</span><button className="button ghost" type="button" onClick={() => void loadProjectSessions(project)}>{t.retry}</button></div>}
+                    {projectTaskLoad.status === "ready" && filteredProjectTasks.length === 0 && <div className="empty-sidebar"><strong>{searchQuery ? t.noSessionMatches : t.noSessions}</strong><span>{searchQuery ? t.tryAnotherSearch : t.createFirst}</span>{!searchQuery && <button className="button primary" type="button" onClick={() => void createTaskForProject(project)}><Icon name="plus" size={14} />{t.newTask}</button>}</div>}
                   </div>
                 </div>}
               </section>;
@@ -893,16 +1094,18 @@ export function App() {
         <div ref={conversationRef} className="conversation-scroll" onScroll={handleConversationScroll}>
           {loadError && <div className="runtime-error" role="alert"><strong>{loadError}</strong><button onClick={() => void loadInitialData()}>{t.retry}</button></div>}
           {initialLoading && !activeTask && <ConversationSkeleton label={t.loading} />}
-          {!initialLoading && !loadError && !activeTask && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noSessions}</h2><p>{t.createFirst}</p><button className="button primary" onClick={() => void createTask()}><Icon name="plus" size={14} />{t.newTask}</button></div>}
+          {!initialLoading && !loadError && !projectCwd && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noProjects}</h2><button className="button primary" onClick={() => void chooseProjectDirectory()}><Icon name="plus" size={14} />{t.openProject}</button></div>}
+          {!initialLoading && !loadError && projectCwd && !activeTask && tasks.length > 0 && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.selectSessionTitle}</h2><p>{t.selectSessionBody}</p><button className="button primary" onClick={() => void createTask()}><Icon name="plus" size={14} />{t.newTask}</button></div>}
+          {!initialLoading && !loadError && projectCwd && !activeTask && tasks.length === 0 && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noSessions}</h2><p>{t.createFirst}</p><button className="button primary" onClick={() => void createTask()}><Icon name="plus" size={14} />{t.newTask}</button></div>}
           {activeTask && messageLoad.status === "loading" && messages.length === 0 && <ConversationSkeleton label={t.loadingConversation} />}
           {activeTask && messageLoad.status === "error" && <div className="conversation-error" role="alert"><span><Icon name="alert" /> <strong>{t.conversationLoadFailed}</strong><small>{messageLoad.error}</small></span><button className="button ghost" onClick={() => setMessageReload((current) => current + 1)}>{t.retry}</button></div>}
           {activeTask && messageLoad.status === "ready" && messages.length === 0 && !isWorking && <div className="empty-conversation"><span className="empty-glyph">P</span><h2>{t.noMessages}</h2><p>{t.typeToStart}</p></div>}
+          <MemoMessageTimeline messages={messages} language={language} running={isWorking} completedActivity={activeTaskUi?.completedActivity ?? []} steeringMessageKeys={activeTask ? steeringMessageKeysByTask[activeTask.id] ?? [] : []} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
           {isWorking && <ExecutionSummary steps={activeTaskUi?.activity ?? []} language={language} running />}
-          <MessageTimeline messages={messages} language={language} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
           {streamText && <article className="message assistant-message live-message"><div className="live-message-status"><span className="live-pill"><span className="live-dot" />{t.working}</span></div><div className="message-content"><MarkdownContent text={streamText} language={language} /></div></article>}
           {isWorking && !streamText && <WorkingIndicator language={language} phase={workingPhase} toolName={activeTaskUi?.toolName} />}
           {liveApproval && <ApprovalCard approval={liveApproval} language={language} onResolve={async (decision) => {
-            try { await window.pideck.approvals.resolve(liveApproval.requestId, decision); if (activeTask) { patchTaskUi(activeTask.id, { approval: undefined, workingPhase: decision === "allow-once" ? "thinking" : null }); setTasks((current) => current.map((task) => task.id === activeTask.id ? { ...task, state: decision === "allow-once" ? "running" : task.state } : task)); } }
+            try { await window.pideck.approvals.resolve(liveApproval.requestId, decision); if (activeTask) { patchTaskUi(activeTask.id, { approval: undefined, workingPhase: decision === "allow-once" ? "thinking" : null }); updateTaskLists((current) => current.map((task) => task.id === activeTask.id ? { ...task, state: decision === "allow-once" ? "running" : task.state } : task)); } }
             catch (error) { showNotice(error instanceof Error ? error.message : String(error)); throw error; }
           }} />}
         </div>
@@ -911,447 +1114,23 @@ export function App() {
           if (suggestionMode && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setSuggestionIndex((current) => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))); return; }
           if (event.key === "Escape") { setSuggestionMode(null); return; }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendPrompt(); }
-        }} onSend={() => void sendPrompt()} onStop={() => void abortActive()} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} commandNames={paletteCommands.map((command) => command.name)} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} />
+        }} onSend={() => void sendPrompt()} onStop={() => void abortActive()} isSending={isSending} language={language} activeModel={activeModel} modelOptions={modelOptions} thinkingLevel={thinkingLevel} thinkingLevels={thinkingLevels} thinkingMenuOpen={thinkingMenuOpen} modelMenuOpen={modelMenuOpen} suggestionMode={suggestionMode} suggestions={suggestions} suggestionIndex={suggestionIndex} onThinkingMenu={() => { setThinkingMenuOpen((current) => !current); setModelMenuOpen(false); }} onModelMenu={() => { setModelMenuOpen((current) => !current); setThinkingMenuOpen(false); }} onThinking={chooseThinking} onModel={chooseModel} onSuggestion={applySuggestion} onTerminal={() => setTerminalOpen((current) => !current)} contextUsage={contextUsage} commandNames={paletteCommands.map((command) => command.name)} attachments={composerImages} onPaste={handleComposerPaste} onRemoveAttachment={(id) => setComposerImages((current) => current.filter((image) => image.id !== id))} onPreviewImage={(image) => setPreviewImage(image)} onContextMenuImage={openImageContextMenu} queueDelivery={queueDelivery} queueState={queueState} queueMutationBusy={queueMutationBusy} onQueueDelivery={setQueueDelivery} onQueueModes={setQueueModes} onClearQueue={clearQueue} onPromoteQueue={(index) => void promoteQueuedMessage(index)} />
         <PermissionLevelControl language={language} status={permissionStatus} onStatus={handlePermissionStatus} />
       </main>
 
     </div>
 
     {terminalOpen && <TerminalPanel language={language} cwd={projectCwd} output={terminalOutput} command={terminalCommand} running={terminalRunning} onCommand={setTerminalCommand} onExecute={() => void executeTerminal()} onClose={() => setTerminalOpen(false)} />}
-    {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
+    {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onPackages={() => { setPaletteOpen(false); setPackagesOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
     {notice && <div className={`toast ${terminalOpen ? "with-terminal" : ""}`} role="status" aria-live="polite">{notice}</div>}
     {contextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
+    {projectContextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: projectContextMenu.x, top: projectContextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus disabled={removingProjectCwd !== null} onClick={() => { setPendingProjectRemove(projectContextMenu.project); setProjectContextMenu(null); }}>{t.removeProject}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
+    {pendingProjectRemove && <ProjectRemoveDialog language={language} project={pendingProjectRemove} busy={removingProjectCwd === pendingProjectRemove.cwd} onCancel={() => setPendingProjectRemove(null)} onConfirm={() => void removeProject(pendingProjectRemove)} />}
+    {extensionUiRequest && <ExtensionUiDialog request={extensionUiRequest} language={language} onResolve={(value) => { void window.pideck.extensions.resolveUi(extensionUiRequest.requestId, value).then(() => setExtensionUiRequest(null)).catch((error) => showNotice(error instanceof Error ? error.message : String(error))); }} />}
+    {packagesOpen && <PackageSettings language={language} cwd={projectCwd} onClose={() => setPackagesOpen(false)} onNotice={showNotice} />}
     {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
     {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
     {imageContextMenu && <ImageContextMenu language={language} x={imageContextMenu.x} y={imageContextMenu.y} onCopy={async () => { const copied = await copyImageToClipboard(imageContextMenu.image.src); setImageContextMenu(null); showNotice(copied ? t.copiedImage : t.copyImageFailed); }} />}
   </div>;
-}
-
-function SidebarSkeleton() {
-  return <div className="sidebar-skeleton" aria-hidden="true">{[0, 1, 2, 3].map((item) => <span key={item} />)}</div>;
-}
-
-function ConversationSkeleton({ label }: { label: string }) {
-  return <div className="conversation-skeleton" role="status"><span>{label}</span><i /><i /><i /></div>;
-}
-
-function StateMark({ state, language }: { state: TaskSummary["state"]; language: Language }) {
-  const labels = copy[language].sessionState;
-  if (state === "running") return <span className="state-mark running" role="img" aria-label={labels.running} />;
-  if (state === "waiting-approval") return <span className="state-mark approval" role="img" aria-label={labels.approval}>!</span>;
-  if (state === "completed") return <span className="state-mark completed" role="img" aria-label={labels.completed}><Icon name="check" size={12} /></span>;
-  if (state === "failed") return <span className="state-mark failed" role="img" aria-label={labels.failed}>×</span>;
-  return <span className="state-mark idle" role="img" aria-label={labels.idle} />;
-}
-
-function TaskRow({ task, active, language, onClick, onContextMenu, onMenu }: { task: TaskSummary; active: boolean; language: Language; onClick: () => void; onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void; onMenu: (rect: DOMRect) => void }) {
-  const t = copy[language];
-  return <div className={`task-row ${active ? "active" : ""}`} onContextMenu={onContextMenu}><button className="task-main" onClick={onClick} aria-current={active ? "page" : undefined} title={task.title}><span className="task-copy"><strong>{task.title}</strong></span>{task.state === "running" && <span className="task-working-spinner" role="img" aria-label={t.sessionState.running} title={t.sessionState.running} />}{task.state === "waiting-approval" && <span className="task-approval-mark" role="img" aria-label={t.sessionState.approval} title={t.sessionState.approval}>!</span>}{task.unread && <span className="unread-dot" role="img" aria-label={t.unread} title={t.unread} />}</button><button className="task-more" aria-label={t.moreActions} title={t.moreActions} onClick={(event) => { event.stopPropagation(); onMenu(event.currentTarget.getBoundingClientRect()); }}><Icon name="more" size={14} /></button></div>;
-}
-
-function MessageView({ message, language, onPreviewImage, onContextMenuImage }: { message: any; language: Language; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
-  const text = textFromMessage(message);
-  const images = Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === "image" && part.data && part.mimeType) : [];
-  const t = copy[language];
-  const role = message?.role === "user" ? "user" : message?.role === "toolResult" ? "tool" : "assistant";
-  const skillInvocation = role === "user" ? parseSkillInvocation(text) : null;
-  const visibleText = skillInvocation ? skillInvocation.userMessage ?? "" : text;
-  if (!visibleText && !skillInvocation && !images.length && message?.role !== "toolResult") return null;
-  if (role === "tool") {
-    const toolName = message?.toolName ?? message?.name ?? t.toolResult;
-    const failed = Boolean(message?.isError);
-    return <div className={`tool-message ${failed ? "failed" : ""}`}><div className="tool-message-heading"><span className="tool-icon"><Icon name={failed ? "alert" : "terminal"} size={14} /></span><strong>{toolName}</strong><span>{failed ? t.sessionState.failed : t.sessionState.completed}</span></div><pre>{text || t.toolResult}</pre></div>;
-  }
-  const messageTime = formatMessageTime(message.timestamp, language);
-  return <article className={`message ${role === "user" ? "user-message" : "assistant-message"}`} tabIndex={0}><div className="message-bubble"><div className="message-content">{skillInvocation && <div className="message-invocations"><code className="message-invocation">/skill:{skillInvocation.name}</code></div>}{images.length > 0 && <div className="message-images">{images.map((image: any, index: number) => <button type="button" className="image-preview-trigger" key={`${message.id ?? "image"}-${index}`} aria-label={t.imagePreview} onClick={() => onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })} onContextMenu={(event) => onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t.imageAttached} /></button>)}</div>}{visibleText && <MarkdownContent text={visibleText} language={language} />}</div></div>{messageTime && <div className="message-hover-meta"><time dateTime={new Date(message.timestamp).toISOString()}>{messageTime}</time></div>}</article>;
-}
-
-function activityValue(value: unknown): string {
-  if (value === undefined || value === null || value === "") return "";
-  if (typeof value === "string") return value;
-  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
-}
-
-function formatActivityDuration(seconds: number): string {
-  const rounded = Math.max(0, Math.round(seconds));
-  if (rounded < 60) return `${rounded}s`;
-  const minutes = Math.floor(rounded / 60);
-  const remainingSeconds = rounded % 60;
-  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function activityFromMessages(messages: any[], language: Language): ActivityStep[] {
-  const steps: ActivityStep[] = [];
-  const toolSteps = new Map<string, ActivityStep>();
-  for (const message of messages) {
-    const timestamp = typeof message?.timestamp === "number" ? message.timestamp : Date.parse(message?.timestamp ?? "") || Date.now();
-    if (message?.role === "assistant" && Array.isArray(message.content)) {
-      for (const part of message.content) {
-        if (part?.type === "thinking" && part.thinking) steps.push({ id: `${message.id ?? timestamp}:thinking:${steps.length}`, kind: "thinking", label: copy[language].executionThinking, detail: part.thinking, startedAt: timestamp, endedAt: timestamp });
-        if (part?.type === "toolCall" || part?.type === "tool_call") {
-          const step = { id: part.id ?? part.toolCallId ?? `${message.id ?? timestamp}:tool:${steps.length}`, kind: "tool" as const, label: part.name ?? part.toolName ?? copy[language].toolResult, args: part.arguments ?? part.args ?? {}, startedAt: timestamp };
-          steps.push(step);
-          toolSteps.set(step.id, step);
-        }
-      }
-    }
-    if (message?.role === "toolResult") {
-      const toolId = message.toolCallId ?? message.tool_call_id;
-      const step = toolSteps.get(toolId);
-      if (step) {
-        step.result = textFromMessage(message);
-        step.endedAt = timestamp;
-        step.isError = Boolean(message.isError);
-      }
-    }
-  }
-  return steps;
-}
-
-function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[]; language: Language; running: boolean }) {
-  if (!steps.length) return null;
-  const t = copy[language];
-  const startedAt = Math.min(...steps.map((step) => step.startedAt));
-  const endedAt = running ? Date.now() : Math.max(...steps.map((step) => step.endedAt ?? step.startedAt));
-  const seconds = Math.max(0, (endedAt - startedAt) / 1000);
-  const duration = formatActivityDuration(seconds);
-  return <details className="execution-summary" open={false}>
-    <summary><span>{running ? t.executionProcessing(duration) : t.executionProcessed(duration)}</span><Icon name="chevron" size={13} /></summary>
-    <div className="execution-details">
-      {steps.map((step) => <div className={`execution-step ${step.isError ? "failed" : ""}`} key={step.id}>
-        <div className="execution-step-heading"><span className="execution-step-icon"><Icon name={step.kind === "thinking" ? "spark" : step.isError ? "alert" : "terminal"} size={13} /></span><strong>{step.kind === "thinking" ? t.executionThinking : step.label}</strong><small>{step.endedAt ? `${((step.endedAt - step.startedAt) / 1000).toFixed(1)}s` : t.working}</small></div>
-        {step.kind === "thinking" && step.detail && <pre>{step.detail}</pre>}
-        {step.kind === "tool" && step.args !== undefined && <div className="execution-value"><span>{t.executionArguments}</span><pre>{activityValue(step.args)}</pre></div>}
-        {step.kind === "tool" && step.result !== undefined && <div className="execution-value"><span>{t.executionResult}</span><pre>{activityValue(step.result)}</pre></div>}
-      </div>)}
-    </div>
-  </details>;
-}
-
-function MessageTimeline({ messages, language, onPreviewImage, onContextMenuImage }: { messages: any[]; language: Language; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
-  const items: Array<{ type: "message"; message: any; index: number } | { type: "execution"; steps: ActivityStep[]; index: number }> = [];
-  let turn: any[] = [];
-  const flushTurn = () => {
-    if (!turn.length) return;
-    const steps = activityFromMessages(turn, language);
-    if (!steps.length) {
-      for (const [index, message] of turn.entries()) if (message?.role !== "toolResult") items.push({ type: "message", message, index: items.length + index });
-      turn = [];
-      return;
-    }
-    const userMessage = turn.find((message) => message?.role === "user");
-    if (userMessage) items.push({ type: "message", message: userMessage, index: items.length });
-    items.push({ type: "execution", steps, index: items.length });
-    for (const message of turn) if (message?.role === "assistant" && textFromMessage(message)) items.push({ type: "message", message, index: items.length });
-    turn = [];
-  };
-  for (const message of messages) {
-    if (message?.role === "user" && turn.length) flushTurn();
-    turn.push(message);
-  }
-  flushTurn();
-  return <>{items.map((item) => item.type === "execution" ? <ExecutionSummary key={`execution-${item.index}`} steps={item.steps} language={language} running={false} /> : <MessageView key={item.message.id ?? `${item.message.role}-${item.index}`} message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />)}</>;
-}
-
-function formatTokenCount(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return String(value);
-}
-
-function ContextRing({ usage, language }: { usage?: ContextUsage; language: Language }) {
-  const t = copy[language];
-  const percent = usage?.percent === null || usage?.percent === undefined ? 0 : Math.max(0, Math.min(100, usage.percent));
-  const circumference = 2 * Math.PI * 8;
-  const dash = circumference * percent / 100;
-  return <span className="context-ring-wrap" tabIndex={0} aria-label={t.contextUsage}>
-    <span className="context-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle className="context-ring-track" cx="10" cy="10" r="8" /><circle className="context-ring-progress" cx="10" cy="10" r="8" strokeDasharray={`${dash} ${circumference - dash}`} /></svg><span>{usage?.percent === null || usage?.percent === undefined ? "—" : `${Math.round(percent)}%`}</span></span>
-    <span className="context-tooltip" role="tooltip"><strong>{t.contextUsage}</strong><span className="context-total">{formatTokenCount(usage?.tokens)} / {formatTokenCount(usage?.contextWindow)} {t.tokenUnit}</span><span>{t.contextUsed}: {formatTokenCount(usage?.tokens)} {t.tokenUnit}</span><span>{t.contextWindow}: {formatTokenCount(usage?.contextWindow)} {t.tokenUnit}</span></span>
-  </span>;
-}
-
-function ContextRingPopover({ usage, language }: { usage?: ContextUsage; language: Language }) {
-  const t = copy[language];
-  const percent = usage?.percent === null || usage?.percent === undefined ? 0 : Math.max(0, Math.min(100, usage.percent));
-  const circumference = 2 * Math.PI * 8;
-  const dash = circumference * percent / 100;
-  const percentLabel = usage?.percent === null || usage?.percent === undefined ? t.contextUnknown : `${Math.round(percent)}% ${t.contextUsed}`;
-  const totalLabel = usage?.tokens === null || usage?.tokens === undefined || usage?.contextWindow === null || usage?.contextWindow === undefined
-    ? t.contextUnknown
-    : `${formatTokenCount(usage.tokens)} / ${formatTokenCount(usage.contextWindow)} ${t.tokenUnit}`;
-  return <span className="context-ring-wrap" tabIndex={0} aria-label={usage?.percent === null || usage?.percent === undefined ? t.contextUsage : `${t.contextUsage}, ${Math.round(percent)}%`}>
-    <span className="context-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle className="context-ring-track" cx="10" cy="10" r="8" /><circle className="context-ring-progress" cx="10" cy="10" r="8" strokeDasharray={`${dash} ${circumference - dash}`} /></svg></span>
-    <span className="context-tooltip" role="tooltip"><strong>{t.contextWindow}</strong><span className="context-percentage">{percentLabel}</span><span className="context-total">{totalLabel}</span></span>
-  </span>;
-}
-
-function PermissionLevelControl({ language, status, onStatus }: { language: Language; status: PermissionStatus | null; onStatus: (status: PermissionStatus) => void }) {
-  const t = copy[language];
-  const modes: Array<{ id: PermissionMode; label: string; description: string }> = [
-    { id: "ask", label: t.permissionModeAsk, description: t.permissionModeAskDescription },
-    { id: "allow", label: t.permissionModeAllow, description: t.permissionModeAllowDescription },
-    { id: "deny", label: t.permissionModeDeny, description: t.permissionModeDenyDescription },
-    { id: "yolo", label: t.permissionModeYolo, description: t.permissionModeYoloDescription },
-  ];
-  const current = modes.find((mode) => mode.id === status?.mode) ?? modes[0];
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  async function changeMode(mode: PermissionMode) {
-    setBusy(true); setError(null);
-    try { onStatus(await window.pideck.permissions.setMode(mode)); setOpen(false); }
-    catch (nextError) { setError(nextError instanceof Error ? nextError.message : String(nextError)); }
-    finally { setBusy(false); }
-  }
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => { if (event.target instanceof Element && !event.target.closest(".permission-level-wrap")) setOpen(false); };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
-  return <div className="permission-level-wrap"><button type="button" className="permission-level-button" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen((value) => !value)}><span className={`permission-mode-dot ${current.id}`} /><span>{current.label}</span><Icon name="chevron" size={13} /></button>{open && <div className="permission-level-menu" role="menu" aria-label={current.label} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); } else handleRovingMenuKeyDown(event); }}>{modes.map((mode) => <button type="button" role="menuitemradio" aria-checked={mode.id === current.id} tabIndex={mode.id === current.id ? 0 : -1} autoFocus={mode.id === current.id} key={mode.id} className={mode.id === current.id ? "selected" : ""} onClick={() => void changeMode(mode.id)}><span className={`permission-mode-dot ${mode.id}`} /><span><strong>{mode.label}</strong><small>{mode.description}</small></span><Icon name="check" size={13} /></button>)}</div>}{error && <span className="permission-level-error" role="alert">{error}</span>}</div>;
-}
-
-function WorkingIndicator({ language, phase, toolName }: { language: Language; phase: WorkingPhase; toolName?: string }) {
-  const t = copy[language];
-  const label = phase === "tool" ? toolName ? t.toolRunning(toolName) : t.toolStatus : phase === "responding" ? t.respondingStatus : phase === "compacting" ? t.compactingStatus : t.thinkingStatus;
-  return <div className="working-indicator" role="status" aria-live="polite"><span>{label}</span><span className="working-dots"><span /><span /><span /></span></div>;
-}
-
-function ApprovalCard({ approval, language, onResolve }: { approval: { toolName: string; args?: unknown }; language: Language; onResolve: (decision: "allow-once" | "deny") => Promise<void> }) {
-  const [resolving, setResolving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const t = copy[language];
-  async function resolve(decision: "allow-once" | "deny") {
-    setResolving(true); setError(null);
-    try { await onResolve(decision); }
-    catch (nextError) { setError(nextError instanceof Error ? nextError.message : String(nextError)); setResolving(false); }
-  }
-  return <div className="approval-card" role="alert"><div className="approval-top"><div className="approval-title"><span className="approval-icon"><Icon name="terminal" size={15} /></span><div><strong>{t.approval}</strong><small>{t.approvalRequest(approval.toolName)}</small></div></div><span className="approval-tool-label">{t.toolCall}</span></div><div className="command-preview"><span className="prompt-symbol">$</span><code>{JSON.stringify(approval.args ?? {}, null, 2)}</code></div>{error && <div className="inline-error" role="alert">{error}</div>}<div className="approval-actions"><button className="button primary" disabled={resolving} onClick={() => void resolve("allow-once")}><Icon name="check" size={14} />{t.approve}</button><button className="button ghost" disabled={resolving} onClick={() => void resolve("deny")}><Icon name="x" size={14} />{t.reject}</button><span className="approval-scope">{resolving ? t.loading : t.approvalScope}</span></div></div>;
-}
-
-function highlightComposerText(value: string, commandNames: string[]): ReactNode[] {
-  const commands = new Set(commandNames.map((name) => name.replace(/^\//, "").toLowerCase()));
-  const result: ReactNode[] = [];
-  const pattern = /(^|\s)(\/(?:skill:)?[A-Za-z][\w:-]*|@[\w./\\-]+)/g;
-  let cursor = 0;
-  for (const match of value.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    const prefix = match[1] ?? "";
-    const token = match[2] ?? "";
-    const isCommand = token.startsWith("/skill:") || commands.has(token.slice(1).toLowerCase());
-    if (!isCommand && token.startsWith("/")) continue;
-    if (start > cursor) result.push(<span key={`text-${cursor}`}>{value.slice(cursor, start)}</span>);
-    if (prefix) result.push(<span key={`space-${start}`}>{prefix}</span>);
-    const isSkill = token.startsWith("/skill:");
-    const isMention = token.startsWith("@");
-    result.push(<mark className={`composer-token ${isSkill ? "skill-token" : isMention ? "mention-token" : "command-token"}`} key={`token-${start}`}>{token}</mark>);
-    cursor = start + match[0].length;
-  }
-  if (cursor < value.length) result.push(<span key={`text-${cursor}`}>{value.slice(cursor)}</span>);
-  return result;
-}
-
-function Composer(props: { value: string; onChange: (value: string) => void; onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void; onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void; onSend: () => void; onStop: () => void; isSending: boolean; language: Language; activeModel: ModelSummary | null; modelOptions: ModelSummary[]; thinkingLevel: string; thinkingLevels: string[]; thinkingMenuOpen: boolean; modelMenuOpen: boolean; suggestionMode: SuggestionMode; suggestions: any[]; suggestionIndex: number; contextUsage?: ContextUsage; commandNames: string[]; attachments: ImageAttachment[]; onRemoveAttachment: (id: string) => void; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void; onThinkingMenu: () => void; onModelMenu: () => void; onThinking: (level: string) => void; onModel: (model: ModelSummary) => void; onSuggestion: (item: any) => void; onTerminal: () => void }) {
-  const t = copy[props.language];
-  const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const [modelQuery, setModelQuery] = useState("");
-  const filteredModels = props.modelOptions.filter((model) => `${model.providerName} ${model.name}`.toLowerCase().includes(modelQuery.toLowerCase()));
-  const activeModelIndex = filteredModels.findIndex((model) => model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId);
-  useEffect(() => { suggestionRefs.current[props.suggestionIndex]?.scrollIntoView({ block: "nearest" }); }, [props.suggestionIndex, props.suggestions.length, props.suggestionMode]);
-  useEffect(() => { if (!props.modelMenuOpen) setModelQuery(""); }, [props.modelMenuOpen]);
-  const hasDraft = props.value.trim().length > 0 || props.attachments.length > 0;
-  const stopOnly = props.isSending && !hasDraft;
-  const handleEditorPaste: React.ClipboardEventHandler<HTMLElement> = (event) => props.onPaste(event as unknown as React.ClipboardEvent<HTMLTextAreaElement>);
-  const handleEditorKeyDown: React.KeyboardEventHandler<HTMLElement> = (event) => props.onKeyDown(event as unknown as React.KeyboardEvent<HTMLTextAreaElement>);
-  return <div className="composer-wrap"><div className="composer-shell">
-    {props.suggestionMode && props.suggestions.length > 0 && <div className="suggestion-popover" role="listbox" id="composer-suggestions" aria-label={props.suggestionMode === "mention" ? t.files : t.command}>{props.suggestions.map((item, index) => <button id={`composer-suggestion-${index}`} ref={(element) => { suggestionRefs.current[index] = element; }} key={item.name ?? item.path} type="button" role="option" aria-selected={index === props.suggestionIndex} className={index === props.suggestionIndex ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => props.onSuggestion(item)}><span className="suggestion-symbol">{props.suggestionMode === "mention" ? "@" : "/"}</span><span><strong>{item.name ?? item.path}</strong><small>{item.description ?? item.path}</small></span></button>)}</div>}
-    <div className="composer">{props.attachments.length > 0 && <div className="composer-attachments">{props.attachments.map((image) => <div className="composer-attachment" key={image.id}><button type="button" className="composer-image-preview" aria-label={t.imagePreview} title={t.imagePreview} onClick={() => props.onPreviewImage({ src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })} onContextMenu={(event) => props.onContextMenuImage(event, { src: `data:${image.mimeType};base64,${image.data}`, alt: image.name || t.imageAttached })}><img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name || t.imageAttached} /></button><button type="button" className="composer-remove-image" aria-label={t.removeImage} title={t.removeImage} onClick={() => props.onRemoveAttachment(image.id)}><Icon name="x" size={11} /></button></div>)}</div>}<div className="composer-editor"><Editor className="composer-editor-surface" style={{ display: "block", width: "100%" }} value={props.value} onValueChange={props.onChange} highlight={(code) => <>{code ? highlightComposerText(code, props.commandNames) : <span className="composer-placeholder">{t.ask}</span>}</>} textareaClassName="composer-editor-input" preClassName="composer-highlight" padding={0} onPaste={handleEditorPaste} onKeyDown={handleEditorKeyDown} autoFocus placeholder="" aria-label={t.ask} aria-controls="composer-suggestions" aria-activedescendant={props.suggestionMode && props.suggestions.length ? `composer-suggestion-${props.suggestionIndex}` : undefined} aria-expanded={Boolean(props.suggestionMode && props.suggestions.length)} /></div><div className="composer-footer"><div className="composer-tools">
-      <div className="menu-anchor"><button className="chip" title={t.chooseThinking} aria-haspopup="menu" aria-controls="thinking-menu" aria-expanded={props.thinkingMenuOpen} onClick={props.onThinkingMenu}><Icon name="spark" size={14} /><span>{props.thinkingLevel}</span><Icon name="chevron" size={13} /></button>{props.thinkingMenuOpen && <div className="inline-menu" id="thinking-menu" role="menu" aria-label={t.chooseThinking} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); props.onThinkingMenu(); } else handleRovingMenuKeyDown(event); }}><strong>{t.chooseThinking}</strong>{props.thinkingLevels.map((level, index) => <button role="menuitemradio" aria-checked={level === props.thinkingLevel} tabIndex={level === props.thinkingLevel || (!props.thinkingLevels.includes(props.thinkingLevel) && index === 0) ? 0 : -1} autoFocus={level === props.thinkingLevel || (!props.thinkingLevels.includes(props.thinkingLevel) && index === 0)} key={level} className={level === props.thinkingLevel ? "active" : ""} onClick={() => props.onThinking(level)}>{level}</button>)}</div>}</div>
-      <div className="menu-anchor"><button className="model-chip" title={t.chooseModel} aria-haspopup="menu" aria-controls="model-menu" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}><Icon name="model" size={14} /><span className="model-provider">{props.activeModel?.providerName ?? t.provider}</span><span>{props.activeModel?.name ?? (props.modelOptions.length ? t.chooseModel : t.models)}</span><ContextRingPopover usage={props.contextUsage} language={props.language} /><Icon name="chevron" size={13} /></button>{props.modelMenuOpen && <div className="inline-menu model-menu" id="model-menu" role="menu" aria-label={t.models} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); props.onModelMenu(); } else handleRovingMenuKeyDown(event); }}><label className="model-search"><Icon name="search" size={13} /><input autoFocus value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t.searchModels} aria-label={t.searchModels} /></label>{filteredModels.length === 0 ? <span className="menu-empty">{props.modelOptions.length ? t.noMatchingCommands : t.configureProvider}</span> : filteredModels.map((model, index) => <button role="menuitemradio" aria-checked={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId} tabIndex={index === (activeModelIndex >= 0 ? activeModelIndex : 0) ? 0 : -1} key={`${model.providerId}/${model.id}`} className={model.id === props.activeModel?.id && model.providerId === props.activeModel?.providerId ? "active" : ""} onClick={() => props.onModel(model)}><span><strong>{model.name}</strong><small>{model.providerName}</small></span><Icon name="check" size={12} /></button>)}</div>}</div>
-      <button className="chip subtle" aria-label={t.mentionLabel} title={t.mentionLabel} onClick={() => props.onChange(`${props.value}${props.value ? " " : ""}@`)}><Icon name="plus" size={14} />@</button>
-      <button className="chip subtle terminal-trigger" onClick={props.onTerminal}><Icon name="terminal" size={13} />{t.terminal}</button>
-    </div><span className="composer-hint">{t.shiftEnter}</span><button className="send-button" disabled={!props.isSending && !hasDraft} aria-label={stopOnly ? t.stop : t.send} title={stopOnly ? t.stop : t.send} onClick={stopOnly ? props.onStop : props.onSend}><Icon name={stopOnly ? "stop" : "send"} size={16} /></button></div></div>
-  </div></div>;
-}
-
-function TerminalPanel({ language, cwd, output, command, running, onCommand, onExecute, onClose }: { language: Language; cwd: string; output: string[]; command: string; running: boolean; onCommand: (value: string) => void; onExecute: () => void; onClose: () => void }) {
-  const t = copy[language];
-  const inputRef = useRef<HTMLInputElement>(null);
-  const outputRef = useRef<HTMLDivElement>(null);
-  const followRef = useRef(true);
-  useEffect(() => { inputRef.current?.focus(); }, []);
-  useEffect(() => { if (followRef.current && outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight; }, [output]);
-  return <section className="terminal-float" role="dialog" aria-modal="false" aria-label={t.terminal}><div className="terminal-float-header"><span><Icon name="terminal" size={14} />{t.terminal}</span><small>{cwd} · {t.terminalRuntime}</small><button className="icon-button" onClick={onClose} aria-label={t.closeTerminal} title={t.closeTerminal}><Icon name="x" size={14} /></button></div><div ref={outputRef} className="terminal-output" role="log" aria-live="polite" onScroll={(event) => { const element = event.currentTarget; followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>{output.length === 0 ? <div className="terminal-muted">{t.terminalEmpty}</div> : output.map((line, index) => <pre className="terminal-line" key={`${index}-${line.slice(0, 20)}`}>{line}</pre>)}</div><form className="terminal-input-row" onSubmit={(event) => { event.preventDefault(); onExecute(); }}><span className="terminal-green">›</span><input ref={inputRef} value={command} onChange={(event) => onCommand(event.target.value)} placeholder={t.terminalPlaceholder} aria-label={t.terminalPlaceholder} disabled={running} /><span className="terminal-running">{running ? "…" : ""}</span></form></section>;
-}
-
-class CommandPaletteBoundary extends Component<{ children: ReactNode; language: Language; onClose: () => void }, { error: string | null }> {
-  state = { error: null as string | null };
-  static getDerivedStateFromError(error: unknown) { return { error: error instanceof Error ? error.message : String(error) }; }
-  componentDidCatch(error: unknown, info: ErrorInfo) { console.error("Command palette render failed", error, info.componentStack); }
-  render() {
-    if (this.state.error) { const t = copy[this.props.language]; return <div className="palette-backdrop"><div className="command-palette palette-error" role="alert"><strong>{t.commandPanelError}</strong><button className="button ghost" onClick={this.props.onClose}>{t.retry}</button></div></div>; }
-    return this.props.children;
-  }
-}
-
-function CommandPalette({ language, commands, shortcut, onCommand, onClose, onNewTask, onTerminal, onSettings, onCompact, onExport }: { language: Language; commands: Array<{ name: string; description?: string; source?: string }>; shortcut: (key: string) => string; onCommand: (command: { name: string }) => void; onClose: () => void; onNewTask: () => void; onTerminal: () => void; onSettings: () => void; onCompact?: () => void; onExport?: (format: "jsonl" | "html") => void }) {
-  const t = copy[language];
-  const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  useDialogFocus(dialogRef, onClose);
-  const quickItems = [
-    { id: "new-task", label: t.newTask, description: shortcut("N"), action: onNewTask, icon: "plus" },
-    { id: "terminal", label: t.terminal, description: shortcut("J"), action: onTerminal, icon: "terminal" },
-    { id: "provider", label: t.provider, description: shortcut(","), action: onSettings, icon: "settings" },
-    ...(onCompact ? [{ id: "compact", label: t.compactContext, description: "", action: onCompact, icon: "spark" }] : []),
-    ...(onExport ? [{ id: "export-jsonl", label: t.exportJsonl, description: "", action: () => onExport("jsonl"), icon: "file" }, { id: "export-html", label: t.exportHtml, description: "", action: () => onExport("html"), icon: "file" }] : []),
-  ];
-  const safeCommands = (Array.isArray(commands) ? commands : []).filter((command) => command && typeof command.name === "string").map((command) => ({ ...command, description: typeof command.description === "string" ? command.description : "" }));
-  const filteredCommands = safeCommands.filter((command) => `${command.name} ${command.description}`.toLowerCase().includes(query.toLowerCase()));
-  const filteredQuick = quickItems.filter((item) => `${item.label} ${item.description}`.toLowerCase().includes(query.toLowerCase()));
-  const items = [...filteredQuick, ...filteredCommands.map((command) => ({ id: `command:${command.name}`, label: `/${command.name}`, description: command.description ?? t.piCommand, action: () => onCommand(command), icon: "command" }))];
-  useEffect(() => setSelectedIndex(0), [query]);
-  useEffect(() => { const item = itemRefs.current[selectedIndex]; item?.scrollIntoView?.({ block: "nearest" }); }, [selectedIndex]);
-  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown") { event.preventDefault(); setSelectedIndex((current) => Math.min(items.length - 1, current + 1)); }
-    if (event.key === "ArrowUp") { event.preventDefault(); setSelectedIndex((current) => Math.max(0, current - 1)); }
-    if (event.key === "Enter") { event.preventDefault(); items[selectedIndex]?.action(); }
-  }
-  return <div className="palette-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="command-palette" role="dialog" aria-modal="true" aria-label={t.command}><div className="palette-search"><Icon name="search" /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} placeholder={t.searchCommands} aria-label={t.searchCommands} /><kbd>ESC</kbd></div><div className="palette-group"><span>{query ? t.results : t.quickActions}</span>{items.length === 0 ? <div className="palette-empty">{t.noMatchingCommands}</div> : items.map((item, index) => <button ref={(element) => { itemRefs.current[index] = element; }} key={item.id} className={index === selectedIndex ? "selected" : ""} onMouseEnter={() => setSelectedIndex(index)} onClick={item.action}><Icon name={item.icon} /><span>{item.label}</span><small>{item.description}</small></button>)}</div></div></div>;
-}
-
-function ImagePreview({ image, language, onClose, onContextMenuImage }: { image: PreviewImage; language: Language; onClose: () => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
-  const t = copy[language];
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useDialogFocus(dialogRef, onClose);
-  return <div className="image-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="image-preview-dialog" role="dialog" aria-modal="true" aria-label={t.imagePreview}><button type="button" className="icon-button image-preview-close" onClick={onClose} aria-label={t.closeImagePreview} title={t.closeImagePreview}><Icon name="x" /></button><img src={image.src} alt={image.alt} onContextMenu={(event) => onContextMenuImage(event, image)} /></div></div>;
-}
-
-function ImageContextMenu({ language, x, y, onCopy }: { language: Language; x: number; y: number; onCopy: () => void }) {
-  const t = copy[language];
-  return <div className="image-context-menu" role="menu" aria-label={t.copyImage} style={{ left: x, top: y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" autoFocus onClick={onCopy}><Icon name="copy" size={13} />{t.copyImage}</button></div>;
-}
-
-function ConfirmDialog({ language, task, busy, onCancel, onConfirm }: { language: Language; task: TaskSummary; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
-  const t = copy[language];
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useDialogFocus(dialogRef, () => { if (!busy) onCancel(); });
-  return <div className="dialog-backdrop"><div ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description"><span className="confirm-icon"><Icon name="alert" /></span><h2 id="delete-title">{t.deleteSessionTitle}</h2><p id="delete-description">{t.deleteSessionBody(task.title)}</p><div><button className="button ghost" disabled={busy} onClick={onCancel}>{t.cancel}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? t.deleting : t.deleteSession}</button></div></div></div>;
-}
-
-function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh }: { language: Language; focusProviderId: string | null; onClose: () => void; onModelsRefresh: (providerId?: string) => Promise<void> | void }) {
-  const [providers, setProviders] = useState<ProviderSummary[]>([]);
-  const [providerStates, setProviderStates] = useState<Record<string, ProviderSummary["authState"]>>({});
-  const [busyProvider, setBusyProvider] = useState<string | null>(null);
-  const [authMethod, setAuthMethod] = useState<AuthMethod | null>(null);
-  const [apiKeyProvider, setApiKeyProvider] = useState<string | null>(null);
-  const [apiKeyValue, setApiKeyValue] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string | undefined>>({});
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
-  const [authUrl, setAuthUrl] = useState<string | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
-  const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
-  const [providerQuery, setProviderQuery] = useState("");
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>("all");
-  const [pendingLogout, setPendingLogout] = useState<ProviderSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const dialogRef = useRef<HTMLElement>(null);
-  const authPromptRef = useRef<HTMLFormElement>(null);
-  const logoutPromptRef = useRef<HTMLDivElement>(null);
-  const t = copy[language];
-  const normalizedProviderQuery = providerQuery.trim().toLocaleLowerCase();
-  const filteredProviders = useMemo(() => providers.filter((provider) => {
-    const state = providerStates[provider.id] ?? provider.authState;
-    const matchesQuery = !normalizedProviderQuery || `${provider.name} ${provider.id}`.toLocaleLowerCase().includes(normalizedProviderQuery);
-    const matchesFilter = providerFilter === "all" || (providerFilter === "missing" ? state === "missing" || state === "available" : state === providerFilter);
-    return matchesQuery && matchesFilter;
-  }), [normalizedProviderQuery, providerFilter, providerStates, providers]);
-
-  function closeApiKeyForm() { setApiKeyProvider(null); setApiKeyValue(""); }
-  async function resolvePrompt(value: string) {
-    if (!authPrompt) return;
-    const requestId = authPrompt.requestId;
-    try { await window.pideck.providers.resolveAuth(requestId, value); }
-    catch (error) { setAuthError(error instanceof Error ? error.message : String(error)); return; }
-    setAuthPrompt(null);
-    setAuthError(null);
-  }
-  useDialogFocus(dialogRef, () => {
-    if (apiKeyProvider) { closeApiKeyForm(); return; }
-    onClose();
-  }, !authPrompt && !pendingLogout);
-  useDialogFocus(authPromptRef, () => void resolvePrompt(""), Boolean(authPrompt));
-  useDialogFocus(logoutPromptRef, () => { if (!busyProvider) setPendingLogout(null); }, Boolean(pendingLogout));
-
-  async function loadProviders() {
-    setLoading(true); setListError(null);
-    try {
-      const next = await window.pideck.providers.list();
-      setProviders([...next].sort((a, b) => Number(b.authState === "configured") - Number(a.authState === "configured") || a.name.localeCompare(b.name)));
-      setProviderStates(Object.fromEntries(next.map((provider) => [provider.id, provider.authState])));
-    } catch (error) { setListError(`${t.providerLoadFailed}: ${error instanceof Error ? error.message : String(error)}`); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { void loadProviders(); }, []);
-  useEffect(() => {
-    if (!focusProviderId || !providers.length) return;
-    setProviderQuery("");
-    setProviderFilter("all");
-    const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-provider-id="${CSS.escape(focusProviderId)}"]`)?.scrollIntoView({ block: "center" }));
-    return () => cancelAnimationFrame(frame);
-  }, [focusProviderId, providers]);
-  useEffect(() => window.pideck.events.subscribe((runtimeEvent) => {
-    if (runtimeEvent.type !== "auth.event" || !runtimeEvent.requestId) return;
-    const event = runtimeEvent.event as any;
-    if (event?.type === "prompt") {
-      setAuthError(null);
-      setAuthNotice(null);
-      setAuthUrl(null);
-      setAuthPrompt({ requestId: runtimeEvent.requestId, message: event.prompt?.message ?? t.authPromptFallback, placeholder: event.prompt?.placeholder ?? "", value: "" });
-    }
-    else if (event?.type === "notify" && event.event?.type === "auth_url") {
-      setAuthUrl(null); setAuthNotice(null);
-      if (event.event.url) void window.pideck.providers.openAuthUrl(event.event.url).catch(() => undefined);
-    } else if (event?.type === "notify" && event.event?.type === "device_code") {
-      setAuthUrl(null); setAuthNotice(null);
-      if (event.event.verificationUri) void window.pideck.providers.openAuthUrl(event.event.verificationUri).catch(() => undefined);
-    }
-  }), [language]);
-
-  async function auth(providerId: string, method: AuthMethod, secret?: string) {
-    if (method === "api-key" && !secret?.trim()) { setFieldErrors((current) => ({ ...current, [providerId]: t.apiKeyRequired })); return; }
-    setBusyProvider(providerId); setAuthMethod(method); setAuthError(null); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [providerId]: undefined }));
-    try {
-      if (method === "api-key") await window.pideck.providers.setApiKey(providerId, secret!.trim());
-      else await window.pideck.providers.login(providerId, method);
-      closeApiKeyForm(); setAuthNotice(null); setAuthError(null); setAuthMethod(null); await loadProviders(); await onModelsRefresh(providerId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (method === "api-key") setFieldErrors((current) => ({ ...current, [providerId]: message }));
-      else setAuthError(message);
-    } finally { setBusyProvider(null); if (method !== "oauth") setAuthMethod(null); }
-  }
-
-  async function logout(providerId: string) {
-    setBusyProvider(providerId); setAuthError(null);
-    try { await window.pideck.providers.logout(providerId); setPendingLogout(null); await loadProviders(); await onModelsRefresh(providerId); }
-    catch (error) { setAuthError(error instanceof Error ? error.message : String(error)); }
-    finally { setBusyProvider(null); }
-  }
-
-  return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busyProvider) onClose(); }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="provider-title"><div className="settings-header"><div><span className="eyebrow">{t.localRuntime}</span><h2 id="provider-title">{t.providerAuthTitle}</h2></div><button className="icon-button" onClick={onClose} aria-label={t.closeSettings} title={t.closeSettings}><Icon name="x" /></button></div><div className="locality-note"><span className="status-dot" /><span>{t.localCredentials}</span></div>{!authPrompt && authNotice && <div className="auth-notice" role="status"><div>{authNotice}</div>{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}</div>}{!authPrompt && authError && <div className="auth-error" role="alert"><div className="auth-error-copy">{authError}</div><div className="auth-error-actions">{authUrl && <button className="button primary" onClick={() => void window.pideck.providers.openAuthUrl(authUrl)}>{t.openBrowser}</button>}<button className="button ghost" onClick={() => { setAuthError(null); void loadProviders(); }}>{t.retry}</button></div></div>}
-    {!loading && !listError && providers.length > 0 && <div className="provider-tools"><label className="provider-search"><Icon name="search" size={14} /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder={t.providerSearch} aria-label={t.providerSearch} /></label><div className="provider-filters" role="group" aria-label={t.providerAuthTitle}>{(["all", "configured", "expired", "missing"] as ProviderFilter[]).map((filter) => <button type="button" key={filter} aria-pressed={providerFilter === filter} onClick={() => setProviderFilter(filter)}>{filter === "all" ? t.providerFilterAll : filter === "configured" ? t.providerFilterConfigured : filter === "expired" ? t.providerFilterExpired : t.providerFilterMissing}</button>)}</div></div>}
-    <div className="provider-list">{loading ? <div className="provider-loading" role="status"><i /><i /><i /></div> : listError ? <div className="provider-list-error" role="alert"><span>{listError}</span><button className="button ghost" onClick={() => void loadProviders()}>{t.retry}</button></div> : providers.length === 0 ? <div className="provider-list-error"><span>{t.noProviders}</span></div> : filteredProviders.length === 0 ? <div className="provider-list-empty"><Icon name="search" size={17} /><span>{t.providerNoMatches}</span></div> : filteredProviders.map((provider) => { const state = providerStates[provider.id] ?? provider.authState; const expanded = apiKeyProvider === provider.id; const oauthLocked = state === "configured"; return <div className={`provider-card ${expanded ? "expanded" : ""} ${focusProviderId === provider.id ? "focused" : ""}`} data-provider-id={provider.id} key={provider.id}><div className="provider-main"><div className="provider-logo">{provider.name.slice(0, 1)}</div><div className="provider-copy"><div><strong>{provider.name}</strong><span className={`provider-state ${state}`}><span className="status-dot" />{state === "configured" ? t.configured : state === "expired" ? t.expired : t.missing}</span></div><small>{provider.id} · {t.providerModels(provider.modelCount)}</small></div><div className="provider-actions">{state === "configured" && <button className="button danger-subtle" disabled={busyProvider === provider.id} onClick={() => setPendingLogout(provider)}>{t.removeProviderAuth}</button>}{provider.authMethods.includes("oauth") && <button className="button primary" disabled={busyProvider === provider.id || oauthLocked} onClick={() => void auth(provider.id, "oauth")}>{busyProvider === provider.id ? t.authorizing : t.oauth}</button>}{provider.authMethods.includes("api-key") && <button className="button ghost" aria-expanded={expanded} aria-controls={`api-key-${provider.id}`} disabled={busyProvider === provider.id} onClick={() => { if (expanded) closeApiKeyForm(); else { setApiKeyProvider(provider.id); setApiKeyValue(""); setAuthNotice(null); setAuthUrl(null); setFieldErrors((current) => ({ ...current, [provider.id]: undefined })); } }}>{t.apiKey}</button>}</div></div>{expanded && <form id={`api-key-${provider.id}`} className="api-key-form" onSubmit={(event) => { event.preventDefault(); void auth(provider.id, "api-key", apiKeyValue); }}><label htmlFor={`api-key-input-${provider.id}`}><strong>{t.apiKey}</strong><small>{provider.name}</small></label><div className="api-key-controls"><input id={`api-key-input-${provider.id}`} type="password" autoFocus value={apiKeyValue} onChange={(event) => setApiKeyValue(event.target.value)} placeholder={t.enterApiKey} aria-describedby={fieldErrors[provider.id] ? `api-key-error-${provider.id}` : undefined} /><button className="button primary" disabled={!apiKeyValue.trim() || busyProvider === provider.id} type="submit">{busyProvider === provider.id ? t.saving : t.save}</button><button className="button ghost" type="button" onClick={closeApiKeyForm}>{t.cancel}</button></div>{fieldErrors[provider.id] && <div id={`api-key-error-${provider.id}`} className="field-error" role="alert">{fieldErrors[provider.id]}</div>}</form>}</div>; })}</div>
-    <div className="settings-footer"><span>{providers.length ? providerQuery || providerFilter !== "all" ? t.providerFilteredCount(filteredProviders.length, providers.length) : t.providerCount(providers.length) : ""}</span><button className="button ghost" onClick={onClose}>{t.done}</button></div>
-    {pendingLogout && <div className="auth-prompt-backdrop"><div ref={logoutPromptRef} className="auth-prompt provider-logout-prompt" role="alertdialog" aria-modal="true" aria-labelledby="provider-logout-title" aria-describedby="provider-logout-description"><span className="confirm-icon"><Icon name="alert" /></span><h3 id="provider-logout-title">{t.removeProviderAuthTitle(pendingLogout.name)}</h3><p id="provider-logout-description">{t.removeProviderAuthBody(pendingLogout.name)}</p><div><button type="button" className="button ghost" disabled={busyProvider === pendingLogout.id} onClick={() => setPendingLogout(null)}>{t.cancel}</button><button type="button" className="button danger" disabled={busyProvider === pendingLogout.id} onClick={() => void logout(pendingLogout.id)}>{busyProvider === pendingLogout.id ? t.removingProviderAuth : t.removeProviderAuth}</button></div></div></div>}
-    {authPrompt && <div className="auth-prompt-backdrop"><form ref={authPromptRef} className="auth-prompt" role="alertdialog" aria-modal="true" onSubmit={(event) => { event.preventDefault(); void resolvePrompt(authPrompt.value); }}><h3>{t.authPromptTitle}</h3><p>{authPrompt.message}</p>{authError && <div className="inline-error" role="alert">{authError}</div>}<label><span>{authPrompt.placeholder || t.authPromptFallback}</span><input autoFocus type="password" value={authPrompt.value} onChange={(event) => setAuthPrompt((current) => current ? { ...current, value: event.target.value } : current)} /></label><div><button type="button" className="button ghost" onClick={() => { setAuthPrompt(null); setAuthError(null); setAuthMethod(null); }}>{t.cancel}</button><button type="submit" className="button primary" disabled={!authPrompt.value}>{t.submit}</button></div></form></div>}
-  </section></div>;
 }
