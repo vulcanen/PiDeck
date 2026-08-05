@@ -26,11 +26,11 @@ React Renderer
   → Preload contextBridge(window.pideck)
   → Electron Main IPC
   → child_process.fork(PiHost)
-  → 系统 Node.js
+  → Electron 内置 Node（ELECTRON_RUN_AS_NODE）
   → @earendil-works/pi-coding-agent
 ```
 
-当前代码不是 Electron `utilityProcess`，也不是 MessagePort。`packages/pi-host` 使用普通 Node `process.send/process.on("message")`，以满足 Pi SDK 的 Node engines。
+当前代码不是 Electron `utilityProcess`，也不是 MessagePort。`packages/pi-host` 使用普通 Node `process.send/process.on("message")`。PiHost 运行在 Electron 内置 Node 中（满足 Pi SDK 的 Node engines 且可读取 asar），node_modules 打包进 asar，仅原生 `.node` 模块解包。
 
 ### 2.1 当前目录
 

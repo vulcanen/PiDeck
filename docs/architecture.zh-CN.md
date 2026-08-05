@@ -23,11 +23,11 @@ Sandboxed React Renderer
           ├─ BrowserWindow 生命周期
           ├─ IPC handler 编排
           └─ child_process.fork(PiHost)
-              └─ 系统 Node.js
+              └─ Electron 内置 Node（ELECTRON_RUN_AS_NODE）
                   └─ @earendil-works/pi-coding-agent
 ```
 
-当前实现使用普通 Node `child_process.fork` 和 `process.send/process.on("message")`，不是 Electron `utilityProcess`，也不是 MessagePort。这样可以让 Pi SDK 运行在满足 Node engines 的系统 Node 中，避免 Electron 内置 Node 与 Pi SDK/undici 的兼容问题。
+当前实现使用普通 Node `child_process.fork` 和 `process.send/process.on("message")`，不是 Electron `utilityProcess`，也不是 MessagePort。fork 目标是 Electron 自身可执行文件并带 `ELECTRON_RUN_AS_NODE=1`，即 Electron 内置 Node：内置 Node 满足 Pi SDK engines 时不存在 WebIDL/undici 兼容问题，且能透明读取 asar 归档，因此 node_modules 全部打包进 asar，仅原生 `.node` 模块与 `apps/desktop/assets` 经 `asarUnpack` 解包。若内置 Node 低于 Pi SDK 要求，则必须改用外部系统 Node 并整体解包 node_modules（系统 Node 不能读取 asar）。
 
 ### 2.1 Main
 
@@ -119,7 +119,7 @@ pi-adapter → Pi SDK（仅动态加载和公开 API 适配）
 permission-engine → contracts + Pi Permission System 配置
 ```
 
-这些 workspace 包的类型入口保留在 `src/index.ts` / `src/index.tsx`，运行时入口指向构建生成的 `dist/index.js`。桌面开发和生产构建会先编译 `domain`、`pi-adapter`、`permission-engine`、`pi-host`、`i18n` 和 `ui-system`，避免系统 Node 或 Renderer 直接加载未编译的 TypeScript。
+这些 workspace 包的类型入口保留在 `src/index.ts` / `src/index.tsx`，运行时入口指向构建生成的 `dist/index.js`。桌面开发和生产构建会先编译 `domain`、`pi-adapter`、`permission-engine`、`pi-host`、`i18n` 和 `ui-system`，避免 PiHost Node 进程或 Renderer 直接加载未编译的 TypeScript。
 
 必须遵守：
 

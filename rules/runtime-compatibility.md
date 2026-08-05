@@ -1,15 +1,16 @@
-# Electron / PiHost 通信与验证
+# Electron / PiHost Communication and Validation
 
-## 通信模型
+## Communication Model
 
-- Renderer -> Preload -> Main IPC -> PiHost -> Pi SDK。
-- PiHost 在 Windows 上优先使用系统 Node 启动，避免 Electron 内置 Node 与 Pi SDK/undici 的 WebIDL 版本冲突。
-- Electron `utilityProcess` 的 `process.parentPort` 只适用于 Electron utility runtime；使用普通 Node `child_process.fork` 时必须使用 `process.send` / `process.on("message")`。
-- Main 必须监听 Host 的启动、消息、错误和退出事件，并为挂起请求设置超时。
+- Renderer -> Preload -> Main IPC -> PiHost -> Pi SDK.
+- PiHost is started via `child_process.fork` from Electron's bundled Node (`process.execPath` + `ELECTRON_RUN_AS_NODE=1`): when the bundled Node satisfies the Pi SDK engines there is no WebIDL/undici compatibility issue, and it reads the asar archive transparently, so node_modules can stay fully packed into the asar with only native `.node` modules and assets unpacked.
+- Electron `utilityProcess`'s `process.parentPort` only applies to the Electron utility runtime; PiDeck uses plain Node `child_process.fork`, which must use `process.send` / `process.on("message")`.
+- Use an external system Node only when explicitly set via `PIDECK_NODE_EXECUTABLE`: a system Node cannot read asar, so node_modules and the PiHost entry must be unpacked via `asarUnpack`, and the fork path must be mapped to `app.asar.unpacked`.
+- Main must listen to the Host's start, message, error, and exit events, and set timeouts for pending requests.
 
-## 冒烟验证
+## Smoke Validation
 
-构建后至少验证：
+After building, verify at least:
 
 - PiHost runtime status
 - `projects.list`
@@ -18,13 +19,13 @@
 - `sessions.create`
 - `sessions.capabilities`
 - `workspace.snapshot`
-- `terminal.execute`（只使用无副作用命令）
+- `terminal.execute` (side-effect-free commands only)
 
-真实模型 prompt 会产生网络和 Provider 副作用，未经用户明确授权不要自动执行。
+Real model prompts produce network and Provider side effects; never run them automatically without explicit user authorization.
 
-## 常见故障
+## Common Failures
 
-- `PiHost request timed out`：先检查 Host 是否启动、IPC 事件是否被正确读取，再检查 SDK 初始化错误。
-- `webidl.util.markAsUncloneable is not a function`：通常是 Pi SDK/undici 在旧 Electron Node 中运行，切换到满足 Pi SDK engines 的系统 Node。
-- 模型空列表：区分“模型目录为空”“Provider 未认证”和“IPC 请求失败”，UI 不得把三者都显示成同一个空状态。
-- 交互式认证（尤其 OAuth 浏览器回调）不是普通短请求，`providers.login` 必须允许足够长的等待时间，并持续显示“授权中”状态；禁止使用统一的短超时掩盖等待中的回调。
+- `PiHost request timed out`: first check whether the Host started and IPC events are being read correctly, then check SDK initialization errors.
+- `webidl.util.markAsUncloneable is not a function`: the Pi SDK/undici is running on an Electron Node that is too old (missing `markAsUncloneable`). Upgrade Electron so the bundled Node satisfies the Pi SDK engines (`>=22.19.0`; Electron 43's bundled Node 24 already satisfies it), or point `PIDECK_NODE_EXECUTABLE` at a suitable system Node and unpack node_modules accordingly.
+- Empty model list: distinguish "model catalog empty", "Provider not authenticated", and "IPC request failed"; the UI must not render all three as the same empty state.
+- Interactive auth (especially OAuth browser callbacks) is not a normal short request; `providers.login` must allow a long enough wait and keep showing an "authorizing" state. Do not mask pending callbacks with a uniform short timeout.

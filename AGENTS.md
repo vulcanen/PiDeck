@@ -1,42 +1,42 @@
-# PiDeck 开发说明
+# PiDeck Development Guide
 
-PiDeck 的唯一产品边界是：把 `@earendil-works/pi-coding-agent`（Pi CLI）的既有能力映射到桌面 UI。
+PiDeck's only product boundary is mapping the existing capabilities of `@earendil-works/pi-coding-agent` (Pi CLI) onto a desktop UI.
 
-不要在本项目中优先添加 Pi CLI 没有的产品能力或第二套 Agent 实现。任何 UI 能力都必须能追溯到 Pi CLI / Pi SDK 的真实 API、事件或资源。
+Do not add product capabilities that Pi CLI does not have, nor a second Agent implementation. Every UI capability must trace back to a real API, event, or resource of Pi CLI / Pi SDK.
 
-## 开发前必读规则
+## Required Reading Before Development
 
-- [Pi CLI 边界与适配原则](rules/pi-cli-scope.md)
-- [依赖升级与运行时兼容](rules/dependency-management.md)
-- [Electron/PiHost 通信与验证](rules/runtime-compatibility.md)
-- [文档同步规则](rules/documentation-management.md)
-- [UI/UX 开发规范](rules/ui-ux-standards.zh-CN.md)
-- [Renderer 会话时间线与滚动规则](rules/renderer-session-timeline.zh-CN.md)
+- [Pi CLI scope and adaptation principles](rules/pi-cli-scope.md)
+- [Dependency upgrades and runtime compatibility](rules/dependency-management.md)
+- [Electron/PiHost communication and validation](rules/runtime-compatibility.md)
+- [Documentation sync rules](rules/documentation-management.md)
+- [UI/UX development standards](rules/ui-ux-standards.md)
+- [Renderer session timeline and scrolling rules](rules/renderer-session-timeline.md)
 
-## 运行环境
+## Runtime Environment
 
-- Node.js：`>=22.19.0`，与当前 Pi SDK 的 engines 要求一致。
-- Electron：使用当前稳定版；Pi SDK 不应直接运行在低于其 Node engines 的 Electron 内置 Node 中。
-- Pi SDK 路径优先使用 `PIDECK_PI_MODULE`；开发机可从全局 `pi` / npm root 定位。
-- 修改依赖后必须更新 `package-lock.json`，并运行 `npm run typecheck`、`npm run build`。
-- Windows 和 macOS 本地打包分别使用 `npm run package:win` 和 `npm run package:mac`；前者生成 NSIS 安装程序，后者生成 DMG。两者均未签名，正式分发前还需配置签名、公证或安装包发布流程。
+- Node.js: `>=22.19.0`, matching the current Pi SDK engines requirement.
+- Electron: use the current stable release. PiHost is forked from Electron's bundled Node via `ELECTRON_RUN_AS_NODE` and reads the asar archive. The bundled Node must satisfy the Pi SDK engines; otherwise switch to an external system Node and unpack node_modules entirely (a system Node cannot read asar).
+- Pi SDK path resolution prefers `PIDECK_PI_MODULE`; on dev machines it can be located via the global `pi` / npm root.
+- After changing dependencies, update `package-lock.json` and run `npm run typecheck` and `npm run build`.
+- Local packaging uses `npm run package:win` (NSIS installer) and `npm run package:mac` (DMG). Both are unsigned; signing, notarization, or an installer release pipeline is required before official distribution.
 
-## 代码边界
+## Code Boundaries
 
-- Renderer 只通过 Preload Bridge 访问 Pi 能力，不得直接 import Pi SDK、Node built-ins 或凭据对象。
-- 可见文案必须放在独立的 i18n 配置/模块中，组件只读取 key，不在 JSX 中持续堆积中英文字符串。
-- Pi 能力的 fallback 目录必须独立于 UI 组件，并明确标注权威来源仍是 Pi CLI/SDK。
-- Main 只负责窗口、IPC 编排和 Host 生命周期。
-- `apps/desktop/src/renderer/App.tsx` 只保留入口和组合；页面、控制器、会话时间线、滚动和运行时事件逻辑必须放在对应的 `app-*`、`use-*`、`timeline-*` 或 UI 模块中。
-- PiHost 负责 Session、ModelRuntime、Agent、Tool、Provider、资源和 CLI 兼容能力。
-- 跨进程消息必须是可 JSON/structured-clone 序列化的数据，不传递函数、类实例或 AbortController。
-- 新增 IPC 必须先更新 `packages/contracts`，再实现 Main、Preload 和 Renderer。
+- The Renderer accesses Pi capabilities only through the Preload bridge; it must not import the Pi SDK, Node built-ins, or credential objects directly.
+- All visible copy lives in the i18n config/module; components read keys only and must not accumulate zh/en string literals in JSX.
+- Fallback catalogs for Pi capabilities must live outside UI components and clearly state that Pi CLI/SDK remains the authoritative source.
+- Main handles only windows, IPC orchestration, and Host lifecycle.
+- `apps/desktop/src/renderer/App.tsx` keeps only the entry and composition; pages, controllers, session timeline, scrolling, and runtime event logic belong in the corresponding `app-*`, `use-*`, `timeline-*`, or UI modules.
+- PiHost owns Session, ModelRuntime, Agent, Tool, Provider, resources, and CLI compatibility capabilities.
+- Cross-process messages must be JSON/structured-clone serializable data; never pass functions, class instances, or AbortController.
+- New IPC must update `packages/contracts` first, then be implemented in Main, Preload, and Renderer.
 
-## 完成标准
+## Definition of Done
 
-任何功能修复都必须同时验证：
+Every fix must verify all of the following:
 
-1. PiHost 能启动并报告 runtime status。
-2. 至少有一个真实 IPC 冒烟调用成功。
-3. TypeScript 检查和生产构建通过。
-4. 失败时 UI 显示可操作的错误，而不是无限 loading 或静默空白。
+1. PiHost starts and reports runtime status.
+2. At least one real IPC smoke call succeeds.
+3. TypeScript check and production build pass.
+4. On failure the UI shows an actionable error, not infinite loading or silent blankness.

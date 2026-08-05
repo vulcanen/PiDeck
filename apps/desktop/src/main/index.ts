@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
-import { execFileSync, fork as forkNode, type ChildProcess } from "node:child_process";
+import { fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -206,16 +206,12 @@ function publishRuntimeStatus(status: RuntimeStatus) {
 }
 
 function resolveNodeExecutable(): string {
+  // Run PiHost on Electron's bundled Node: it satisfies the Pi SDK engine
+  // requirement (the historical WebIDL/undici conflict no longer applies) and
+  // reads the asar archive transparently, so node_modules can stay packed.
+  // A system Node cannot read asar, so it is only used when explicitly
+  // requested via PIDECK_NODE_EXECUTABLE.
   if (process.env.PIDECK_NODE_EXECUTABLE) return process.env.PIDECK_NODE_EXECUTABLE;
-  try {
-    const executable = execFileSync("where.exe", ["node"], { encoding: "utf8" })
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .find(Boolean);
-    if (executable) return executable;
-  } catch {
-    // Fall back to Electron's executable only when no system Node is available.
-  }
   return process.execPath;
 }
 
@@ -227,11 +223,11 @@ function startHost(window: BrowserWindow) {
   }
 
   publishRuntimeStatus("starting");
-  const hostPath = toUnpackedPath(path.join(__dirname, "../../../../packages/pi-host/dist/index.js"));
+  const hostPath = path.join(__dirname, "../../../../packages/pi-host/dist/index.js");
   host = forkNode(hostPath, [], {
     execPath: resolveNodeExecutable(),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
-    env: { ...process.env, PIDECK_HOST_PROCESS: "1" },
+    env: { ...process.env, PIDECK_HOST_PROCESS: "1", ELECTRON_RUN_AS_NODE: "1" },
   });
   hostAlive = true;
   host.stderr?.on("data", (chunk) => {

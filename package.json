@@ -39,9 +39,7 @@
     },
     "asar": true,
     "asarUnpack": [
-      "node_modules/**/*",
-      "packages/*/dist/**/*",
-      "packages/*/package.json",
+      "**/*.node",
       "apps/desktop/assets/**/*"
     ],
     "npmRebuild": false,
