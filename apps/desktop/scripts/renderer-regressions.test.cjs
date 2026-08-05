@@ -270,6 +270,33 @@ test("follow-up messages create distinct logical turns", () => {
   ]);
 });
 
+test("failed model response stays visible instead of being dropped", () => {
+  const failed = {
+    id: "a-fail",
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    stopReason: "error",
+    errorMessage: "Codex error: The usage limit has been reached",
+    timestamp: 2,
+  };
+  const items = buildMessageTimelineItems({
+    messages: [
+      message("u1", "user", "hello", 1),
+      failed,
+    ],
+    language: "en",
+    running: false,
+    completedActivity: [activity("run-fail")],
+    steeringMessageKeys: [],
+  });
+
+  assert.deepEqual(describeTimeline(items), [
+    "message:u1",
+    "execution:run-fail",
+    "message:a-fail",
+  ]);
+});
+
 test("steering messages stay inside one logical turn", () => {
   const steering = message("u-steer", "user", "adjust", 3);
   const messages = [

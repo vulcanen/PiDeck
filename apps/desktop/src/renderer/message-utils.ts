@@ -20,6 +20,18 @@ export function textFromMessage(message: any): string {
   return message.content.map((part: any) => part?.type === "text" ? part.text : "").filter(Boolean).join("\n");
 }
 
+// A failed model call (usage limits, provider/auth errors) surfaces as an
+// assistant message with an empty text body plus stopReason "error" and
+// errorMessage. The timeline must treat it as a real reply instead of
+// dropping it. User-initiated aborts (stopReason "aborted") are deliberate
+// and stay silent, matching the TUI.
+export function messageErrorText(message: any): string {
+  if (message?.role !== "assistant") return "";
+  if (message?.stopReason !== "error") return "";
+  const errorMessage = message?.errorMessage;
+  return typeof errorMessage === "string" ? errorMessage.trim() : "";
+}
+
 export function messageIdentity(message: any): string | undefined {
   const id = typeof message?.id === "string" && message.id ? message.id : undefined;
   if (id) return `id:${id}`;

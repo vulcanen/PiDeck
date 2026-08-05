@@ -296,6 +296,9 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
   width: 100%;
   max-width: none;
 }
+.message-error { display: grid; gap: 6px; margin-top: 8px; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--red) 42%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--red) 8%, var(--surface)); font-size: 12px; }
+.message-error-heading { display: inline-flex; align-items: center; gap: 6px; color: var(--red); }
+.message-error code { display: block; color: var(--muted); overflow-wrap: anywhere; font: 12px/1.6 var(--font-mono); }
 .live-message { animation: message-arrive 240ms var(--motion) both; }
 .live-message-status { min-height: 20px; }
 .live-pill { display: inline-flex; align-items: center; gap: 5px; margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; }

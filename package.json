@@ -3,6 +3,9 @@
   "productName": "PiDeck",
   "private": true,
   "version": "0.1.0",
+  "author": {
+    "name": "PiDeck"
+  },
   "main": "apps/desktop/dist/main/index.js",
   "description": "A calm, editorial desktop workspace for Pi.",
   "workspaces": [
@@ -23,7 +26,10 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0",
     "@gotgenes/pi-permission-system": "^24.0.0",
-    "@pideck/domain": "0.1.0"
+    "@pideck/contracts": "0.1.0",
+    "@pideck/domain": "0.1.0",
+    "@pideck/permission-engine": "0.1.0",
+    "@pideck/pi-adapter": "0.1.0"
   },
   "build": {
     "appId": "com.pideck.desktop",
@@ -31,7 +37,13 @@
     "directories": {
       "output": "release"
     },
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/**/*",
+      "packages/*/dist/**/*",
+      "packages/*/package.json",
+      "apps/desktop/assets/**/*"
+    ],
     "npmRebuild": false,
     "files": [
       "apps/desktop/dist/**/*",
@@ -50,14 +62,29 @@
       "packages/ui-system/dist/**/*",
       "packages/ui-system/package.json",
       "package.json",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!**/*.map",
+      "!**/*.d.ts",
+      "!**/*.d.mts",
+      "!**/*.d.cts",
+      "!**/*.tsbuildinfo",
+      "!node_modules/**/tree-sitter-bash/src/**",
+      "!node_modules/**/tree-sitter-bash/grammar.js"
     ],
     "win": {
       "target": {
         "target": "nsis",
         "arch": ["x64"]
       },
-      "icon": "apps/desktop/assets/pideck-icon.ico"
+      "icon": "apps/desktop/assets/pideck-icon.ico",
+      "files": [
+        "!node_modules/**/@mariozechner/clipboard-{darwin,linux}*/**",
+        "!node_modules/**/@mariozechner/clipboard-win32-arm64-msvc/**",
+        "!node_modules/**/prebuilds/{darwin,linux}-*/**",
+        "!node_modules/**/prebuilds/win32-arm64/**",
+        "!node_modules/**/native/{darwin,linux}/**",
+        "!node_modules/**/native/win32/prebuilds/win32-arm64/**"
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -67,7 +94,12 @@
     "mac": {
       "target": ["dmg"],
       "icon": "apps/desktop/assets/pideck-icon.icns",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "files": [
+        "!node_modules/**/@mariozechner/clipboard-{win32,linux}*/**",
+        "!node_modules/**/prebuilds/{win32,linux}-*/**",
+        "!node_modules/**/native/{win32,linux}/**"
+      ]
     },
     "dmg": {
       "title": "PiDeck"

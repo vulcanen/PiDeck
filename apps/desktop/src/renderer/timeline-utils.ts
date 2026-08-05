@@ -1,7 +1,7 @@
 import { copy, type Language } from "@pideck/i18n";
 import type { SessionRunRecord } from "@pideck/contracts";
 import type { ActivityStep, WorkingPhase } from "./types";
-import { messageIdentity, textFromMessage } from "./message-utils";
+import { messageErrorText, messageIdentity, textFromMessage } from "./message-utils";
 
 export type MessageTimelineItem =
   | { type: "message"; message: any; index: number; stableKey?: string }
@@ -193,7 +193,7 @@ export function buildMessageTimelineItems({
     for (const message of turn) {
       if (message?.role === "user") {
         items.push({ type: "message", message, index: items.length });
-      } else if (message?.role === "assistant" && textFromMessage(message)) {
+      } else if (message?.role === "assistant" && (textFromMessage(message) || messageErrorText(message))) {
         hasAssistantText = true;
         // While a queued turn is running, keep earlier turns (which are no
         // longer the final turn) visible with their completed execution summary.

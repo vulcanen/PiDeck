@@ -14,13 +14,25 @@ type ProjectRegistry = {
   hiddenCwds: string[];
 };
 
+/**
+ * Maps packaged paths out of the asar archive for consumers that cannot read
+ * asar, such as the forked system-Node PiHost process and native file APIs.
+ * No-op in development where no app.asar segment exists.
+ */
+function toUnpackedPath(filePath: string): string {
+  return filePath.replace(
+    `${path.sep}app.asar${path.sep}`,
+    `${path.sep}app.asar.unpacked${path.sep}`,
+  );
+}
+
 let host: ChildProcess | undefined;
 let hostAlive = false;
 let hostStatus: RuntimeStatus = "starting";
 let hostWindow: BrowserWindow | undefined;
 let currentLanguage: AppLanguage = app.getLocale().toLowerCase().startsWith("zh") ? "zh" : "en";
-const applicationIconPath = path.join(__dirname, "../../assets/pideck-icon.png");
-const dockIconPath = path.join(__dirname, "../../assets/pideck-dock-icon.png");
+const applicationIconPath = toUnpackedPath(path.join(__dirname, "../../assets/pideck-icon.png"));
+const dockIconPath = toUnpackedPath(path.join(__dirname, "../../assets/pideck-dock-icon.png"));
 const nativeRequire = createRequire(__filename);
 type MiniwindowAddon = { installMiniwindowCustomization(handle: Buffer, iconPath: string): boolean };
 let miniwindowAddon: MiniwindowAddon | undefined;
@@ -215,7 +227,7 @@ function startHost(window: BrowserWindow) {
   }
 
   publishRuntimeStatus("starting");
-  const hostPath = path.join(__dirname, "../../../../packages/pi-host/dist/index.js");
+  const hostPath = toUnpackedPath(path.join(__dirname, "../../../../packages/pi-host/dist/index.js"));
   host = forkNode(hostPath, [], {
     execPath: resolveNodeExecutable(),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -410,7 +422,7 @@ function createWindow() {
   startHost(window);
   if (process.platform === "darwin") {
     try {
-      miniwindowAddon ??= nativeRequire(path.join(__dirname, "../../assets/pideck-miniwindow.node")) as MiniwindowAddon;
+      miniwindowAddon ??= nativeRequire(toUnpackedPath(path.join(__dirname, "../../assets/pideck-miniwindow.node"))) as MiniwindowAddon;
       miniwindowAddon.installMiniwindowCustomization(window.getNativeWindowHandle(), applicationIconPath);
     } catch (error) {
       console.warn("Could not customize the minimized window Dock tile", error);
