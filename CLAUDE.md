@@ -1,3 +1,3 @@
-# 说明
+# Notes
 
-在开发前，务必 阅读 [AGENTS.md](./AGENTS.md) 了解项目现状和开发规范.
+Before developing, read [AGENTS.md](./AGENTS.md) to understand the project's current state and development conventions.
