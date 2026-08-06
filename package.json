@@ -29,6 +29,7 @@
     "@gotgenes/pi-permission-system": "^24.0.0",
     "@pideck/contracts": "0.1.0",
     "@pideck/domain": "0.1.0",
+    "@pideck/i18n": "0.1.0",
     "@pideck/permission-engine": "0.1.0",
     "@pideck/pi-adapter": "0.1.0"
   },
