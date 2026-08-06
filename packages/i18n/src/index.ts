@@ -503,6 +503,64 @@ export const copy = {
 
 export type Copy = (typeof copy)[Language];
 
+/**
+ * Native-process copy consumed by the Electron Main process (application
+ * menu and OS dialogs). Main reads keys from here only, so zh/en literals
+ * never accumulate outside the i18n package.
+ */
+export const appMenuCopy = {
+  zh: {
+    file: "文件",
+    edit: "编辑",
+    view: "查看",
+    window: "窗口",
+    close: "关闭",
+    quit: "退出",
+    undo: "撤销",
+    redo: "重做",
+    cut: "剪切",
+    copy: "复制",
+    paste: "粘贴",
+    selectAll: "全选",
+    reload: "重新加载",
+    forceReload: "强制重新加载",
+    toggleDevTools: "切换开发者工具",
+    resetZoom: "重置缩放",
+    zoomIn: "放大",
+    zoomOut: "缩小",
+    toggleFullscreen: "切换全屏",
+    minimize: "最小化",
+    chooseProjectFolder: "选择项目文件夹",
+    importSession: "导入 Pi 会话",
+  },
+  en: {
+    file: "File",
+    edit: "Edit",
+    view: "View",
+    window: "Window",
+    close: "Close",
+    quit: "Quit",
+    undo: "Undo",
+    redo: "Redo",
+    cut: "Cut",
+    copy: "Copy",
+    paste: "Paste",
+    selectAll: "Select All",
+    reload: "Reload",
+    forceReload: "Force Reload",
+    toggleDevTools: "Toggle Developer Tools",
+    resetZoom: "Reset Zoom",
+    zoomIn: "Zoom In",
+    zoomOut: "Zoom Out",
+    toggleFullscreen: "Toggle Full Screen",
+    minimize: "Minimize",
+    chooseProjectFolder: "Choose project folder",
+    importSession: "Import Pi session",
+  },
+} as const;
+
+export type AppMenuCopy = (typeof appMenuCopy)[Language];
+
 const commandDescriptions: Record<string, Record<Language, string>> = {
   model: { zh: "选择模型", en: "Select model" },
   "scoped-models": { zh: "配置模型轮换", en: "Configure model cycling" },

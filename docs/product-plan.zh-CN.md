@@ -4,7 +4,7 @@
 >
 > 更新日期：2026-08-04
 >
-> 目标平台：Windows、macOS、Linux 桌面端；Windows 优先验收。
+> 目标平台：Windows、macOS
 
 ## 1. 产品定位与边界
 

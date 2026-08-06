@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contracts";
+import { appMenuCopy } from "@pideck/i18n";
 
 app.setName("PiDeck");
 
@@ -100,57 +101,8 @@ function hideProjectCwd(cwd: string): void {
   });
 }
 
-const menuCopy = {
-  zh: {
-    file: "文件",
-    edit: "编辑",
-    view: "查看",
-    window: "窗口",
-    close: "关闭",
-    quit: "退出",
-    undo: "撤销",
-    redo: "重做",
-    cut: "剪切",
-    copy: "复制",
-    paste: "粘贴",
-    selectAll: "全选",
-    reload: "重新加载",
-    forceReload: "强制重新加载",
-    toggleDevTools: "切换开发者工具",
-    resetZoom: "重置缩放",
-    zoomIn: "放大",
-    zoomOut: "缩小",
-    toggleFullscreen: "切换全屏",
-    minimize: "最小化",
-    chooseProjectFolder: "选择项目文件夹",
-  },
-  en: {
-    file: "File",
-    edit: "Edit",
-    view: "View",
-    window: "Window",
-    close: "Close",
-    quit: "Quit",
-    undo: "Undo",
-    redo: "Redo",
-    cut: "Cut",
-    copy: "Copy",
-    paste: "Paste",
-    selectAll: "Select All",
-    reload: "Reload",
-    forceReload: "Force Reload",
-    toggleDevTools: "Toggle Developer Tools",
-    resetZoom: "Reset Zoom",
-    zoomIn: "Zoom In",
-    zoomOut: "Zoom Out",
-    toggleFullscreen: "Toggle Full Screen",
-    minimize: "Minimize",
-    chooseProjectFolder: "Choose project folder",
-  },
-} satisfies Record<AppLanguage, Record<string, string>>;
-
 function buildApplicationMenu(language: AppLanguage) {
-  const t = menuCopy[language];
+  const t = appMenuCopy[language];
   const template: MenuItemConstructorOptions[] = [
     {
       label: t.file,
@@ -308,7 +260,7 @@ function registerIpcHandlers() {
   ipcMain.handle("projects:choose-directory", async () => {
     if (!hostWindow) return null;
     const result = await dialog.showOpenDialog(hostWindow, {
-      title: menuCopy[currentLanguage].chooseProjectFolder,
+      title: appMenuCopy[currentLanguage].chooseProjectFolder,
       properties: ["openDirectory", "createDirectory"],
     });
     const cwd = result.canceled ? undefined : result.filePaths[0];
@@ -336,7 +288,7 @@ function registerIpcHandlers() {
     if (!selectedPath) {
       if (!hostWindow) return null;
       const result = await dialog.showOpenDialog(hostWindow, {
-        title: currentLanguage === "zh" ? "导入 Pi 会话" : "Import Pi session",
+        title: appMenuCopy[currentLanguage].importSession,
         properties: ["openFile"],
         filters: [{ name: "Pi JSONL", extensions: ["jsonl"] }, { name: "All files", extensions: ["*"] }],
       });

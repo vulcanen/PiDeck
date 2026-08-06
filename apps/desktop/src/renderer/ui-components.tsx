@@ -5,7 +5,7 @@ import type { AgentQueueState, AuthMethod, ContextUsage, ExtensionUiRequest, Mod
 import { parseSkillInvocation, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import { copyText, Icon, useDialogFocus } from "@pideck/ui-system";
-import type { ActivityStep, AuthPromptState, ImageAttachment, ImageContextMenuState, PreviewImage, ProviderFilter, SentImageMessage, SuggestionMode, WorkingPhase } from "./types";
+import type { ActivityStep, AuthPromptState, ImageAttachment, PreviewImage, ProviderFilter, SuggestionMode, WorkingPhase } from "./types";
 import { formatMessageTime, messageErrorText, messageIdentity, textFromMessage } from "./message-utils";
 import { buildMessageTimelineItems } from "./timeline-utils";
 import type { ConversationScrollHandle, ConversationScrollSnapshot } from "./use-conversation-scroll";
@@ -737,7 +737,7 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [providerStates, setProviderStates] = useState<Record<string, ProviderSummary["authState"]>>({});
   const [busyProvider, setBusyProvider] = useState<string | null>(null);
-  const [authMethod, setAuthMethod] = useState<AuthMethod | null>(null);
+  const [, setAuthMethod] = useState<AuthMethod | null>(null);
   const [apiKeyProvider, setApiKeyProvider] = useState<string | null>(null);
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string | undefined>>({});

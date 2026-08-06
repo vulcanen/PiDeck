@@ -100,11 +100,3 @@ export function formatMessageTime(value: string | number | undefined, language: 
   }).format(date);
 }
 
-async function copyImageToClipboard(src: string): Promise<boolean> {
-  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") return false;
-  try {
-    const blob = await fetch(src).then((response) => response.blob());
-    await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
-    return true;
-  } catch { return false; }
-}

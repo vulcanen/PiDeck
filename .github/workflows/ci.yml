@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Renderer regression tests
+        run: npm run test:renderer
+      # Compilation-only build: PiHost resolves the Pi SDK at runtime, so the
+      # build does not require a Pi CLI installation. Installer packaging
+      # (package:win / package:mac) stays a local step for now.
+      - name: Build
+        run: npm run build

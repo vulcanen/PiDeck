@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionMode, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
+import type { AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
 import { deriveSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription, type Language } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
 import { copyText, useDialogFocus } from "@pideck/ui-system";
-import type { ActivityStep, ImageAttachment, ImageContextMenuState, MessageLoad, PreviewImage, SentImageMessage, SuggestionMode, TaskUiState, Theme, WorkingPhase } from "./types";
-import { createDefaultTaskUiState, mergeMessageSnapshot, messageIdentity, sortTasksByUpdatedAt, textFromMessage } from "./message-utils";
+import type { ActivityStep, ImageAttachment, ImageContextMenuState, MessageLoad, PreviewImage, SentImageMessage, SuggestionMode, TaskUiState, Theme } from "./types";
+import { createDefaultTaskUiState, sortTasksByUpdatedAt, textFromMessage } from "./message-utils";
 import { appendTerminalOutput } from "./ui-performance";
 import { useRuntimeEvents } from "./use-runtime-events";
 import { useSessionData } from "./use-session-data";
@@ -128,7 +128,6 @@ export function useAppController() {
   const isWorking = isSending || isCompacting;
   const streamText = activeTaskUi?.streamText ?? "";
   const workingPhase = activeTaskUi?.workingPhase ?? null;
-  const liveApproval = activeTaskUi?.approval;
   const rawMessages = activeTask ? messagesByTask[activeTask.id] ?? [] : [];
   const messages = useMemo(() => {
     if (!activeTask) return rawMessages;

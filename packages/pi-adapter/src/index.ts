@@ -33,7 +33,7 @@ let sdkPromise: Promise<PiSdk> | undefined;
 let modelRuntimePromise: Promise<any> | undefined;
 
 function addPiRoots(candidates: string[], root: string): void {
-  const normalized = root.trim().replace(/^['\"]|['\"]$/g, "");
+  const normalized = root.trim().replace(/^['"]|['"]$/g, "");
   if (!normalized) return;
   candidates.push(path.join(normalized, "@earendil-works", "pi-coding-agent", "dist", "index.js"));
   candidates.push(path.join(normalized, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"));
@@ -46,7 +46,7 @@ function addPiExecutable(candidates: string[], executable: string): void {
   if (process.platform === "win32" && existsSync(`${clean}.cmd`)) addPiRoots(candidates, path.dirname(`${clean}.cmd`));
   try {
     const shim = readFileSync(existsSync(clean) ? clean : `${clean}.cmd`, "utf8");
-    const match = /([A-Za-z]:[^\"\r\n]*@earendil-works[\\/]pi-coding-agent[\\/]dist[\\/]index\.js)/i.exec(shim);
+    const match = /([A-Za-z]:[^"\r\n]*@earendil-works[\\/]pi-coding-agent[\\/]dist[\\/]index\.js)/i.exec(shim);
     if (match) candidates.push(match[1].replaceAll("\\\\", path.sep));
   } catch {
     // A shell shim is optional; the prefix candidates are sufficient.

@@ -15,6 +15,7 @@
   "scripts": {
     "dev": "npm --workspace @pideck/desktop run dev",
     "build": "npm --workspace @pideck/desktop run build",
+    "lint": "eslint .",
     "test:renderer": "npm --workspace @pideck/desktop run test:renderer",
     "typecheck": "npm --workspace @pideck/domain run typecheck && npm --workspace @pideck/pi-adapter run typecheck && npm --workspace @pideck/permission-engine run typecheck && npm --workspace @pideck/pi-host run typecheck && npm --workspace @pideck/i18n run typecheck && npm --workspace @pideck/ui-system run typecheck && npm --workspace @pideck/desktop run typecheck",
     "package:win": "npm run build && npm exec -- electron-builder --win nsis --x64",
@@ -72,7 +73,9 @@
     "win": {
       "target": {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       },
       "icon": "apps/desktop/assets/pideck-icon.ico",
       "files": [
@@ -90,7 +93,9 @@
       "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "apps/desktop/assets/pideck-icon.icns",
       "category": "public.app-category.developer-tools",
       "files": [
@@ -105,6 +110,10 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.4",
-    "electron-builder": "^26.15.3"
+    "@eslint/js": "^10.0.1",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.8.0",
+    "globals": "^17.9.0",
+    "typescript-eslint": "^8.66.0"
   }
 }

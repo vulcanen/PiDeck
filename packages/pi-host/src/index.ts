@@ -1,6 +1,6 @@
 import type { PermissionMode, PiHostRequest, PiHostResponse, SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
-import { getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel, type PiSdk } from "@pideck/pi-adapter";
+import { getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -36,7 +36,6 @@ type AuthWaiter = {
 };
 const authWaiters = new Map<string, AuthWaiter>();
 const agentSessionRevisions = new Map<string, number>();
-const extensionUiWaiters = new Map<string, (value: string | boolean | undefined) => void>();
 function normalizePackageInstallSource(source: string): string {
   const trimmed = source.trim();
   // Pi's package manager distinguishes npm packages with the `npm:` prefix.
@@ -360,6 +359,7 @@ function packageSourceString(value: unknown): string | undefined {
   return undefined;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the parameter keeps the scope decision explicit at every callsite
 function packageSettingsKey(local: boolean): "packages" {
   // Kept as a named helper so the scope decision stays explicit at every
   // callsite; Pi exposes separate getters/setters for the two scopes.
@@ -1160,6 +1160,9 @@ async function handle(request: PiHostRequest): Promise<void> {
                   queuedPromptImagesForTexts(restored.followUp, queued.followUp),
                 );
               } catch (restoreError) {
+                // Both failures are concatenated into the message so the UI shows the
+                // original error and the restore failure without relying on error.cause.
+                // eslint-disable-next-line preserve-caught-error
                 throw new Error(`${error instanceof Error ? error.message : String(error)}; queue restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
               }
               throw error;
@@ -1322,6 +1325,12 @@ async function handle(request: PiHostRequest): Promise<void> {
         // Treat a late UI click as an idempotent no-op.
         try { permissionEngine.resolve(payload.requestId, payload.decision); } catch { /* Already resolved. */ }
         send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      default: {
+        // An unknown command must fail fast. Without this the renderer would
+        // wait for the request timeout instead of seeing an actionable error.
+        send({ id: request.id, ok: false, error: `Unknown PiHost command: ${String((request as { command?: unknown }).command ?? "")}` });
         return;
       }
     }
