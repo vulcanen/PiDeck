@@ -11,11 +11,11 @@ const {
   buildMessageTimelineItems,
   restoreCompletedActivity,
 } = require("../dist/renderer/timeline-utils.js");
-const {
-  appendTerminalOutput,
-  TERMINAL_OUTPUT_MAX_CHARS,
-  TERMINAL_OUTPUT_MAX_ENTRIES,
-} = require("../dist/renderer/ui-performance.js");
+
+const rendererSource = (relativePath) => fs.readFileSync(
+  path.join(__dirname, "../src/renderer", relativePath),
+  "utf8",
+);
 
 function message(id, role, text, timestamp) {
   return { id, role, content: text, timestamp };
@@ -40,6 +40,19 @@ test("empty project task creation keeps the target project cwd", () => {
   );
 
   assert.match(source, /onClick=\{\(\) => void onCreateTaskForProject\(project\)\}/);
+});
+
+test("new task creation stays scoped to the current project", () => {
+  const controller = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
+    "utf8",
+  );
+
+  // updateTaskLists applies its update to every project's cached list, so a
+  // new task must be written to the current project only (regression: creating
+  // a task once leaked a phantom session into every other expanded project).
+  assert.match(controller, /setTasks\(\(current\) => sortTasksByUpdatedAt\(\[task, \.\.\.current\.filter/);
+  assert.doesNotMatch(controller, /updateTaskLists\(\(current\) => sortTasksByUpdatedAt\(\[task, \.\.\.current\.filter/);
 });
 
 test("startup restores sessions for every persisted expanded project", () => {
@@ -74,10 +87,7 @@ test("execution durations use durable Pi session metadata", () => {
     path.join(__dirname, "../src/renderer/use-runtime-events.ts"),
     "utf8",
   );
-  const uiComponents = fs.readFileSync(
-    path.join(__dirname, "../src/renderer/ui-components.tsx"),
-    "utf8",
-  );
+  const executionSummary = rendererSource("ui/execution-summary.tsx");
 
   assert.match(host, /appendCustomEntry/);
   assert.match(host, /agent_start/);
@@ -92,7 +102,7 @@ test("execution durations use durable Pi session metadata", () => {
   assert.match(timeline, /durationMs: record\.durationMs/);
   assert.match(runtimeEvents, /applyPersistedRunDurations/);
   assert.match(runtimeEvents, /sessions\.runMetadata\(taskId, projectCwd\)/);
-  assert.match(uiComponents, /persistedDurationMs/);
+  assert.match(executionSummary, /persistedDurationMs/);
   assert.match(timeline, /persisted:\$\{record\.id\}/);
 });
 
@@ -101,13 +111,10 @@ test("name command opens an editable rename dialog without an argument", () => {
     path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
     "utf8",
   );
-  const components = fs.readFileSync(
-    path.join(__dirname, "../src/renderer/ui-components.tsx"),
-    "utf8",
-  );
+  const dialogs = rendererSource("ui/dialogs.tsx");
 
   assert.match(controller, /command === "name"\) \{ if \(argument\) await renameSession\(argument\); else if \(activeTask\) setRenameOpen\(true\)/);
-  assert.match(components, /function RenameSessionDialog/);
+  assert.match(dialogs, /function RenameSessionDialog/);
 });
 
 test("conversation panes survive project switches and scope scroll snapshots", () => {
@@ -115,15 +122,12 @@ test("conversation panes survive project switches and scope scroll snapshots", (
     path.join(__dirname, "../src/renderer/app-conversation.tsx"),
     "utf8",
   );
-  const components = fs.readFileSync(
-    path.join(__dirname, "../src/renderer/ui-components.tsx"),
-    "utf8",
-  );
+  const timeline = rendererSource("ui/message-timeline.tsx");
 
   assert.match(conversation, /cachedPaneKeys/);
   assert.match(conversation, /conversationPaneKey\(task\.projectId, task\.id\)/);
   assert.doesNotMatch(conversation, /<ConversationPaneDeck\s+key=\{projectCwd/);
-  assert.match(components, /scrollPositionsRef\.current\[scrollKey\]/);
+  assert.match(timeline, /scrollPositionsRef\.current\[scrollKey\]/);
 });
 
 test("package enable/disable edits Pi autoload state instead of re-adding sources", () => {
@@ -131,10 +135,7 @@ test("package enable/disable edits Pi autoload state instead of re-adding source
     path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
     "utf8",
   );
-  const components = fs.readFileSync(
-    path.join(__dirname, "../src/renderer/ui-components.tsx"),
-    "utf8",
-  );
+  const packageSettings = rendererSource("ui/package-settings.tsx");
 
   assert.match(host, /function configurePackageSource/);
   assert.match(host, /manager\.listConfiguredPackages\?\.\(\)/);
@@ -143,8 +144,8 @@ test("package enable/disable edits Pi autoload state instead of re-adding source
   assert.doesNotMatch(host, /function listConfiguredPackages/);
   assert.match(host, /autoload: false/);
   assert.doesNotMatch(host, /payload\.enabled\s*\?\s*manager\.addSourceToSettings/);
-  assert.match(components, /item\.disabled/);
-  assert.match(components, /onPackagesChanged/);
+  assert.match(packageSettings, /item\.disabled/);
+  assert.match(packageSettings, /onPackagesChanged/);
 });
 
 test("slash suggestion symbols keep their fixed visual width", () => {
@@ -444,13 +445,74 @@ test("long queued histories retain every turn in canonical order", () => {
   ]);
 });
 
-test("terminal output keeps the newest bounded buffer", () => {
-  const current = Array.from({ length: TERMINAL_OUTPUT_MAX_ENTRIES }, (_, index) => `old-${index}`);
-  const result = appendTerminalOutput(current, ["newest"]);
+test("the timeline renders in plain document flow with native scroll anchoring", () => {
+  const timeline = rendererSource("ui/message-timeline.tsx");
+  const styles = rendererSource("styles.css");
 
-  assert.equal(result.length, TERMINAL_OUTPUT_MAX_ENTRIES);
-  assert.equal(result.at(-1), "newest");
-  assert.equal(result.includes("old-0"), false);
-  assert.equal(result.length <= TERMINAL_OUTPUT_MAX_ENTRIES, true);
-  assert.equal(result.join("").length <= TERMINAL_OUTPUT_MAX_CHARS, true);
+  // Virtualization fights asynchronously sized rows (Mermaid, KaTeX, syntax
+  // highlighting): the measurement cache is always one paint stale, which is
+  // what produced jumping, overlapping rows and rubber-banding.
+  assert.doesNotMatch(timeline, /react-virtual|useVirtualizer|getVirtualItems|measureElement/);
+  assert.doesNotMatch(styles, /timeline-virtual-host|timeline-spacer/);
+  assert.match(timeline, /className="timeline-list"/);
+
+  // Load-bearing: `overflow-anchor: none` was the virtual-list era setting. With
+  // a plain list it is the browser's anchoring that stops late-resolving content
+  // above the viewport from moving the reader's position.
+  assert.match(styles, /\.conversation-scroll\s*\{[^}]*overflow-anchor:\s*auto/);
+  assert.doesNotMatch(styles, /\.conversation-scroll\s*\{[^}]*overflow-anchor:\s*none/);
+
+  // Unbounded mounting would exhaust the renderer heap on long sessions.
+  assert.match(timeline, /const FOLD_WINDOW = \d+/);
+  assert.match(timeline, /className="timeline-show-earlier"/);
+});
+
+test("auto-scroll survives content shrinking and programmatic smooth scrolls", () => {
+  const timeline = rendererSource("ui/message-timeline.tsx");
+
+  // Regression: following used to be dropped whenever scrollTop decreased. The
+  // transcript legitimately shrinks (live row replaced by the final message, the
+  // working indicator disappearing, an execution summary collapsing), so that
+  // inference silently killed auto-scroll mid-stream. Only a real upward wheel
+  // gesture may opt out now; touch keeps direction inference because it emits no
+  // wheel events, and then only while a finger is actually down.
+  assert.match(timeline, /if \(event\.deltaY >= 0\) return;/);
+  assert.match(timeline, /if \(touchActiveRef\.current && previous && top < previous\.top - 1\)/);
+  assert.doesNotMatch(timeline, /const movingAwayFromEnd/);
+
+  // A smooth scroll reports "not at the bottom" for its whole duration, which
+  // flashed the jump-to-latest button back on mid-animation.
+  assert.match(timeline, /nearBottom \|\| pinningRef\.current/);
+  assert.match(timeline, /beginPinning\(\);/);
+  assert.match(timeline, /pinningTimeoutRef\.current = window\.setTimeout/);
+
+  // sendPrompt calls scrollToLatest before the optimistic message exists, so the
+  // follow intent has to be recorded, not just the current offset.
+  assert.match(timeline, /scrollToLatest: \(behavior\) => \{[\s\S]*?setFollow\(true\)/);
+});
+
+test("inactive conversation panes stay laid out so the browser keeps their scrollTop", () => {
+  const conversation = rendererSource("app-conversation.tsx");
+  const styles = rendererSource("styles.css");
+
+  assert.match(conversation, /active \? "is-active" : "is-inactive"/);
+  // `display: none` drops the scroll box, which resets scrollTop to 0 and made
+  // task switches lose the reader's position. `visibility: hidden` keeps the
+  // layout box, so the browser preserves each pane's offset and no manual
+  // save/restore logic is needed at all.
+  assert.match(styles, /\.conversation-scroll\.is-inactive\s*\{[^}]*visibility:\s*hidden/);
+  assert.doesNotMatch(styles, /\.conversation-scroll\.is-inactive\s*\{[^}]*display:\s*none/);
+});
+
+test("markdown math never rewrites fenced code and strips delimiters first", () => {
+  const markdown = rendererSource("ui/markdown.tsx");
+
+  // Regression: the \[..\] -> $$ normalizer used to run over the whole document
+  // and corrupted the contents of ```latex fences.
+  assert.match(markdown, /CODE_OR_MATH/);
+  // Regression: a ```latex fence whose body already carries $$ or \[ was fed to
+  // KaTeX verbatim, so the delimiters have to be stripped before the language
+  // tag is trusted.
+  assert.match(markdown, /parseMathCode/);
+  assert.match(markdown, /KATEX_MACROS/);
 });

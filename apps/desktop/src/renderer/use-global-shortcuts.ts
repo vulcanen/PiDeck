@@ -18,19 +18,16 @@ interface GlobalShortcutsOptions {
   contextMenu: boolean;
   projectContextMenu: boolean;
   imageContextMenu: boolean;
-  terminalOpen: boolean;
   onCommandPalette: () => void;
   onProviderSettings: () => void;
-  onToggleTerminal: () => void;
   onCreateTask: () => void | Promise<unknown>;
   onCloseMenus: () => void;
-  onCloseTerminal: () => void;
 }
 
 export function useGlobalShortcuts({
   searchInputRef, paletteOpen, settingsOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
   thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, projectContextMenu, imageContextMenu,
-  terminalOpen, onCommandPalette, onProviderSettings, onToggleTerminal, onCreateTask, onCloseMenus, onCloseTerminal,
+  onCommandPalette, onProviderSettings, onCreateTask, onCloseMenus,
 }: GlobalShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -38,7 +35,6 @@ export function useGlobalShortcuts({
       const modalOpen = paletteOpen || settingsOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
       if (modalOpen) return;
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); onCommandPalette(); return; }
-      if (modifier && event.key.toLowerCase() === "j") { event.preventDefault(); onToggleTerminal(); return; }
       if (modifier && event.key.toLowerCase() === "n") { event.preventDefault(); void onCreateTask(); return; }
       if (modifier && event.key === ",") { event.preventDefault(); onProviderSettings(); return; }
       const target = event.target;
@@ -46,10 +42,9 @@ export function useGlobalShortcuts({
       if (event.key === "/" && !typing) { event.preventDefault(); searchInputRef.current?.focus(); return; }
       if (event.key === "Escape") {
         if (thinkingMenuOpen || modelMenuOpen || suggestionMode || contextMenu || projectContextMenu || imageContextMenu) { onCloseMenus(); return; }
-        if (terminalOpen) onCloseTerminal();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandDialogOpen, contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCloseTerminal, onCommandPalette, onCreateTask, onProviderSettings, onToggleTerminal, paletteOpen, pendingDelete, pendingProjectRemove, previewImage, projectContextMenu, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, terminalOpen, thinkingMenuOpen, trustOpen]);
+  }, [commandDialogOpen, contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCommandPalette, onCreateTask, onProviderSettings, paletteOpen, pendingDelete, pendingProjectRemove, previewImage, projectContextMenu, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
 }

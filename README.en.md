@@ -8,11 +8,11 @@ PiDeck does not implement a separate agent, model catalog, session store, or cre
 
 The project tree can keep multiple projects' Pi sessions expanded at once. Clicking a project neither collapses other projects nor switches the active conversation; the workspace changes only after selecting a specific session. Projects can be removed from the list through their context menu without deleting project files or Pi sessions.
 
-The central conversation supports a virtualized long-session timeline, per-session scroll-position caching, stable streaming-to-final message rows, and Steering/Follow-up queue delivery. A first-open session starts at the latest message; after the user scrolls upward, background streaming does not take the viewport back.
+The central conversation renders as a plain document-flow timeline — very long sessions fold older messages behind a "show earlier" button — with per-session scroll-position caching, stable streaming-to-final message rows, and Steering/Follow-up queue delivery. A first-open session starts at the latest message; after the user scrolls upward, background streaming does not take the viewport back, and late-resolving content such as Mermaid diagrams or math does not shift the reader's position.
 
 Current version: `0.1.0`  
-Pi CLI / SDK baseline: `0.83.0`  
-Electron: `43.2.0`
+Pi CLI / SDK baseline: `0.84.0`  
+Electron: `43.3.0`
 
 ## Platform availability
 

@@ -25,7 +25,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.84.0",
     "@gotgenes/pi-permission-system": "^24.0.0",
     "@pideck/contracts": "0.1.0",
     "@pideck/domain": "0.1.0",

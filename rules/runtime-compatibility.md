@@ -19,7 +19,6 @@ After building, verify at least:
 - `sessions.create`
 - `sessions.capabilities`
 - `workspace.snapshot`
-- `terminal.execute` (side-effect-free commands only)
 
 Real model prompts produce network and Provider side effects; never run them automatically without explicit user authorization.
 

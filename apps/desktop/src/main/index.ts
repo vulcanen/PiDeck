@@ -298,12 +298,12 @@ function registerIpcHandlers() {
     return requestHost("sessions.import", { taskId, inputPath: selectedPath, cwd });
   });
   ipcMain.handle("sessions:rename", (_event, taskId: string, name: string, cwd?: string) => requestHost("sessions.rename", { taskId, name, cwd }));
+  ipcMain.handle("sessions:generateTitle", (_event, taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => requestHost("sessions.generateTitle", { taskId, message, cwd, model }));
   ipcMain.handle("sessions:stats", (_event, taskId: string, cwd?: string) => requestHost("sessions.stats", { taskId, cwd }));
   ipcMain.handle("sessions:share", (_event, taskId: string, cwd?: string) => requestHost("sessions.share", { taskId, cwd }));
   ipcMain.handle("sessions:changelog", () => requestHost("app.changelog"));
   ipcMain.handle("models:list", () => requestHost("models.list"));
   ipcMain.handle("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd }));
-  ipcMain.handle("terminal:execute", (_event, taskId: string, command: string, cwd?: string) => requestHost("terminal.execute", { taskId, command, cwd: cwd ?? process.cwd() }));
   ipcMain.handle("providers:list", () => requestHost("providers.list"));
   ipcMain.handle("providers:login", (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => requestHost("providers.login", { providerId, method, secret }));
   ipcMain.handle("providers:set-api-key", (_event, providerId: string, apiKey: string) => requestHost("providers.setApiKey", { providerId, apiKey }));

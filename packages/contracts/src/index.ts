@@ -166,6 +166,7 @@ export interface PideckBridge {
     export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string }>;
     import(taskId: string | undefined, inputPath?: string, cwd?: string): Promise<ImportedSessionSummary | null>;
     rename(taskId: string, name: string, cwd?: string): Promise<string>;
+    generateTitle(taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }): Promise<string | null>;
     stats(taskId: string, cwd?: string): Promise<PiSessionStats>;
     share(taskId: string, cwd?: string): Promise<{ url: string; gistUrl: string }>;
     changelog(): Promise<string>;
@@ -175,9 +176,6 @@ export interface PideckBridge {
   };
   workspace: {
     snapshot(cwd: string): Promise<WorkspaceSnapshot>;
-  };
-  terminal: {
-    execute(taskId: string, command: string, cwd?: string): Promise<{ output: string; exitCode?: number; isError?: boolean }>;
   };
   providers: {
     list(): Promise<ProviderSummary[]>;
@@ -243,11 +241,11 @@ export type PiHostCommand =
   | "sessions.export"
   | "sessions.import"
   | "sessions.rename"
+  | "sessions.generateTitle"
   | "sessions.stats"
   | "sessions.share"
   | "models.list"
   | "workspace.snapshot"
-  | "terminal.execute"
   | "providers.list"
   | "providers.login"
   | "providers.setApiKey"

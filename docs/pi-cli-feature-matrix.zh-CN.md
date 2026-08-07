@@ -12,9 +12,9 @@
 | 新建会话 | New task；展开无会话项目时的“新建任务”按钮；空状态按钮 | `SessionManager.create(cwd)` |
 | 会话消息 | 中央对话线程 | `AgentSession.messages`；按 Pi `parseSkillBlock()` 语义将 Skill 引用与用户原文分层展示 |
 | 执行耗时恢复 | “已处理”执行摘要 | PiHost 在 `agent_start`、Follow-up 分组边界和 `agent_settled` 记录 execution group，通过 `SessionManager.appendCustomEntry("pideck.execution-run", ...)` 将精确起止时间写入 Pi Session；Steering 仍合并为同一组，`sessions.runMetadata` 在重启后恢复，旧会话不伪造耗时 |
-| 会话命名 | 会话列表与对话标题 | 从首条用户意图移除 Skill/命令/资源前缀后生成短标题，并通过 `AgentSession.setSessionName()` 持久化 |
+| 会话命名 | 会话列表与对话标题 | 首条用户消息后：先用 `deriveSessionTitle` 生成去前缀短标题并经由 `sessions.rename`（对应 Pi `AgentSession.setSessionName()`）持久化作为重载安全的回退；随后异步调用新增的 `sessions.generateTitle` 桥（PiHost 用 `ModelRuntime.complete` 对首条消息做 3–8 词摘要），成功后将标题升级为 LLM 摘要并再次 `sessions.rename` 持久化。仅当标题仍是截断/占位名时才升级，手动改名不被覆盖；LLM 失败回退到截断标题 |
 | 会话删除 | 会话更多菜单 | `sessions.delete` |
-| 会话位置与长会话 | 中央虚拟化对话线程 | `@tanstack/react-virtual`；每个 Session 缓存 pane、DOM `scrollTop`、follow 状态和测量快照；首次打开定位最新消息，切换恢复保存位置 |
+| 会话位置与长会话 | 中央对话线程（普通文档流 + 早期消息折叠） | 不使用虚拟列表；只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后。防跳动依赖 `overflow-anchor: auto` 原生 scroll anchoring；非活动 pane 用 `visibility: hidden` 天然保留 `scrollTop`；follow 仅由真实 wheel/touch 上滑事件退出，程序化滚动期间 latch 住 |
 | Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
 | API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调 |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
@@ -25,7 +25,7 @@
 | Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`；队列新增、插入和处理在 follow 状态下自动跟随 |
 | 工具审批 | 中央审批卡 | 当前 PiHost `beforeToolCall` 适配 |
 | 工具过程 | 可折叠过程块 | Tool Result、工具名称、成功/失败状态 |
-| 本地终端 | Composer Terminal / `Ctrl/Cmd + J` | `AgentSession.executeBash()` |
+| 本地终端 | 未接入：终端面板与 `Ctrl/Cmd + J` 已移除，`terminal.execute` 桥已删除 | `AgentSession.executeBash()` |
 | 上下文压缩 | Command Palette | `AgentSession.compact()` |
 | Session 导出 | Command Palette | `AgentSession.exportToJsonl()` / `exportToHtml()` |
 | Runtime 状态 | Sidebar | Main/PiHost runtime status event |
@@ -64,7 +64,7 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 
 - Extension UI request 的 select、confirm、input、editor、notify 请求；请求会在桌面窗口中显示并回传结果。
 - Pi Package install/remove/update/config 管理器；入口位于命令面板中的 Pi packages。
-当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 与本地终端入口完成。
+当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 完成。
 
 Diff 预览、任务基线 diff 和逐块审阅仍未接入。Pi 提供编辑工具的底层 diff 计算，但 Monaco 编辑器和审阅工作流属于 PiDeck 的桌面产品能力。
 

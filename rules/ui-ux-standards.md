@@ -71,7 +71,8 @@ Every asynchronous operation has at least four states: `idle`, `loading`, `succe
 - Do not use continuous scroll listeners that cause expensive reflows.
 - Implement `@media (prefers-reduced-motion: reduce)` to disable non-essential animations and scroll animations.
 - Keep only a few meaningful dynamic states on screen: running spinner, loading skeleton, overlay entrance animation.
-- Long sessions must use a virtual list or an equivalent on-demand rendering scheme; do not render thousands of messages unconditionally, and do not blindly add `content-visibility` to rows the virtualizer needs to measure.
+- Long sessions must bound the number of mounted rows by folding older messages behind a "show earlier" affordance; do not render thousands of messages unconditionally. Do **not** solve this with a virtual list — see [Renderer session timeline and scrolling rules](renderer-session-timeline.md) §4 for why measurement-based virtualization is incompatible with asynchronously sized rows.
+- Do not add `contain` or `content-visibility` to timeline rows: they must be free to resolve their own height so native scroll anchoring can compensate.
 - Images use thumbnails and constrained sizes; do not let user-pasted originals blow out the input or conversation area.
 - Keep third-party Markdown rendering lazy-loaded so it does not block the first-paint workspace.
 

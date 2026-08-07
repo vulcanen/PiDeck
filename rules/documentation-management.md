@@ -17,16 +17,20 @@ PiDeck documentation must reflect the current code and the capabilities of the c
 5. When a third-party Pi Extension is added, removed, or replaced, record: package name, version, loading method, config source, event bridging, and how duplicate capabilities are removed.
 6. Documentation must not describe a second Agent, permission, credential, session, or model implementation that bypasses Pi CLI/SDK.
 7. Dependency upgrades must check the Pi SDK type declarations and changelog, and update versions, capabilities, and compatibility notes in the relevant docs.
-8. When the Renderer entry split, session pane cache, virtual timeline, queue following, or message persistence restore behavior changes, also review [Renderer session timeline and scrolling rules](renderer-session-timeline.md) and the architecture/product baseline; do not update JSX alone while leaving stale directory or behavior descriptions.
+8. When the Renderer entry split, session pane cache, timeline rendering/folding, scroll anchoring, queue following, or message persistence restore behavior changes, also review [Renderer session timeline and scrolling rules](renderer-session-timeline.md) and the architecture/product baseline; do not update JSX alone while leaving stale directory or behavior descriptions.
 9. Documentation must not describe the Renderer runtime `activity` / `completedActivity` as Pi Session persistence fields; Pi's raw thinking/tool content and presentation-layer inferred summaries must be clearly distinguished.
 
 ## Pre-commit Checks
 
 ```bash
 rg -n "utilityProcess|MessagePort|Zod|Zustand|Monaco|xterm|pi-adapter|permission-engine" docs README.md
-rg -n "App\.tsx|app-conversation|timeline-utils|use-conversation-scroll|@tanstack/react-virtual|completedActivity" docs rules README.md
+rg -n "App\.tsx|app-conversation|timeline-utils|use-conversation-scroll|overflow-anchor|completedActivity" docs rules README.md
+# The timeline is deliberately not virtualized. Any hit here means a doc or the
+# code drifted back toward a virtual list; see renderer-session-timeline.md §4.
+rg -n "react-virtual|useVirtualizer|virtualiz" docs rules README.md apps/desktop/src packages/*/src
 rg -n "PiHostCommand|PiDeckRuntimeEvent|interface PideckBridge" packages/contracts/src/index.ts
 npm run typecheck
+npm run test:renderer
 npm run build
 ```
 

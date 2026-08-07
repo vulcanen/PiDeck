@@ -28,6 +28,24 @@ const SESSION_RUN_METADATA_TYPE = "pideck.execution-run";
 // soon as a direct prompt is accepted so a second prompt arriving in that
 // small window is queued instead of starting a competing run.
 const agentRunReservations = new Set<string>();
+// System prompt for LLM session-title generation. Matches the user's language,
+// asks for a 3–8 word summary of intent (not a copy of the text), and demands
+// the title alone with no quoting or markdown so extraction is trivial.
+const SESSION_TITLE_SYSTEM_PROMPT = [
+  "你是一个 AI 编程助手的会话标题生成器。根据用户的第一条消息，生成一个简洁、描述性的会话标题。",
+  "规则：",
+  "- 3 到 8 个词。",
+  "- 概括用户意图，不要直接照搬原文。",
+  "- 只输出标题本身，不要引号、不要结尾标点、不要 markdown、不要任何解释。",
+  "- 使用与用户相同的语言。",
+  "",
+  "You are a session-title generator for an AI coding assistant. Given the user's first message, produce a concise, descriptive title.",
+  "Rules:",
+  "- 3 to 8 words.",
+  "- Summarize the user's intent; do not just copy the text.",
+  "- Output ONLY the title. No quotes, no trailing punctuation, no markdown, no explanation.",
+  "- Match the user's language.",
+].join("\n");
 const capabilitySessions = new Map<string, any>();
 let packageConfigRevision = 0;
 type AuthWaiter = {
@@ -924,6 +942,41 @@ async function handle(request: PiHostRequest): Promise<void> {
         send({ id: request.id, ok: true, result: name });
         return;
       }
+      case "sessions.generateTitle": {
+        const payload = request.payload as { taskId?: string; message?: string; cwd?: string; model?: { providerId: string; modelId: string } } | undefined;
+        // Missing input yields no title; the renderer keeps its truncated fallback.
+        if (!payload?.taskId || !payload.message?.trim()) {
+          send({ id: request.id, ok: true, result: null });
+          return;
+        }
+        try {
+          const runtime = await getModelRuntime();
+          const model = payload.model?.providerId && payload.model?.modelId
+            ? runtime.getModel(payload.model.providerId, payload.model.modelId)
+            : undefined;
+          if (!model) {
+            send({ id: request.id, ok: true, result: null });
+            return;
+          }
+          const result = await runtime.complete(model, {
+            systemPrompt: SESSION_TITLE_SYSTEM_PROMPT,
+            messages: [{ role: "user", content: payload.message }],
+          }, {});
+          const raw = Array.isArray(result?.content)
+            ? result.content
+                .filter((block: any) => block?.type === "text" && typeof block.text === "string")
+                .map((block: any) => block.text)
+                .join("")
+            : "";
+          const cleaned = raw.trim().replace(/^["'「『]+|["'」』]+$/g, "").replace(/\s+/g, " ").trim();
+          // Cap length and reject garbage so a bad reply falls back to truncation.
+          send({ id: request.id, ok: true, result: cleaned.length > 0 && cleaned.length <= 60 ? cleaned : null });
+        } catch {
+          // Auth or network failure: let the renderer keep its truncated fallback.
+          send({ id: request.id, ok: true, result: null });
+        }
+        return;
+      }
       case "sessions.stats": {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
@@ -1025,14 +1078,6 @@ async function handle(request: PiHostRequest): Promise<void> {
         const session = agentSessions.get(payload.taskId);
         if (session) await session.abort();
         send({ id: request.id, ok: true, result: undefined });
-        return;
-      }
-      case "terminal.execute": {
-        const payload = request.payload as { taskId?: string; command?: string; cwd?: string } | undefined;
-        if (!payload?.taskId || !payload.command?.trim()) throw new Error("taskId and command are required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        const result = await session.executeBash(payload.command, undefined, { excludeFromContext: true });
-        send({ id: request.id, ok: true, result: { output: result.output, exitCode: result.exitCode, isError: result.exitCode !== 0 } });
         return;
       }
       case "agent.setThinkingLevel": {

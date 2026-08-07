@@ -14,8 +14,8 @@
 ## 2. Renderer Structure
 
 - `App.tsx` only calls `useAppController()` and composes `AppView`.
-- The workspace, sidebar, session panel, and input live in `app-view.tsx`, `app-sidebar.tsx`, `app-conversation.tsx`, and `ui-components.tsx` respectively.
-- State and side effects are placed by responsibility in hooks such as `use-app-controller.tsx`, `use-session-data.ts`, `use-runtime-events.ts`, and `use-conversation-scroll.ts`.
+- The workspace shell, sidebar, session panel, and global overlays live in `app-view.tsx`, `app-sidebar.tsx`, `app-conversation.tsx`, and `app-overlays.tsx` respectively. Presentational components live under `renderer/ui/` (timeline in `ui/message-timeline.tsx`, input in `ui/composer.tsx`) and are re-exported through `ui/index.ts`; do not reintroduce a single catch-all component file.
+- State and side effects are placed by responsibility in hooks such as `use-app-controller.tsx`, `use-session-data.ts`, `use-runtime-events.ts`, `use-conversation-scroll.ts`, and `use-stream-deltas.ts` (bounded streaming-delta batching).
 - Timeline construction rules live in `timeline-utils.ts`; do not reassemble execution groups from the message array in JSX, to avoid different turn groupings from different entry points.
 
 ## 3. Timeline Stability
@@ -28,18 +28,26 @@
 
 ## 4. Long Sessions and Scroll Containers
 
-- Long sessions use a single TanStack Virtual scroll container; do not maintain a parent `scrollTop`, child scroll containers, and a second set of virtual offsets at the same time.
-- Each Session keeps its own pane, virtualizer snapshot, DOM `scrollTop`, follow state, and measurement cache; switching Sessions does not unmount visited panes, nor play cross-session smooth-scroll animations.
-- When opening a session for the first time with no saved position, jump to the latest message; with a saved position, restore the user's position. Saved positions must prefer the real DOM `scrollTop`, not only TanStack internal offsets.
-- A virtual item's `measureElement` and `content-visibility` must not hide or fake each other's heights. Do not blindly add `content-visibility: auto` to message/execution-summary rows that need measurement; the virtual list already reduces DOM count.
-- After initial layout, queue insertion, or a last-item height change, if a correction to the bottom is needed, run it in a `requestAnimationFrame` after measurement completes and re-check whether the user is still in follow state.
+- **Do not reintroduce a virtual list.** Rows render in plain document flow, the same way ChatGPT and Claude desktop render transcripts. Agent messages contain asynchronously sized content (Mermaid SVG, KaTeX, syntax highlighting) whose height is unknown until after paint; any measurement cache is permanently one paint stale, which is what produced jumping, overlapping rows and rubber-banding.
+- Long sessions are bounded by **folding, not virtualization**: only the newest `FOLD_WINDOW` (200) items stay mounted, older ones sit behind a "show earlier" button that reveals `FOLD_STEP` (200) more. Because the window is measured from the end, a growing conversation never has to touch that state.
+- `.conversation-scroll` must keep `overflow-anchor: auto`. This is load-bearing: native scroll anchoring is the whole anti-jump mechanism now that heights resolve late. `overflow-anchor: none` was a virtual-list-era setting and must not come back.
+- Timeline rows must not use absolute positioning, transforms, `contain`, or `content-visibility`. Rows must be free to resolve their own height, and containment would create a containing block that defeats scroll anchoring.
+- Revealing earlier messages must **not** manually compensate the scroll offset. Native anchoring already holds the reader's row in place; doing both double-corrects and reintroduces the jump this replaces.
+- Each Session keeps its own pane; inactive panes are hidden with `visibility: hidden` (plus `opacity`/`pointer-events`), **never** `display: none`. Keeping the layout box is what makes the browser preserve each pane's `scrollTop` for free — do not add manual save/restore logic on task switch.
+- The persisted snapshot is only `{ top, follow }`. Do not grow it back into a measurement cache.
+- When opening a session for the first time with no saved position, jump to the latest message; with a saved position, restore the offset. The first-paint effect must run once (guarded by a ref), because later task switches are pure visibility changes.
+- Late resizes from Mermaid/KaTeX land after React's layout effects. Re-pin from a `ResizeObserver` on the list host, and only when follow is `true`; non-following readers are handled by scroll anchoring alone.
 
 ## 5. Auto-follow and User Scrolling
 
 - "Follow the latest message" is an explicit state, not equivalent to "within some threshold of the bottom". When the user scrolls up, set follow to `false` immediately, even if still within the 80px threshold.
+- **Leaving follow must be driven by a real input gesture** (`wheel` with `deltaY < 0`, or a touch drag while a finger is down) — never by inferring direction from a shrinking `scrollTop`. The transcript legitimately shrinks when a live row is replaced by the final message, the working indicator disappears, or an execution summary collapses; a delta-based guess reads that as "the user scrolled up" and silently kills auto-scroll mid-stream.
+- Touch is the one exception that may infer direction, because it emits no wheel events — and only while the touch is active, since a programmatic pin cannot happen with a finger down.
+- A programmatic smooth scroll reports "not at the bottom" for its whole duration. Latch follow with a pinning flag while it is in flight (with a timeout safety valve so an interrupted scroll cannot leave it latched), otherwise the "jump to latest" button flashes back on mid-animation.
 - Restore follow only when the user scrolls back to the bottom, clicks "jump to latest", or explicitly sends a new message.
-- For queue list changes, formal insertion of queued messages, a queued turn starting processing, and streaming text growth, auto-scroll only when follow is `true`; auto-scroll must run after the new virtual item is committed/measured.
-- Do not trigger expensive React list recomputation on every scroll event; use lightweight DOM snapshots, passive listeners, and virtualizer callbacks.
+- `scrollToLatest` must record the follow *intent*, not just the current offset: `sendPrompt` calls it before the optimistic message exists, so the flag is what keeps the viewport pinned once the new rows render.
+- For queue list changes, formal insertion of queued messages, a queued turn starting processing, and streaming text growth, auto-scroll only when follow is `true`.
+- Do not trigger expensive React list recomputation on every scroll event; use lightweight DOM snapshots and passive listeners. Scroll handlers must not call `onAtEndChange` from an inactive pane.
 - Any auto-follow fix must verify: scrolling up from the bottom does not jerk, an intentional swipe up is not pulled back, switching sessions still restores the original position, and first open still lands at the latest position.
 
 ## 6. Timestamps and Hover Information
@@ -51,7 +59,11 @@
 ## 7. Pre-commit Regression Checklist
 
 - [ ] On first launch, each Session is at its latest message.
-- [ ] After scrolling up, switching Session and back keeps the position and virtual measurement cache unchanged.
+- [ ] After scrolling up, switching Session and back keeps the position unchanged.
+- [ ] A message containing Mermaid/KaTeX/highlighted code does not shift the reader's position when it finishes rendering above the viewport.
+- [ ] Sending a new message pins to the bottom and stays pinned through streaming; the reply completing (live row → final message) does not drop follow.
+- [ ] "Jump to latest" scrolls smoothly without the button flashing back on mid-animation.
+- [ ] A session longer than 200 items shows the "show earlier" button, and expanding it does not jump the viewport.
 - [ ] Thinking summaries, streaming replies, and final replies do not jitter or reorder the whole list at the moment of completion.
 - [ ] Queue additions, insertions, processing, and streaming growth auto-follow when at the bottom; they do not steal position after scrolling up.
 - [ ] After a restart, historical turns with `pideck.execution-run` metadata show the exact duration consistent with runtime; old sessions do not fake durations.

@@ -30,37 +30,43 @@ React Renderer
   → @earendil-works/pi-coding-agent
 ```
 
-当前代码不是 Electron `utilityProcess`，也不是 MessagePort。`packages/pi-host` 使用普通 Node `process.send/process.on("message")`。PiHost 运行在 Electron 内置 Node 中（满足 Pi SDK 的 Node engines 且可读取 asar），node_modules 打包进 asar，仅原生 `.node` 模块解包。
+当前代码不是 Electron `utilityProcess`，也不是 MessagePort。`packages/pi-host` 使用普通 Node `process.send/process.on("message")`。PiHost 运行在 Electron 内置 Node 中（满足 Pi SDK 的 Node engines 且可读取 asar），node_modules 打包进 asar，仅原生 `.node` 模块与 `apps/desktop/assets` 解包。
 
 ### 2.1 当前目录
 
 ```text
-apps/desktop/src/
-├─ main/index.ts
-├─ preload/index.ts
-├─ renderer/
-│  ├─ App.tsx                 # 入口与组合
-│  ├─ app-view.tsx            # 工作区与全局面板
-│  ├─ app-sidebar.tsx         # 项目/Session 侧栏
-│  ├─ app-conversation.tsx    # 会话 pane 与 Composer
-│  ├─ ui-components.tsx       # UI 与消息时间线
-│  ├─ timeline-utils.ts       # 回合分组与执行摘要
-│  ├─ use-app-controller.tsx  # 状态与动作编排
-│  ├─ use-session-data.ts     # Session 数据加载
-│  ├─ use-runtime-events.ts   # PiHost 事件归一化
-│  ├─ use-conversation-scroll.ts # 滚动快照与最新位置
-│  ├─ use-global-shortcuts.ts # 全局快捷键与焦点边界
-│  ├─ use-sent-images-cache.ts # 待发送图片缓存
-│  ├─ ui-performance.ts       # 有界性能 helper
-│  ├─ message-utils.ts        # 消息合并与 identity
-│  ├─ types.ts                # Renderer 状态与辅助类型
-│  ├─ image-cache.ts
-│  ├─ styles.css
-│  ├─ pi-capabilities.ts
-│  └─ main.tsx
+apps/desktop/
+├─ index.html                    # Vite Renderer 宿主页面
+├─ vite.config.ts                # Renderer 构建，输出 dist-renderer/
+├─ assets/ · native/ · public/   # 图标、macOS 原生定制源码、静态资源
+├─ scripts/                      # build-native.mjs、renderer-regressions.test.cjs
+└─ src/
+   ├─ main/index.ts              # Main、应用菜单与 IPC 编排
+   ├─ preload/index.ts           # contextBridge
+   └─ renderer/
+      ├─ App.tsx                 # 入口与组合
+      ├─ main.tsx                # Renderer 挂载入口
+      ├─ app-view.tsx            # 工作区壳层与全局布局
+      ├─ app-sidebar.tsx         # 项目/Session 侧栏
+      ├─ app-conversation.tsx    # 会话 pane 与 Composer
+      ├─ app-overlays.tsx        # 命令面板与对话框浮层
+      ├─ use-app-controller.tsx  # 状态与动作编排
+      ├─ use-session-data.ts     # Session 数据加载
+      ├─ use-runtime-events.ts   # PiHost 事件归一化
+      ├─ use-conversation-scroll.ts # 滚动快照与最新位置
+      ├─ use-stream-deltas.ts    # 流式增量有界批处理
+      ├─ use-global-shortcuts.ts # 全局快捷键与焦点边界
+      ├─ use-preferences.ts      # 语言与主题偏好
+      ├─ use-notice.ts           # 轻量提示状态
+      ├─ use-sent-images-cache.ts # 待发送图片缓存
+      ├─ timeline-utils.ts       # 回合分组与执行摘要
+      ├─ message-utils.ts        # 消息合并与 identity
+      ├─ types.ts                # Renderer 状态与辅助类型
+      ├─ image-cache.ts · pi-capabilities.ts · styles.css · vite-env.d.ts
+      └─ ui/                     # 时间线、消息、Composer、命令面板、对话框、设置等展示组件
 
 packages/
-├─ contracts/src/index.ts
+├─ contracts/                    # Bridge/IPC 类型，纯类型包无 dist
 ├─ domain/                       # 类型与共享领域 helper
 ├─ pi-adapter/                   # Pi SDK 定位、加载和公开 API 适配
 ├─ pi-host/                      # PiHost 进程入口
@@ -82,7 +88,7 @@ packages/
 5. 选择已认证 Provider/Model 和思考等级。
 6. 发送 Prompt、查看流式回复和停止运行。
 7. 查看工具调用、工具结果和审批卡。
-8. 通过 `@file` 引用工作区文件，并使用本地终端。
+8. 通过 `@file` 引用工作区文件。
 9. 压缩上下文并导出 JSONL/HTML，导入 Pi JSONL 会话、重命名和查看会话统计。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
 11. 使用 Provider API Key/OAuth 本地认证。
@@ -97,7 +103,7 @@ packages/
 - Pi 原始 Session message 是事实来源。
 - Renderer 不把 Pi SDK 实例传入组件，只接受可序列化消息对象。
 - Markdown、代码块、表格和链接由 Renderer 展示层渲染，不改变 Pi 原始消息。
-- 会话标题已经避免直接使用完整 Skill 文本；Skill 展开后的 `<skill>` 内容仍需补充独立的折叠引用卡片，当前不应宣称已经完成。
+- 会话标题已经避免直接使用完整 Skill 文本；首条用户消息后，标题在重新加载安全的截断回退基础上，会异步升级为 LLM 对首条消息的 3–8 词摘要（新增 `sessions.generateTitle` 桥：PiHost 用 `ModelRuntime.complete` 摘要首条消息，成功后再经 `sessions.rename` 持久化），手动改名优先于 LLM 升级。Skill 展开后的 `<skill>` 内容仍需补充独立的折叠引用卡片，当前不应宣称已经完成。
 - 工具调用和思考过程应作为可折叠 Activity 展示，并显示工具数量、思考块数量和耗时。
 - Pi 原始 thinking/tool 内容用于重建“已处理”摘要里的步骤内容；精确耗时来自 PiHost 在 `agent_start`、Follow-up 分组边界和 `agent_settled` 通过 `SessionManager.appendCustomEntry()` 写入的 `pideck.execution-run` 元数据，Steering 消息继续共享同一 execution group。运行时 `completedActivity` 仍不是持久化字段；没有元数据的旧会话只显示“已处理”，不根据消息时间戳推断耗时。
 - 思考摘要、流式回复和最终 Assistant 消息复用稳定时间线项，避免回复完成时卸载/重建整段消息列表。
@@ -110,15 +116,14 @@ packages/
 当前唯一权威定义是 `packages/contracts/src/index.ts`。主要能力：
 
 ```text
+app.setLanguage/quit
 runtime.status
-projects.list/chooseDirectory/remove
-sessions.list/create/delete/messages/runMetadata/capabilities/compact/export/import/rename/stats/share/changelog
+projects.list/chooseDirectory/remove/setTrust
+sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
 models.list
 workspace.snapshot
-terminal.execute
-providers.list/login/logout/setApiKey/auth-response/open-auth-url
+providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl
 agent.prompt/abort/setThinkingLevel/setModel/setScopedModels
-projects.setTrust
 agent.queue/setQueueModes/clearQueue/promoteQueue
 approvals.resolve
 events.subscribe
@@ -222,7 +227,6 @@ sessions.create
 sessions.runMetadata
 sessions.capabilities
 workspace.snapshot
-terminal.execute（无副作用命令）
 ```
 
 ## 11. 开发说明

@@ -19,14 +19,17 @@
     "@pideck/domain": "0.1.0",
     "@pideck/i18n": "0.1.0",
     "@pideck/ui-system": "0.1.0",
-    "@tanstack/react-virtual": "^3.14.9",
     "@vitejs/plugin-react": "^6.0.5",
     "electron": "^43.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
     "react-simple-code-editor": "^0.14.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "rehype-katex": "^7.0.1",
+    "katex": "^0.16.11",
+    "mermaid": "^11.4.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

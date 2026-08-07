@@ -1,4 +1,5 @@
 export type Theme = "light" | "dark";
+export type ThemePreference = "system" | Theme;
 export type SuggestionMode = "slash" | "mention" | null;
 export type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | null;
 export type MessageLoad = { status: "idle" | "loading" | "ready" | "error"; error?: string };

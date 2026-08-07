@@ -1,10 +1,11 @@
 import { useCallback, useRef } from "react";
-import type { VirtualItem } from "@tanstack/react-virtual";
 
+// The timeline renders in plain document flow, so a snapshot is just the
+// browser's scroll offset plus whether the reader was pinned to the newest
+// message. No row measurements are cached: heights are owned by layout.
 export interface ConversationScrollSnapshot {
   top: number;
   follow: boolean;
-  measurements: VirtualItem[];
 }
 
 export interface ConversationScrollHandle {
@@ -33,9 +34,9 @@ export function useConversationScroll({ setShowJumpToLatest }: ConversationScrol
   }, [setShowJumpToLatest]);
 
   // Runtime queue events can arrive in the same task as the message/state
-  // update that grows the virtualized timeline. Scroll once now and once
-  // after layout so the newly inserted row, rather than the previous range,
-  // becomes the visible latest item.
+  // update that appends a new row. Scroll once now and once after layout so
+  // the newly inserted row, rather than the previous bottom, becomes the
+  // visible latest item.
   const followLatest = useCallback(() => {
     setShowJumpToLatest(false);
     const scroll = () => scrollHandleRef.current?.scrollToLatest("auto");

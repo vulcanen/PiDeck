@@ -27,6 +27,7 @@ const bridge: PideckBridge = {
     export: (taskId: string, format: "jsonl" | "html", cwd?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd),
     import: (taskId: string | undefined, inputPath?: string, cwd?: string) => ipcRenderer.invoke("sessions:import", taskId, inputPath, cwd),
     rename: (taskId: string, name: string, cwd?: string) => ipcRenderer.invoke("sessions:rename", taskId, name, cwd),
+    generateTitle: (taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => ipcRenderer.invoke("sessions:generateTitle", taskId, message, cwd, model),
     stats: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:stats", taskId, cwd),
     share: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:share", taskId, cwd),
     changelog: () => ipcRenderer.invoke("sessions:changelog"),
@@ -36,9 +37,6 @@ const bridge: PideckBridge = {
   },
   workspace: {
     snapshot: (cwd: string) => ipcRenderer.invoke("workspace:snapshot", cwd),
-  },
-  terminal: {
-    execute: (taskId: string, command: string, cwd?: string) => ipcRenderer.invoke("terminal:execute", taskId, command, cwd),
   },
   providers: {
     list: () => ipcRenderer.invoke("providers:list"),

@@ -1,29 +1,22 @@
 import { Icon } from "@pideck/ui-system";
 import { AppConversation } from "./app-conversation";
+import { AppOverlays } from "./app-overlays";
 import { AppSidebar } from "./app-sidebar";
 import type { AppController } from "./use-app-controller";
-import { CommandPalette, CommandPaletteBoundary, CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, ProjectRemoveDialog, ProviderSettings, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TerminalPanel, TrustDialog, copyImageToClipboard } from "./ui-components";
 
 export function AppView({ controller }: { controller: AppController }) {
   const {
-    language, setLanguage, theme, setTheme, projectCwd, projects, expandedProjectCwds, tasks,
-    projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, runtimeStatus, shortcut, t, isMac,
+    language, setLanguage, theme, themePreference, cycleTheme, projectCwd, projects, expandedProjectCwds, tasks,
+    projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, createTask, chooseProjectDirectory,
     openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions, createTaskForProject,
     searchQuery, setSearchQuery,
     loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
-    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities,
-    composerProps, jumpToLatest, executeTerminal, terminalOpen, terminalCommand,
-    terminalOutput, terminalRunning, setTerminalCommand, setTerminalOpen, paletteOpen, setPaletteOpen, paletteCommands,
-    composer, updateComposer, compactSession, exportSession, notice, contextMenu, projectContextMenu,
-    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,
-    renameSession, resolveTrust, saveScopedModels,
-    pendingDelete, pendingProjectRemove, deletingTaskId, removingProjectCwd, extensionUiRequest,
-    packagesOpen, settingsOpen, providerFocus, previewImage, imageContextMenu, setPendingDelete,
-    setPendingProjectRemove, setContextMenu, setProjectContextMenu, setPackagesOpen, setSettingsOpen,
-    setProviderFocus, setPreviewImage, setImageContextMenu, setExtensionUiRequest, openImageContextMenu, deleteTask,
-    removeProject, refreshModels, showNotice, handlePermissionStatus, openProviderSettings,
-    patchTaskUi, updateTaskLists, setMessageReload,
+    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus,
+    composerProps, jumpToLatest,
+    composer, updateComposer,
+    setMessageReload, showNotice, handlePermissionStatus, openProviderSettings,
+    patchTaskUi, updateTaskLists,
   } = controller;
   return <div className={`app-shell ${theme}${isMac ? " platform-macos" : ""}`}>
     <a className="skip-link" href="#main-content">{t.skipToContent}</a>
@@ -33,7 +26,7 @@ export function AppView({ controller }: { controller: AppController }) {
       <div className="titlebar-actions">
         <button className="icon-button mobile-nav-trigger" type="button" title={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-label={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-expanded={mobileSidebarOpen} aria-controls="workspace-sidebar" onClick={() => setMobileSidebarOpen((current) => !current)}><Icon name="folder" /></button>
         <button className="quiet-button" onClick={openCommandPalette}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
-        <button className="icon-button" title={theme === "light" ? t.themeToDark : t.themeToLight} aria-label={theme === "light" ? t.themeToDark : t.themeToLight} onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} /></button>
+        <button className="icon-button" title={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} aria-label={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} onClick={cycleTheme}><Icon name={themePreference === "system" ? "auto" : theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
         <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="settings" /></button>
       </div>
@@ -82,6 +75,7 @@ export function AppView({ controller }: { controller: AppController }) {
         projectCwd={projectCwd}
         tasks={tasks}
         initialLoading={initialLoading}
+        projectSwitching={projectSwitching}
         loadError={loadError}
         messageLoad={messageLoad}
         messages={messages}
@@ -109,22 +103,6 @@ export function AppView({ controller }: { controller: AppController }) {
 
     </div>
 
-    {terminalOpen && <TerminalPanel language={language} cwd={projectCwd} output={terminalOutput} command={terminalCommand} running={terminalRunning} onCommand={setTerminalCommand} onExecute={() => void executeTerminal()} onClose={() => setTerminalOpen(false)} />}
-    {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onTerminal={() => { setPaletteOpen(false); setTerminalOpen(true); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onPackages={() => { setPaletteOpen(false); setPackagesOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
-    {notice && <div className={`toast ${terminalOpen ? "with-terminal" : ""}`} role="status" aria-live="polite">{notice}</div>}
-    {contextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
-    {projectContextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: projectContextMenu.x, top: projectContextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus disabled={removingProjectCwd !== null} onClick={() => { setPendingProjectRemove(projectContextMenu.project); setProjectContextMenu(null); }}>{t.removeProject}</button></div>}
-    {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
-    {pendingProjectRemove && <ProjectRemoveDialog language={language} project={pendingProjectRemove} busy={removingProjectCwd === pendingProjectRemove.cwd} onCancel={() => setPendingProjectRemove(null)} onConfirm={() => void removeProject(pendingProjectRemove)} />}
-    {extensionUiRequest && <ExtensionUiDialog request={extensionUiRequest} language={language} onResolve={(value) => { void window.pideck.extensions.resolveUi(extensionUiRequest.requestId, value).then(() => setExtensionUiRequest(null)).catch((error) => showNotice(error instanceof Error ? error.message : String(error))); }} />}
-    {packagesOpen && <PackageSettings language={language} cwd={activeProject?.cwd ?? projectCwd} onClose={() => setPackagesOpen(false)} onNotice={showNotice} onPackagesChanged={() => setMessageReload((current) => current + 1)} />}
-    {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
-    {commandDialog && <CommandResultDialog language={language} title={commandDialog.title} body={commandDialog.body} onClose={() => setCommandDialog(null)} />}
-    {renameOpen && activeTask && <RenameSessionDialog language={language} currentName={activeTask.title} onSave={(name) => void renameSession(name)} onClose={() => setRenameOpen(false)} />}
-    {resumeOpen && <ResumeSessionDialog language={language} project={activeProject} tasks={tasks} activeTaskId={activeTask?.id} onSelect={(task) => { if (activeProject) void selectTask(activeProject, task); setResumeOpen(false); }} onClose={() => setResumeOpen(false)} />}
-    {trustOpen && <TrustDialog language={language} onResolve={(trusted) => void resolveTrust(trusted)} onClose={() => setTrustOpen(false)} />}
-    {scopedModelsOpen && <ScopedModelsDialog language={language} models={modelOptions} selectedIds={capabilities?.scopedModels?.length ? capabilities.scopedModels : modelOptions.map((model) => `${model.providerId}/${model.id}`)} onSave={(modelIds, persist) => void saveScopedModels(modelIds, persist)} onClose={() => setScopedModelsOpen(false)} />}
-    {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
-    {imageContextMenu && <ImageContextMenu language={language} x={imageContextMenu.x} y={imageContextMenu.y} onCopy={async () => { const copied = await copyImageToClipboard(imageContextMenu.image.src); setImageContextMenu(null); showNotice(copied ? t.copiedImage : t.copyImageFailed); }} />}
+    <AppOverlays controller={controller} />
   </div>;
 }
