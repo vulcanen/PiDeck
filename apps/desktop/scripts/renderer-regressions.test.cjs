@@ -516,3 +516,149 @@ test("markdown math never rewrites fenced code and strips delimiters first", () 
   assert.match(markdown, /parseMathCode/);
   assert.match(markdown, /KATEX_MACROS/);
 });
+
+test("long running turn surfaces live thinking, short turn does not", () => {
+  const longActivity = [{
+    id: "t-long",
+    kind: "thinking",
+    label: "Thinking",
+    detail: "Let me inspect the failing typecheck output and trace the root cause across the affected modules.",
+    startedAt: Date.now() - 30_000,
+  }];
+  const longItems = buildMessageTimelineItems({
+    messages: [message("u1", "user", "first", 1)],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: [],
+    taskId: "task-long",
+    activeActivity: longActivity,
+  });
+  const longLive = longItems.find((item) => item.type === "live");
+  assert.ok(longLive, "running turn with enough thinking exposes a live item");
+  assert.equal(longLive.thinkingText, longActivity[0].detail);
+
+  const shortActivity = [{
+    id: "t-short",
+    kind: "thinking",
+    label: "Thinking",
+    detail: "quick note",
+    startedAt: Date.now() - 1_000,
+  }];
+  const shortItems = buildMessageTimelineItems({
+    messages: [message("u1", "user", "first", 1)],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: [],
+    taskId: "task-short",
+    activeActivity: shortActivity,
+  });
+  const shortLive = shortItems.find((item) => item.type === "live");
+  assert.ok(shortLive, "running turn still exposes a live item");
+  assert.equal(shortLive.thinkingText, undefined, "short turn under the threshold hides live thinking");
+});
+
+test("live thinking retracts into the collapsed summary on settle", () => {
+  const thinking = "the agent reasoned through several approaches before settling on the fix";
+  const activeActivity = [{
+    id: "t-active",
+    kind: "thinking",
+    label: "Thinking",
+    detail: thinking,
+    startedAt: Date.now() - 30_000,
+  }];
+  const running = buildMessageTimelineItems({
+    messages: [message("u1", "user", "first", 1)],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: [],
+    taskId: "task-retract",
+    activeActivity,
+  });
+  assert.ok(running.find((item) => item.type === "live" && item.thinkingText), "thinking is live during the run");
+
+  const settled = buildMessageTimelineItems({
+    messages: [message("u1", "user", "first", 1), message("a1", "assistant", "here is the fix", 2)],
+    language: "en",
+    running: false,
+    completedActivity: [[{ id: "t-active", kind: "thinking", label: "Thinking", detail: thinking, startedAt: Date.now() - 30_000, endedAt: Date.now() - 1_000, timing: "unknown" }]],
+    steeringMessageKeys: [],
+    taskId: "task-retract",
+  });
+  assert.equal(settled.some((item) => item.type === "live"), false, "no live item remains after settle");
+  assert.ok(settled.find((item) => item.type === "execution"), "thinking retracted into the collapsed summary");
+  assert.ok(settled.find((item) => item.type === "message" && item.message.id === "a1"), "formal reply is present");
+});
+
+test("live thinking re-appears in a later round of a steered run", () => {
+  // A long run where the user steers mid-run keeps one timeline turn. The first
+  // reply (a1) lands, then the agent thinks again (round 2). The live thinking
+  // panel must re-surface for round 2 even though an assistant reply already
+  // exists in the turn, and it must NOT linger the ended round-1 thinking.
+  const round1Thinking = {
+    id: "t-round1",
+    kind: "thinking",
+    label: "Thinking",
+    detail: "round one reasoning that was already formalized into the reply above",
+    startedAt: Date.now() - 40_000,
+    endedAt: Date.now() - 20_000,
+  };
+  const round2Thinking = {
+    id: "t-round2",
+    kind: "thinking",
+    label: "Thinking",
+    detail: "now reasoning about the new steering question the user just asked, tracing how the proposed fix interacts with the existing retry path and what edge cases the prior round may have missed",
+    startedAt: Date.now() - 9_000,
+  };
+  const items = buildMessageTimelineItems({
+    messages: [
+      message("u1", "user", "first", 1),
+      message("a1", "assistant", "here is the first fix", 2),
+      message("u2", "user", "but what about the edge case", 3),
+    ],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: ["id:u2"],
+    taskId: "task-steer",
+    activeActivity: [round1Thinking, round2Thinking],
+  });
+  const live = items.find((item) => item.type === "live");
+  assert.ok(live, "a live item still appears after a prior reply in the same run");
+  assert.equal(live.thinkingText, round2Thinking.detail, "live thinking shows only the in-progress round, not the ended prior one");
+  assert.ok(items.find((item) => item.type === "message" && item.message.id === "a1"), "prior reply stays visible above the live panel");
+});
+
+test("ended thinking retracts once a later reply formalizes it", () => {
+  // Round 2 finishes (a2 landed) while the run is still going (e.g. willRetry
+  // pending). The round-2 thinking has ended and a reply exists, so the live
+  // panel must not keep showing that ended thinking beneath the new reply.
+  const round2Thinking = {
+    id: "t-round2",
+    kind: "thinking",
+    label: "Thinking",
+    detail: "reasoning that is now finalized into the second reply",
+    startedAt: Date.now() - 30_000,
+    endedAt: Date.now() - 3_000,
+  };
+  const items = buildMessageTimelineItems({
+    messages: [
+      message("u1", "user", "first", 1),
+      message("a1", "assistant", "first fix", 2),
+      message("u2", "user", "edge case?", 3),
+      message("a2", "assistant", "second fix", 4),
+    ],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: ["id:u2"],
+    taskId: "task-ended",
+    activeActivity: [round2Thinking],
+  });
+  const live = items.find((item) => item.type === "live");
+  assert.ok(live, "live item still exists while the run continues");
+  assert.equal(live.thinkingText, undefined, "ended thinking with a reply present does not linger in the live panel");
+});
+

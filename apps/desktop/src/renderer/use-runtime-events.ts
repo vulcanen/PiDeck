@@ -116,7 +116,14 @@ export function useRuntimeEvents({
         const isSteeringMessage = queueDelivery === "steer";
         const hasCompletedWork = previous.activity.some((step) => step.endedAt || step.kind === "tool" || Boolean(step.detail));
         const startedAt = Date.now();
-        return { ...current, [taskId]: { ...previous, isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", toolName: undefined, activity: isSteeringMessage && previous.activity.length > 0 ? previous.activity : [{ id: `${taskId}:thinking:${startedAt}`, kind: "thinking", label: copy[language].executionThinking, startedAt }], completedActivity: !isSteeringMessage && hasCompletedWork ? [...previous.completedActivity, previous.activity] : previous.completedActivity } };
+        // A steering message opens a *new* reasoning round inside the same run.
+        // Reset activity to a fresh thinking step (so the live panel shows only
+        // the current round's thinking, not the stale prior one) and archive the
+        // previous round's steps into completedActivity so its summary renders.
+        // Keeping the old activity would leak round-1 thinking into round 2+ and
+        // never let the live panel retract into a collapsed summary.
+        const freshActivity = [{ id: `${taskId}:thinking:${startedAt}`, kind: "thinking" as const, label: copy[language].executionThinking, startedAt }];
+        return { ...current, [taskId]: { ...previous, isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", toolName: undefined, activity: freshActivity, completedActivity: hasCompletedWork ? [...previous.completedActivity, previous.activity] : previous.completedActivity } };
       });
     } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
     else if (event?.type === "compaction_start") patchTaskUi(taskId, { isCompacting: true, workingPhase: "compacting", toolName: undefined });
@@ -146,6 +153,14 @@ export function useRuntimeEvents({
       patchTaskUi(taskId, { workingPhase: "thinking", streamText: "", toolName: undefined });
     }
     else if (event?.type === "agent_settled") {
+      // A settle with willRetry means Pi is only pausing before an automatic
+      // retry (e.g. after a tool error). Do not tear down the running state:
+      // the next turn_start keeps streaming, and clearing isSending/activity
+      // here would make the spinner and live timer vanish permanently.
+      if (event.willRetry) {
+        patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
+        return;
+      }
       discardStreamDeltas(taskId);
       const endedAt = Date.now();
       updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt }));

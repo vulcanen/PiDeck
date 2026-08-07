@@ -40,7 +40,7 @@ let miniwindowAddon: MiniwindowAddon | undefined;
 const pending = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }>();
 
 function projectRegistryPath(): string {
@@ -222,15 +222,20 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
     const id = randomUUID();
     const timeoutMs = command === "providers.login" || command === "sessions.share"
       ? 15 * 60_000
+      // agent.prompt is event-driven: an interactive turn can run for many
+      // minutes and streams progress via agent events. Its completion is
+      // signaled by agent_settled, not by the RPC response, so a fixed timeout
+      // would only ever misreport a long-but-healthy run as failed. Leave it
+      // unbounded; a crashed PiHost still rejects via the exit handler.
       : command === "agent.prompt"
-        ? 10 * 60_000
+        ? 0
         : command.startsWith("packages.")
           ? 10 * 60_000
         : 60_000;
-    const timer = setTimeout(() => {
+    const timer = timeoutMs > 0 ? setTimeout(() => {
       pending.delete(id);
       reject(new Error(`PiHost request timed out: ${command}`));
-    }, timeoutMs);
+    }, timeoutMs) : undefined;
     pending.set(id, { resolve, reject, timer });
     host.send?.({ id, command, payload } satisfies PiHostRequest);
   });

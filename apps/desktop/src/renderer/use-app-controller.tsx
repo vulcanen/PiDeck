@@ -794,11 +794,17 @@ export function useAppController() {
       if (creating && desiredThinking !== "off") await window.pideck.agent.setThinkingLevel(task.id, desiredThinking, projectCwd);
       await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })), queueDelivery);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A timed-out agent.prompt is not a real failure: removal of the RPC
+      // timeout above means this should no longer fire, but if it ever does
+      // (e.g. a revert), keep the run alive — PiHost keeps streaming and a
+      // later agent_settled clears state when the run truly ends.
+      if (message.includes("timed out: agent.prompt")) return;
       patchTaskUi(task.id, { isSending: false, isCompacting: false, workingPhase: null, activity: [] });
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
       if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
       updateTaskLists((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
-      showNotice(error instanceof Error ? error.message : String(error));
+      showNotice(message);
     }
   }
 

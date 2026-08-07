@@ -342,6 +342,11 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .live-message-status { min-height: 20px; }
 .live-pill { display: inline-flex; align-items: center; gap: 5px; margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; }
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.live-thinking { max-width: var(--conversation-width); margin: 4px 0 10px; padding: 10px 13px; border: 1px solid var(--border-soft, var(--border)); border-radius: 10px; background: var(--surface-sunken, var(--surface)); }
+.live-thinking-label { font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.live-thinking-body { color: var(--muted-strong, var(--muted)); font-size: var(--message-font-size); line-height: var(--message-line-height, 1.6); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 38vh; overflow-y: auto; }
+.live-thinking-body::-webkit-scrollbar { width: 8px; }
+.live-thinking-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
 .markdown-content { color: var(--text); overflow-wrap: anywhere; font-size: var(--message-font-size); line-height: var(--message-line-height); }
 .markdown-content > :first-child { margin-top: 10px; }
 .markdown-content > :last-child { margin-bottom: 0; }

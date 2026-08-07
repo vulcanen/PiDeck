@@ -246,7 +246,16 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     return item.type === "execution"
       ? <ExecutionSummary steps={item.steps} language={language} running={Boolean(item.running)} />
       : item.type === "live"
-        ? <article className="message assistant-message live-message"><div className="live-message-status">{item.text ? <span className="live-pill"><span className="live-dot" />{copy[language].working}</span> : null}</div>{item.text ? <div className="message-content"><MarkdownContent text={item.text} language={language} /></div> : <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} />}</article>
+        ? <article className="message assistant-message live-message">
+            {item.thinkingText
+              ? <div className="live-thinking">
+                  <div className="live-thinking-label">{copy[language].executionThinking}</div>
+                  <div className="live-thinking-body">{item.thinkingText}</div>
+                </div>
+              : null}
+            <div className="live-message-status">{item.text ? <span className="live-pill"><span className="live-dot" />{copy[language].working}</span> : null}</div>
+            {item.text ? <div className="message-content"><MarkdownContent text={item.text} language={language} /></div> : <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} />}
+          </article>
         : <MemoMessageView message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />;
   }, [items, language, onContextMenuImage, onPreviewImage]);
 
