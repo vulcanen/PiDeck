@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contracts";
-import { appMenuCopy } from "@pideck/i18n";
+import { appMenuCopy, copy } from "@pideck/i18n";
 
 app.setName("PiDeck");
 
@@ -28,6 +28,10 @@ function toUnpackedPath(filePath: string): string {
 }
 
 let host: ChildProcess | undefined;
+// When true (default), closing the last window asks for confirmation before
+// quitting. The renderer can opt out via `app:set-confirm-close` (e.g. the
+// user ticks "don't ask again" in the native confirm dialog).
+let confirmCloseBeforeQuit = true;
 let hostAlive = false;
 let hostStatus: RuntimeStatus = "starting";
 let hostWindow: BrowserWindow | undefined;
@@ -247,6 +251,9 @@ function registerIpcHandlers() {
     buildApplicationMenu(currentLanguage);
     return currentLanguage;
   });
+  ipcMain.handle("app:set-confirm-close", (_event, enabled: boolean) => {
+    confirmCloseBeforeQuit = Boolean(enabled);
+  });
   ipcMain.handle("app:quit", () => { app.quit(); });
   ipcMain.handle("runtime:status", () => hostStatus);
   ipcMain.handle("projects:list", async (_event, preferredCwd?: string) => {
@@ -383,6 +390,37 @@ function createWindow() {
   }
   window.on("closed", () => {
     if (hostWindow === window) hostWindow = undefined;
+  });
+  // Intercept the close request so we can confirm before quitting. Without this
+  // guard the window would destroy itself and `before-quit` would tear down the
+  // host mid-task. We only act on the last window; on macOS the app stays alive
+  // after close, so a confirm there would be wrong.
+  window.on("close", (event) => {
+    if (!confirmCloseBeforeQuit || process.platform === "darwin") return;
+    event.preventDefault();
+    const t = copy[currentLanguage];
+    // The async variant supports the "don't ask again" checkbox; the sync
+    // variant in this Electron version does not. The promise resolves only
+    // after the user responds, by which point we decide whether to destroy.
+    void dialog.showMessageBox(window, {
+      type: "question",
+      buttons: [t.confirmCloseCancel, t.confirmCloseExit],
+      defaultId: 1,
+      cancelId: 0,
+      message: t.confirmCloseTitle,
+      detail: t.confirmCloseBody,
+      checkboxLabel: t.confirmCloseDontAsk,
+      checkboxChecked: false,
+      noLink: true,
+    }).then(({ response, checkboxChecked }) => {
+      if (response !== 1) return;
+      if (checkboxChecked) {
+        confirmCloseBeforeQuit = false;
+        window.webContents.send("app:confirm-close-changed", false);
+      }
+      window.destroy();
+      if (BrowserWindow.getAllWindows().length === 0) app.quit();
+    });
   });
 }
 

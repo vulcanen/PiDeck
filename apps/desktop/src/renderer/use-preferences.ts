@@ -12,6 +12,10 @@ export function usePreferences() {
     const stored = localStorage.getItem("pideck.theme");
     return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
   });
+  const [confirmClose, setConfirmClose] = useState<boolean>(() => {
+    const stored = localStorage.getItem("pideck.confirmClose");
+    return stored === "false" ? false : true;
+  });
   const [resolvedSystemTheme, setResolvedSystemTheme] = useState<Theme>(systemTheme);
   const theme: Theme = themePreference === "system" ? resolvedSystemTheme : themePreference;
   useEffect(() => {
@@ -23,9 +27,21 @@ export function usePreferences() {
   }, []);
   useEffect(() => { localStorage.setItem("pideck.language", language); document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; }, [language]);
   useEffect(() => { localStorage.setItem("pideck.theme", themePreference); document.documentElement.style.colorScheme = theme; }, [theme, themePreference]);
+  useEffect(() => { localStorage.setItem("pideck.confirmClose", confirmClose ? "true" : "false"); }, [confirmClose]);
   useEffect(() => { void window.pideck.app.setLanguage(language).catch(() => undefined); }, [language]);
+  useEffect(() => { void window.pideck.app.setConfirmClose(confirmClose).catch(() => undefined); }, [confirmClose]);
+  // Main may ask us to persist "don't ask again" after the user ticks the
+  // checkbox in the native close-confirm dialog.
+  useEffect(() => {
+    const handler = (enabled: boolean) => {
+      localStorage.setItem("pideck.confirmClose", enabled ? "true" : "false");
+      setConfirmClose(enabled);
+    };
+    window.pideck.app.onConfirmCloseChanged?.(handler);
+    return () => window.pideck.app.offConfirmCloseChanged?.(handler);
+  }, []);
   function cycleTheme() {
     setThemePreference((current) => current === "system" ? "light" : current === "light" ? "dark" : "system");
   }
-  return { language, setLanguage, theme, themePreference, cycleTheme };
+  return { language, setLanguage, theme, themePreference, cycleTheme, confirmClose, setConfirmClose };
 }

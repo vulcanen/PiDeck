@@ -1,10 +1,24 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage, QueueDelivery, QueueMode } from "@pideck/contracts";
 
+const confirmCloseListeners = new Map<(enabled: boolean) => void, (event: Electron.IpcRendererEvent, enabled: boolean) => void>();
+
 const bridge: PideckBridge = {
   app: {
     setLanguage: (language: AppLanguage) => ipcRenderer.invoke("app:set-language", language),
     quit: () => ipcRenderer.invoke("app:quit"),
+    setConfirmClose: (enabled: boolean) => ipcRenderer.invoke("app:set-confirm-close", enabled),
+    onConfirmCloseChanged: (listener: (enabled: boolean) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => listener(enabled);
+      confirmCloseListeners.set(listener, handler);
+      ipcRenderer.on("app:confirm-close-changed", handler);
+    },
+    offConfirmCloseChanged: (listener: (enabled: boolean) => void) => {
+      const handler = confirmCloseListeners.get(listener);
+      if (!handler) return;
+      confirmCloseListeners.delete(listener);
+      ipcRenderer.removeListener("app:confirm-close-changed", handler);
+    },
   },
   runtime: {
     status: () => ipcRenderer.invoke("runtime:status"),

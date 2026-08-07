@@ -12,6 +12,18 @@ const {
   restoreCompletedActivity,
 } = require("../dist/renderer/timeline-utils.js");
 
+test("close-confirmation copy keys exist in both locale blocks", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../../../packages/i18n/src/index.ts"), "utf8");
+  const keys = ["confirmCloseTitle", "confirmCloseBody", "confirmCloseDontAsk", "confirmCloseExit", "confirmCloseCancel"];
+  // The catalog is a single `copy` object with `zh:` and `en:` literal blocks.
+  const zhBlock = source.slice(source.indexOf("zh:"), source.indexOf("en:"));
+  const enBlock = source.slice(source.indexOf("en:"));
+  for (const key of keys) {
+    assert.ok(zhBlock.includes(`${key}:`), `zh block must define ${key}`);
+    assert.ok(enBlock.includes(`${key}:`), `en block must define ${key}`);
+  }
+});
+
 const rendererSource = (relativePath) => fs.readFileSync(
   path.join(__dirname, "../src/renderer", relativePath),
   "utf8",

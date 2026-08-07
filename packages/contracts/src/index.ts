@@ -144,6 +144,9 @@ export interface PideckBridge {
   app: {
     setLanguage(language: AppLanguage): Promise<void>;
     quit(): Promise<void>;
+    setConfirmClose(enabled: boolean): Promise<void>;
+    onConfirmCloseChanged(listener: (enabled: boolean) => void): void;
+    offConfirmCloseChanged(listener: (enabled: boolean) => void): void;
   };
   runtime: {
     status(): Promise<"connected" | "starting" | "disconnected">;
