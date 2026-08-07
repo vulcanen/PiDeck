@@ -17,6 +17,8 @@ export default tseslint.config(
       ".pi/**",
       ".claude/**",
       ".codex/**",
+      ".workbuddy/**",
+      "_repair_tmp/**",
     ],
   },
   eslint.configs.recommended,

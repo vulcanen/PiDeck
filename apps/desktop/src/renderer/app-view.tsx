@@ -14,7 +14,6 @@ export function AppView({ controller }: { controller: AppController }) {
     loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus,
     composerProps, jumpToLatest,
-    composer, updateComposer,
     setMessageReload, showNotice, handlePermissionStatus, openProviderSettings,
     patchTaskUi, updateTaskLists,
   } = controller;

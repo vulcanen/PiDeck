@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
 import { deriveSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
-import { copy, localizeCommandDescription, type Language } from "@pideck/i18n";
+import { copy, localizeCommandDescription } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
 import { copyText, useDialogFocus } from "@pideck/ui-system";
-import type { ActivityStep, ImageAttachment, ImageContextMenuState, MessageLoad, PreviewImage, SentImageMessage, SuggestionMode, TaskUiState, Theme } from "./types";
+import type { ActivityStep, ImageAttachment, ImageContextMenuState, MessageLoad, PreviewImage, SentImageMessage, SuggestionMode, TaskUiState } from "./types";
 import { createDefaultTaskUiState, sortTasksByUpdatedAt, textFromMessage } from "./message-utils";
 import { useRuntimeEvents } from "./use-runtime-events";
 import { useSessionData } from "./use-session-data";
