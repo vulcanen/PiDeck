@@ -73,9 +73,9 @@ export PIDECK_PI_MODULE="/path/to/pi-coding-agent/dist/index.js"
 
 ## Documentation
 
-- [Product and technical plan](docs/product-plan.zh-CN.md)
-- [Architecture](docs/architecture.zh-CN.md)
-- [Pi CLI feature matrix](docs/pi-cli-feature-matrix.zh-CN.md)
+- [Product and technical plan](docs/product-plan.en.md)
+- [Architecture](docs/architecture.en.md)
+- [Pi CLI feature matrix](docs/pi-cli-feature-matrix.en.md)
 - [Project development instructions](AGENTS.md)
 
 ## Open source

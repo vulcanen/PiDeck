@@ -20,8 +20,7 @@
 
 ## 3. Timeline Stability
 
-- Thinking summaries, streaming replies, and the final persisted reply must be stable timeline items of the same logical turn.
-- The execution summary of an active turn uses a stable key; the streaming reply and the final Assistant message must reuse the same response key. Do not unmount/rebuild them through footer, temporary nodes, and final messages interchangeably.
+- Thinking summaries, streaming replies, and the final persisted reply must be stable timeline items of the same logical turn: the execution summary of an active turn uses a stable key, and the streaming reply and the final Assistant message must reuse the same response key. Do not unmount/rebuild them through footer, temporary nodes, and final messages interchangeably.
 - Each session, each turn, and each execution group must be isolated by `taskId`. When a message has no Pi id, use a stable role/timestamp/content identity; do not use array index as a long-term key.
 - `agent_start → turn/message/tool events → agent_end/agent_settled` must only update the state of the corresponding turn, not trigger a rebuild of the whole page or the whole message list.
 - When adding or changing message snapshot merge logic, preserve Pi's canonical order; do not reorder queued turns by timestamp.

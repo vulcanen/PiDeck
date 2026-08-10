@@ -75,7 +75,7 @@ packages/
 └─ ui-system/                    # Renderer 共享 UI 基元
 ```
 
-完整边界见 [当前架构说明](architecture.zh-CN.md)。
+完整边界见 [当前架构说明](architecture.en.md)。
 
 ## 3. 当前用户闭环
 

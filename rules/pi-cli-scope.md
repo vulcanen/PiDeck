@@ -28,9 +28,8 @@ Do not duplicate a "similar-looking" Agent, model catalog, auth store, or sessio
 
 ## Maintainability
 
-- Visible copy for Chinese, English, and future languages lives in the i18n config.
-- Components must not keep adding scattered bilingual literals; add a stable key first, then fill in each language config.
-- Pi command, model, and resource catalogs should be read from the runtime first; required fallbacks must live in a dedicated capability config module.
+- Pi command, model, and resource catalogs must be read from the runtime first; fallbacks live outside UI components per the AGENTS.md Code Boundaries.
+- Visible copy follows the AGENTS.md Code Boundaries; add a stable i18n key first, then fill in each language config.
 
 ## Compatibility
 

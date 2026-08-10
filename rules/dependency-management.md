@@ -4,7 +4,7 @@
 
 - Use current stable versions from the npm registry; do not pin to old major versions by hand.
 - The Node.js baseline must satisfy the Pi SDK `engines`; currently `>=22.19.0`.
-- Electron's bundled Node version must be compatible with the Pi SDK. When the bundled Node satisfies the Pi SDK engines, PiHost runs directly in the bundled Node (`ELECTRON_RUN_AS_NODE` fork) and reads the asar; if the bundled Node is below the requirement, switch to an external system Node and unpack node_modules entirely (a system Node cannot read asar).
+- Electron's bundled Node version must satisfy the Pi SDK engines. When it does, PiHost forks from the bundled Node and reads the asar transparently; when it does not, switch to an external system Node (`PIDECK_NODE_EXECUTABLE`) and unpack node_modules. The fork/asar mechanics are detailed in [runtime-compatibility.md](runtime-compatibility.md).
 
 ## Upgrade Order
 

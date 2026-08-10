@@ -12,6 +12,9 @@ Do not add product capabilities that Pi CLI does not have, nor a second Agent im
 - [Documentation sync rules](rules/documentation-management.md)
 - [UI/UX development standards](rules/ui-ux-standards.md)
 - [Renderer session timeline and scrolling rules](rules/renderer-session-timeline.md)
+- [PiDeck product and technical plan](docs/product-plan.en.md)
+- [PiDeck current architecture](docs/architecture.en.md)
+- [Pi CLI → PiDeck feature matrix](docs/pi-cli-feature-matrix.en.md)
 
 ## Runtime Environment
 

@@ -58,12 +58,9 @@ Every asynchronous operation has at least four states: `idle`, `loading`, `succe
 - An execution group shows only a summary by default: number of thinking segments, number of tool calls, and duration.
 - When expanded, show tool name, arguments, results, and errors in chronological order.
 - Tool Results must not be re-displayed as regular messages.
-- Streaming messages and execution summaries must be isolated by `taskId`.
 - Long arguments, results, and code must use `pre-wrap`, a max height, and independent scrolling; they must not break the conversation layout.
 - Switching sessions jumps directly to the saved or latest position; do not play cross-session smooth-scroll animations.
-- Thinking summaries, streaming replies, and final replies must reuse stable timeline items; do not repeatedly unmount/rebuild between footer, temporary messages, and final messages.
-- Pi's raw messages are the source of truth; after a restart, runtime execution summaries must be restored from Pi's thinking/tool content or message timestamps. Do not assume Renderer in-memory state persists.
-- For detailed constraints on long sessions, session pane caching, follow state, and virtual lists, see [Renderer session timeline and scrolling rules](renderer-session-timeline.md).
+- TaskId isolation, stable timeline items, restart restoration, and long-session constraints follow [Renderer session timeline and scrolling rules](renderer-session-timeline.md) (§1 and §3).
 
 ## 6. Animation and Performance
 
@@ -88,9 +85,8 @@ Acceptance widths include at least: 375, 560, 760, 1024, 1440px.
 
 ## 8. Copy and Data Boundaries
 
-- All visible zh/en copy lives in `packages/i18n/src/index.ts`; components read keys only.
+- All visible zh/en copy lives in `packages/i18n/src/index.ts`; components read keys only (see AGENTS.md Code Boundaries).
 - Copy should state the current state and the next action; avoid showing only "failed".
-- The Renderer does not store Pi credentials and does not access Node/Pi SDK directly.
 - Context usage, models, permissions, and Provider state shown in the UI must come from the Pi Bridge's real APIs.
 - Do not disguise planned capabilities as supported; on failure, show an actionable error.
 
@@ -98,10 +94,14 @@ Acceptance widths include at least: 375, 560, 760, 1024, 1440px.
 
 ### Before Development
 
+When a UI/UX Pro Max skill is available, run its search with these queries to load relevant design-system and interaction constraints:
+
 ```bash
-python3 C:/Users/chenyang.wu/.agents/skills/ui-ux-pro-max/scripts/search.py "desktop developer tool React accessibility" --design-system -p PiDeck
-python3 C:/Users/chenyang.wu/.agents/skills/ui-ux-pro-max/scripts/search.py "focus modal keyboard loading motion" --domain ux
+python3 "$UI_UX_PRO_MAX_SEARCH" "desktop developer tool React accessibility" --design-system -p PiDeck
+python3 "$UI_UX_PRO_MAX_SEARCH" "focus modal keyboard loading motion" --domain ux
 ```
+
+`$UI_UX_PRO_MAX_SEARCH` points at the skill's `scripts/search.py`; when the skill is not installed, rely on §1–§8 directly.
 
 ### Before Commit
 
