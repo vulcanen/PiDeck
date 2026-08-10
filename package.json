@@ -3,8 +3,9 @@
   "productName": "PiDeck",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "author": {
-    "name": "PiDeck"
+    "name": "Vulcanen"
   },
   "main": "apps/desktop/dist/main/index.js",
   "description": "A calm, editorial desktop workspace for Pi.",
@@ -25,7 +26,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.0",
+    "@earendil-works/pi-coding-agent": "0.84.1",
     "@gotgenes/pi-permission-system": "^24.0.0",
     "@pideck/contracts": "0.1.0",
     "@pideck/domain": "0.1.0",

@@ -2,7 +2,9 @@
 
 [中文](README.md)
 
-PiDeck is a desktop interface for [Pi](https://pi.dev). It brings the projects, sessions, models, providers, and tool interactions exposed by the Pi CLI / SDK into an Electron workspace.
+PiDeck is a desktop interface for [Pi](https://github.com/earendil-works/pi), an open source AI agent toolkit (MIT). It brings the projects, sessions, models, providers, and tool interactions exposed by the Pi CLI / SDK into an Electron workspace.
+
+> **Notice**: PiDeck is an independent open source project and an unofficial desktop client for the open source project [Pi](https://github.com/earendil-works/pi). It is not affiliated with, endorsed by, or sponsored by the Pi project or its maintainers.
 
 PiDeck does not implement a separate agent, model catalog, session store, or credential system. Provider API keys, OAuth credentials, and session data remain managed by the Pi Runtime.
 
@@ -11,7 +13,7 @@ The project tree can keep multiple projects' Pi sessions expanded at once. Click
 The central conversation renders as a plain document-flow timeline — very long sessions fold older messages behind a "show earlier" button — with per-session scroll-position caching, stable streaming-to-final message rows, and Steering/Follow-up queue delivery. A first-open session starts at the latest message; after the user scrolls upward, background streaming does not take the viewport back, and late-resolving content such as Mermaid diagrams or math does not shift the reader's position.
 
 Current version: `0.1.0`  
-Pi CLI / SDK baseline: `0.84.0`  
+Pi CLI / SDK baseline: `0.84.1`  
 Electron: `43.3.0`
 
 ## Platform availability
@@ -75,3 +77,9 @@ export PIDECK_PI_MODULE="/path/to/pi-coding-agent/dist/index.js"
 - [Architecture](docs/architecture.zh-CN.md)
 - [Pi CLI feature matrix](docs/pi-cli-feature-matrix.zh-CN.md)
 - [Project development instructions](AGENTS.md)
+
+## Open source
+
+- This repository is licensed under the [MIT License](LICENSE)
+- Report bugs and vulnerabilities via [SECURITY.md](SECURITY.md)
+- See [CONTRIBUTING.md](CONTRIBUTING.md) before contributing

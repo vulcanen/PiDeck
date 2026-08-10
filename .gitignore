@@ -6,3 +6,19 @@ apps/desktop/assets/pideck-miniwindow.node
 .codex/
 .idea/
 *.log
+
+# Local tooling
+.claude/
+.pi/
+.playwright-cli/
+.workbuddy/
+.agents/
+.husky/
+
+# Environment & credentials
+.env
+.env.*
+!.env.example
+*.local
+credentials*
+*.pem

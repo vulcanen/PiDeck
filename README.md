@@ -2,7 +2,9 @@
 
 [English](README.en.md)
 
-PiDeck 是 [Pi](https://pi.dev) 的桌面界面。它将 Pi CLI / Pi SDK 提供的项目、会话、模型、Provider 和工具交互整合到 Electron 工作区中。
+PiDeck 是 [Pi](https://github.com/earendil-works/pi)（开源 AI Agent 工具包，MIT 协议）的桌面界面。它将 Pi CLI / Pi SDK 提供的项目、会话、模型、Provider 和工具交互整合到 Electron 工作区中。
+
+> **声明**：PiDeck 是一个独立的开源项目，仅为开源项目 [Pi](https://github.com/earendil-works/pi) 开发的桌面客户端，与其官方团队无隶属关系，亦未获得其背书。
 
 PiDeck 不另行实现 Agent、模型目录、会话存储或凭据系统。Provider 的 API Key、OAuth 和 Session 数据继续由 Pi Runtime 管理。
 
@@ -11,7 +13,7 @@ PiDeck 不另行实现 Agent、模型目录、会话存储或凭据系统。Prov
 中央对话区采用普通文档流时间线（超长会话把更早的消息折叠在"查看更早消息"按钮后），配合每个 Session 独立的滚动位置缓存、流式回复稳定时间线和 Steering/Follow-up 排队消息。首次打开会话定位到最新消息；用户主动上滑后保留当前位置，不会被后台流式更新抢回；Mermaid 图、数学公式等异步渲染完成时也不会顶动阅读位置。
 
 当前版本：`0.1.0`  
-Pi CLI / SDK 基线：`0.84.0`  
+Pi CLI / SDK 基线：`0.84.1`  
 Electron：`43.3.0`
 
 ### 平台运行
@@ -75,3 +77,9 @@ export PIDECK_PI_MODULE="/path/to/pi-coding-agent/dist/index.js"
 - [架构说明](docs/architecture.zh-CN.md)
 - [Pi CLI 功能矩阵](docs/pi-cli-feature-matrix.zh-CN.md)
 - [项目开发说明与规范](AGENTS.md)
+
+### 开源
+
+- 本仓库基于 [MIT 协议](LICENSE) 开源
+- 问题与漏洞报告见 [SECURITY.md](SECURITY.md)
+- 参与贡献请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)
