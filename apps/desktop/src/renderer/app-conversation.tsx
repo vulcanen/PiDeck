@@ -166,19 +166,11 @@ function ConversationPaneDeck({
   onChooseProject, onCreateTask, ...paneProps
 }: ConversationPaneDeckProps) {
   const activePaneKey = activeData ? conversationPaneKey(activeData.task.projectId, activeData.task.id) : null;
-  // LRU limit keeps long sessions from pinning every visited pane's DOM
-  // (Mermaid/KaTeX/highlighted code all stay mounted). Older panes fall back
-  // to the saved { top, follow } snapshot when revisited.
-  const MAX_CACHED_PANES = 5;
   const [cachedPaneKeys, setCachedPaneKeys] = useState<string[]>(() => activePaneKey ? [activePaneKey] : []);
 
   useLayoutEffect(() => {
     if (!activePaneKey) return;
-    setCachedPaneKeys((current) => {
-      const next = current.filter((key) => key !== activePaneKey);
-      next.push(activePaneKey);
-      return next.slice(-MAX_CACHED_PANES);
-    });
+    setCachedPaneKeys((current) => current.includes(activePaneKey) ? current : [...current, activePaneKey]);
   }, [activePaneKey]);
 
   // Keep visited panes mounted across project changes. The pane's own DOM
