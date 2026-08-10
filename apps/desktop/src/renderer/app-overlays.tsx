@@ -1,4 +1,5 @@
 import { CommandPalette, CommandPaletteBoundary, CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, ProjectRemoveDialog, ProviderSettings, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
+import { Icon } from "@pideck/ui-system";
 import type { AppController } from "./use-app-controller";
 
 // All floating layers (dialogs, palette, toast, context menus) render
@@ -11,7 +12,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     notices, contextMenu, setContextMenu, projectContextMenu, setProjectContextMenu,
     pendingDelete, setPendingDelete, deletingTaskId, deleteTask,
     pendingProjectRemove, setPendingProjectRemove, removingProjectCwd, removeProject,
-    extensionUiRequest, setExtensionUiRequest, showNotice,
+    extensionUiRequest, setExtensionUiRequest, showNotice, dismissNotice,
     packagesOpen, setMessageReload, settingsOpen, setSettingsOpen, providerFocus, setProviderFocus, refreshModels,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, renameSession,
     resumeOpen, setResumeOpen, selectTask, trustOpen, setTrustOpen, resolveTrust,
@@ -21,7 +22,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
   return <>
     {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onPackages={() => { setPaletteOpen(false); setPackagesOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
     {notices.length > 0 && <div className="toast-stack">
-      {notices.map((item) => <div key={item.id} className={`toast ${item.closing ? "closing" : ""}`} role="status" aria-live="polite">{item.message}</div>)}
+      {notices.map((item) => <div key={item.id} className={`toast ${item.kind === "error" ? "toast-error" : ""} ${item.closing ? "closing" : ""}`} role={item.kind === "error" ? "alert" : "status"} aria-live="polite"><span className="toast-message">{item.message}</span>{item.kind === "error" && <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>}</div>)}
     </div>}
     {contextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {projectContextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: projectContextMenu.x, top: projectContextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus disabled={removingProjectCwd !== null} onClick={() => { setPendingProjectRemove(projectContextMenu.project); setProjectContextMenu(null); }}>{t.removeProject}</button></div>}

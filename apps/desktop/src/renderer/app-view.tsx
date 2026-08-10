@@ -15,7 +15,7 @@ export function AppView({ controller }: { controller: AppController }) {
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus,
     composerProps, jumpToLatest,
     setMessageReload, showNotice, handlePermissionStatus, openProviderSettings,
-    patchTaskUi, updateTaskLists,
+    patchTaskUi, updateTaskLists, restartHost,
   } = controller;
   return <div className={`app-shell ${theme}${isMac ? " platform-macos" : ""}`}>
     <a className="skip-link" href="#main-content">{t.skipToContent}</a>
@@ -61,7 +61,7 @@ export function AppView({ controller }: { controller: AppController }) {
         onOpenTaskContext={openContextMenu}
         onTaskMenu={(task, rect) => openContextMenu(task, rect.right - 160, rect.bottom + 4)}
         onLoadProjectSessions={loadProjectSessions}
-        onRetry={loadInitialData}
+        onRetry={runtimeStatus === "disconnected" ? restartHost : loadInitialData}
       />
 
       <AppConversation
@@ -87,7 +87,7 @@ export function AppView({ controller }: { controller: AppController }) {
         permissionStatus={permissionStatus}
         composerProps={composerProps}
         onTimelineAtEnd={handleTimelineAtEnd}
-        onRetryInitialLoad={loadInitialData}
+        onRetryInitialLoad={runtimeStatus === "disconnected" ? restartHost : loadInitialData}
         onChooseProject={chooseProjectDirectory}
         onCreateTask={createTask}
         onRetryMessages={() => setMessageReload((current) => current + 1)}

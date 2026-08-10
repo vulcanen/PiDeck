@@ -132,11 +132,15 @@ function buildApplicationMenu(language: AppLanguage) {
     {
       label: t.view,
       submenu: [
-        { role: "reload", label: t.reload },
-        { role: "forceReload", label: t.forceReload },
-        { type: "separator" },
-        { role: "toggleDevTools", label: t.toggleDevTools },
-        { type: "separator" },
+        // Reload and DevTools are development aids; keep them off the menu in
+        // packaged builds where they only invite support requests.
+        ...(!app.isPackaged ? ([
+          { role: "reload", label: t.reload },
+          { role: "forceReload", label: t.forceReload },
+          { type: "separator" },
+          { role: "toggleDevTools", label: t.toggleDevTools },
+          { type: "separator" },
+        ] satisfies MenuItemConstructorOptions[]) : []),
         { role: "resetZoom", label: t.resetZoom },
         { role: "zoomIn", label: t.zoomIn },
         { role: "zoomOut", label: t.zoomOut },
@@ -145,14 +149,44 @@ function buildApplicationMenu(language: AppLanguage) {
       ],
     },
     {
-      label: t.window,
+      label: t.help,
       submenu: [
-        { role: "minimize", label: t.minimize },
-        { role: "close", label: t.close },
+        {
+          label: t.about,
+          click: () => { void showAboutDialog(); },
+        },
       ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+async function showAboutDialog() {
+  const t = appMenuCopy[currentLanguage];
+  let piSdk: string | null = null;
+  try {
+    const info = await requestHost("app.info") as { version?: string } | string | null;
+    piSdk = typeof info === "string" ? info : (info?.version ?? null);
+  } catch {
+    // PiHost may be unavailable; the dialog still shows the app versions.
+  }
+  const detail = t.aboutBody(
+    app.getVersion(),
+    piSdk,
+    process.versions.electron ?? "",
+    process.versions.node,
+  );
+  const options: Electron.MessageBoxOptions = {
+    type: "info",
+    title: t.aboutTitle,
+    message: t.aboutTitle,
+    detail,
+    buttons: [t.close],
+    noLink: true,
+  };
+  void (hostWindow && !hostWindow.isDestroyed()
+    ? dialog.showMessageBox(hostWindow, options)
+    : dialog.showMessageBox(options));
 }
 
 function publishRuntimeStatus(status: RuntimeStatus) {
@@ -206,16 +240,31 @@ function startHost(window: BrowserWindow) {
     if (message.ok) request.resolve(message.result);
     else request.reject(new Error(message.error ?? "PiHost request failed"));
   });
-  host.on("exit", () => {
-    hostAlive = false;
-    host = undefined;
-    publishRuntimeStatus("disconnected");
-    for (const request of pending.values()) {
-      clearTimeout(request.timer);
-      request.reject(new Error("PiHost disconnected"));
-    }
-    pending.clear();
+  host.on("error", (error) => {
+    console.error("PiHost process error", error);
+    if (hostAlive) teardownHost("PiHost process error");
   });
+  host.on("exit", () => {
+    teardownHost("PiHost exited");
+  });
+}
+
+// Reject every pending request and reset the Host so a later restart can
+// fork a fresh PiHost. `reason` is only logged here; the runtime status event
+// already tells the Renderer the Host is gone.
+function teardownHost(reason: string) {
+  if (!hostAlive && !host) return;
+  console.warn(`[PiHost] ${reason}`);
+  const previous = host;
+  hostAlive = false;
+  host = undefined;
+  previous?.kill();
+  publishRuntimeStatus("disconnected");
+  for (const request of pending.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error("PiHost disconnected"));
+  }
+  pending.clear();
 }
 
 function requestHost(command: PiHostRequest["command"], payload?: unknown) {
@@ -254,6 +303,12 @@ function registerIpcHandlers() {
   });
   ipcMain.handle("app:set-confirm-close", (_event, enabled: boolean) => {
     confirmCloseBeforeQuit = Boolean(enabled);
+  });
+  ipcMain.handle("app:restart-host", async () => {
+    teardownHost("restart requested");
+    if (!hostWindow) return;
+    startHost(hostWindow);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
   });
   ipcMain.handle("app:quit", () => { app.quit(); });
   ipcMain.handle("runtime:status", () => hostStatus);

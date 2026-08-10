@@ -94,7 +94,7 @@ Currently supported:
 11. Authenticate locally with Provider API keys/OAuth.
 12. Switch Chinese/English and light/dark themes.
 13. Use Steering/Follow-up queues, batch mode, and the queue panel.
-14. Use TanStack Virtual for long sessions, caching message panes, scroll positions, and measurement snapshots per Session.
+14. Use a plain document-flow list with earlier-message folding for long sessions (only the most recent 200 messages stay mounted; older ones fold behind a "show earlier" button), caching message panes, scroll positions, and follow state per Session.
 15. Desktop mappings of `/copy`, `/share`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`; `/share` requires a local `gh` CLI.
 16. Persist precise per-run start/end times in Pi Session custom entries so "processed" durations stay consistent across restarts.
 

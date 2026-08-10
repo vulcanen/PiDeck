@@ -4,9 +4,12 @@ const NOTICE_VISIBLE_MS = 3_400;
 const NOTICE_EXIT_MS = 220;
 const NOTICE_MAX = 4;
 
+export type NoticeKind = "info" | "error";
+
 interface NoticeItem {
   id: number;
   message: string;
+  kind: NoticeKind;
   closing: boolean;
 }
 
@@ -16,6 +19,8 @@ export function useNotice() {
   const timersRef = useRef<Map<number, number>>(new Map());
 
   function dismiss(id: number) {
+    const existing = timersRef.current.get(id);
+    if (existing) window.clearTimeout(existing);
     setNotices((current) => current.map((item) => item.id === id ? { ...item, closing: true } : item));
     const exitTimer = window.setTimeout(() => {
       timersRef.current.delete(id);
@@ -24,11 +29,15 @@ export function useNotice() {
     timersRef.current.set(id, exitTimer);
   }
 
-  function showNotice(message: string) {
+  // Errors stay until dismissed so the user can read and act on them; info
+  // notices auto-dismiss like before.
+  function showNotice(message: string, kind: NoticeKind = "info") {
     const id = ++counterRef.current;
-    setNotices((current) => [...current, { id, message, closing: false }].slice(-NOTICE_MAX));
-    const visibleTimer = window.setTimeout(() => dismiss(id), NOTICE_VISIBLE_MS);
-    timersRef.current.set(id, visibleTimer);
+    setNotices((current) => [...current, { id, message, kind, closing: false }].slice(-NOTICE_MAX));
+    if (kind === "info") {
+      const visibleTimer = window.setTimeout(() => dismiss(id), NOTICE_VISIBLE_MS);
+      timersRef.current.set(id, visibleTimer);
+    }
   }
 
   useEffect(() => {
@@ -36,5 +45,5 @@ export function useNotice() {
     return () => { timers.forEach((timer) => window.clearTimeout(timer)); timers.clear(); };
   }, []);
 
-  return { notices, showNotice };
+  return { notices, showNotice, dismissNotice: dismiss };
 }

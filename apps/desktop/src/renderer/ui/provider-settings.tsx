@@ -89,10 +89,24 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
     }
     else if (event?.type === "notify" && event.event?.type === "auth_url") {
       setAuthUrl(null); setAuthNotice(null);
-      if (event.event.url) void window.pideck.providers.openAuthUrl(event.event.url).catch(() => undefined);
+      if (event.event.url) {
+        const url = String(event.event.url);
+        setAuthUrl(url);
+        void window.pideck.providers.openAuthUrl(url).catch((error) => {
+          // Auto-open failed (no default browser, shell error, etc.): keep the
+          // URL visible so the user can copy or retry it manually.
+          setAuthNotice(`${t.authUrlAutoOpenFailed}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     } else if (event?.type === "notify" && event.event?.type === "device_code") {
       setAuthUrl(null); setAuthNotice(null);
-      if (event.event.verificationUri) void window.pideck.providers.openAuthUrl(event.event.verificationUri).catch(() => undefined);
+      if (event.event.verificationUri) {
+        const url = String(event.event.verificationUri);
+        setAuthUrl(url);
+        void window.pideck.providers.openAuthUrl(url).catch((error) => {
+          setAuthNotice(`${t.authUrlAutoOpenFailed}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     }
   }), [language]);
 

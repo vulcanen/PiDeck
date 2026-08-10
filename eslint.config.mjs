@@ -1,6 +1,7 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
 
 // Baseline only: catches real bugs (unused vars, fallthrough, unreachable
 // code) without rewriting existing style. Tighten rules incrementally;
@@ -26,6 +27,16 @@ export default tseslint.config(
   {
     files: ["apps/desktop/src/renderer/**/*"],
     languageOptions: { globals: { ...globals.browser } },
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      // Recommended set minus the aggressive refs/set-state-in-effect rules:
+      // reading refs during render and effect-driven setState are established
+      // patterns here and reworking them is a separate, behavior-bearing change.
+      "react-hooks/exhaustive-deps": "warn",
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/refs": "off",
+      "react-hooks/set-state-in-effect": "off",
+    },
   },
   {
     // CommonJS entry points legitimately use require().

@@ -45,7 +45,7 @@ Main 只负责：
 - 创建和销毁 BrowserWindow（`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`）。
 - 启动、监听和停止 PiHost。
 - 在 Renderer IPC 与 PiHost 请求之间做编排。
-- 为请求设置超时（默认 60s；`providers.login`、`sessions.share` 15min，`agent.prompt` 与 `packages.*` 10min），处理 Host 断开。
+- 为请求设置超时（默认 60s；`providers.login`、`sessions.share` 15min，`packages.*` 10min；`agent.prompt` 不设超时——其完成由 `agent_settled` 事件标示，而非 RPC 响应），处理 Host 断开。
 - 通过系统浏览器打开经过协议校验的 HTTP(S) URL，并拒绝窗口内新开链接。
 - 在 Electron `userData/projects.json` 中记录项目目录引用、隐藏引用及其显示顺序。
 - 构建应用菜单并按 `app:set-language` 切换菜单语言，文案取自 `@pideck/i18n`。

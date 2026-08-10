@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ExtensionUiRequest, ModelSummary } from "@pideck/contracts";
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
+import { isDefaultSessionTitle } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon, useDialogFocus } from "@pideck/ui-system";
 import type { PreviewImage } from "../types";
@@ -33,7 +34,9 @@ function ResumeSessionDialog({ language, project, tasks, activeTaskId, onSelect,
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose);
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-title"><span className="eyebrow">Pi</span><h2 id="resume-title">{t.resumeTitle}</h2><p>{t.resumeDescription}</p>{!project || tasks.length === 0 ? <p>{t.noSessions}</p> : <div className="resume-list">{tasks.map((task) => <button type="button" className={`resume-row${task.id === activeTaskId ? " selected" : ""}`} key={task.id} onClick={() => onSelect(task)}><strong>{task.title}</strong><small>{task.model}</small></button>)}</div>}<div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button></div></div></div>;
+  const displayTitle = (title: string) => isDefaultSessionTitle(title) ? t.newTaskName : title;
+  const displayModel = (model: string) => model && model !== "No model selected" ? model : t.noModelSelected;
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-title"><span className="eyebrow">Pi</span><h2 id="resume-title">{t.resumeTitle}</h2><p>{t.resumeDescription}</p>{!project || tasks.length === 0 ? <p>{t.noSessions}</p> : <div className="resume-list">{tasks.map((task) => <button type="button" className={`resume-row${task.id === activeTaskId ? " selected" : ""}`} key={task.id} onClick={() => onSelect(task)}><strong>{displayTitle(task.title)}</strong><small>{displayModel(task.model)}</small></button>)}</div>}<div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button></div></div></div>;
 }
 
 function TrustDialog({ language, onResolve, onClose }: { language: Language; onResolve: (trusted: boolean) => void; onClose: () => void }) {

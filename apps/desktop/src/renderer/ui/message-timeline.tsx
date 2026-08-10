@@ -268,7 +268,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   if (items.length === 0 && !footer) return null;
   return <div className="timeline-list" ref={hostRef}>
     {hiddenCount > 0 && <button type="button" className="timeline-show-earlier" onClick={showEarlier}>
-      {language === "zh" ? `查看更早的 ${hiddenCount} 条消息` : `Show ${hiddenCount} earlier message${hiddenCount === 1 ? "" : "s"}`}
+      {copy[language].showEarlierMessages(hiddenCount)}
     </button>}
     {visibleIndexes.map((index) => <div key={getItemKey(index)} className="timeline-item">{renderItem(index)}</div>)}
     {footer ? <div className="timeline-item">{footer}</div> : null}

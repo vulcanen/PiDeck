@@ -599,6 +599,10 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .palette-empty { padding: 20px 10px 24px; color: var(--muted); font-size: 12px; }
 .toast-stack { position: fixed; right: 22px; bottom: 24px; z-index: var(--layer-toast); display: flex; flex-direction: column; gap: 8px; max-width: min(380px, calc(100vw - 44px)); pointer-events: none; }
 .toast { position: relative; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--text); color: var(--canvas); box-shadow: var(--shadow); font-size: 12px; animation: toast-in 240ms var(--motion) both; }
+.toast.toast-error { border-color: color-mix(in srgb, var(--red) 55%, var(--line-strong)); background: color-mix(in srgb, var(--red) 12%, var(--surface)); color: var(--text); pointer-events: auto; display: flex; align-items: center; gap: 10px; }
+.toast.toast-error .toast-message { flex: 1; overflow-wrap: anywhere; }
+.toast.toast-close { flex: none; padding: 3px; border-radius: 5px; color: var(--muted); background: transparent; display: inline-flex; align-items: center; justify-content: center; }
+.toast.toast-close:hover { color: var(--text); background: var(--surface-strong); }
 .toast.closing { animation: toast-out 220ms var(--motion) both; }
 .sidebar-backdrop { display: none; }
 .task-context-menu, .image-context-menu { position: fixed; z-index: var(--layer-modal); min-width: 166px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }

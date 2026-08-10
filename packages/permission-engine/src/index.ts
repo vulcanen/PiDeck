@@ -86,12 +86,23 @@ export class PermissionEngine {
 
   async beforeToolCall(taskId: string, context: any, previous: BeforeToolCall | undefined, signal?: AbortSignal): Promise<unknown> {
     const toolName = context.toolCall?.name ?? "unknown";
-    if (this.mode === "deny") return { block: true, reason: "PiDeck 权限模式已禁止工具调用。" };
+    if (this.mode === "deny") return { block: true, reason: "Permission mode blocks this tool call." };
     if (this.mode === "allow" || this.mode === "yolo") return undefined;
     const requestId = `${taskId}:${context.toolCall?.id ?? Date.now()}`;
     this.callbacks.emitApproval(requestId, taskId, toolName, context.args);
-    const allowed = await new Promise<boolean>((resolve) => this.approvalWaiters.set(requestId, resolve));
-    if (!allowed) return { block: true, reason: "PiDeck 用户拒绝了这次工具调用。" };
+    const allowed = await new Promise<boolean>((resolve) => {
+      const settled = (allow: boolean) => {
+        if (this.approvalWaiters.get(requestId) === settle) this.approvalWaiters.delete(requestId);
+        resolve(allow);
+      };
+      const settle = (allow: boolean) => settled(allow);
+      this.approvalWaiters.set(requestId, settle);
+      if (signal) {
+        if (signal.aborted) settle(false);
+        else signal.addEventListener("abort", () => settle(false), { once: true });
+      }
+    });
+    if (!allowed) return { block: true, reason: "Permission denied for this tool call." };
     return previous?.(context, signal);
   }
 
@@ -100,6 +111,23 @@ export class PermissionEngine {
     if (!resolve) throw new Error(`Unknown approval request: ${requestId}`);
     this.approvalWaiters.delete(requestId);
     resolve(decision === "allow-once");
+  }
+
+  /** Deny any pending approval/UI waits belonging to a session being torn down so its Promise never hangs. */
+  dispose(taskId: string): void {
+    const prefix = `${taskId}:`;
+    for (const [requestId, resolve] of this.approvalWaiters.entries()) {
+      if (requestId.startsWith(prefix)) {
+        this.approvalWaiters.delete(requestId);
+        resolve(false);
+      }
+    }
+    for (const [requestId, resolve] of this.uiWaiters.entries()) {
+      if (requestId.startsWith(prefix)) {
+        this.uiWaiters.delete(requestId);
+        resolve(undefined);
+      }
+    }
   }
 
   resolveUi(requestId: string, value: string | boolean | undefined): void {

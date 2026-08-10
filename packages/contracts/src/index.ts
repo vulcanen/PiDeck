@@ -145,6 +145,7 @@ export interface PideckBridge {
     setLanguage(language: AppLanguage): Promise<void>;
     quit(): Promise<void>;
     setConfirmClose(enabled: boolean): Promise<void>;
+    restartHost(): Promise<void>;
     onConfirmCloseChanged(listener: (enabled: boolean) => void): void;
     offConfirmCloseChanged(listener: (enabled: boolean) => void): void;
   };
@@ -232,6 +233,7 @@ export interface PiDeckRuntimeEvent {
 export type PiHostCommand =
   | "runtime.status"
   | "app.changelog"
+  | "app.info"
   | "projects.list"
   | "projects.setTrust"
   | "sessions.list"

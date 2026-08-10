@@ -8,6 +8,7 @@ const bridge: PideckBridge = {
     setLanguage: (language: AppLanguage) => ipcRenderer.invoke("app:set-language", language),
     quit: () => ipcRenderer.invoke("app:quit"),
     setConfirmClose: (enabled: boolean) => ipcRenderer.invoke("app:set-confirm-close", enabled),
+    restartHost: () => ipcRenderer.invoke("app:restart-host"),
     onConfirmCloseChanged: (listener: (enabled: boolean) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => listener(enabled);
       confirmCloseListeners.set(listener, handler);

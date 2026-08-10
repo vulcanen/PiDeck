@@ -494,6 +494,16 @@ function changelogPath(): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 
+function sdkVersion(): string | null {
+  try {
+    const moduleDir = path.dirname(resolvePiModule());
+    const packageJson = JSON.parse(readFileSync(path.join(moduleDir, "..", "package.json"), "utf8")) as { version?: string };
+    return packageJson.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "followUp"): unknown {
   if (event.type === "message_update") {
     const streamEvent = event.assistantMessageEvent ?? {};
@@ -603,41 +613,49 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       signal,
     );
     session.subscribe((event: any) => {
-      if (event.type === "queue_update" && !queueRebuilds.has(taskId)) {
-        recordQueueDeliveryHints(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
-        reconcileQueuedPromptImages(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
-      }
-      // A delivery hint is only meaningful until the current agent run is
-      // settled. If Pi aborts or drops a queued message without emitting its
-      // message_start event, discard the hint so a later identical prompt
-      // cannot inherit the wrong steering/follow-up classification.
-      if (event.type === "agent_settled") queueDeliveryHints.delete(taskId);
-      if (event.type === "agent_start") executionGroupStarts.set(taskId, Date.now());
-      if (event.type === "agent_settled") {
-        finishExecutionGroup(session, taskId, Date.now());
-      }
-      if (event.type === "message_start" && event.message?.role === "user") {
-        const queueDelivery = consumeQueueDeliveryHint(taskId, queueMessageText(event.message));
-        if (queueDelivery === "followUp") {
-          const boundary = Date.now();
-          finishExecutionGroup(session, taskId, boundary);
-          executionGroupStarts.set(taskId, boundary);
-        } else if (!executionGroupStarts.has(taskId)) {
-          executionGroupStarts.set(taskId, Date.now());
+      try {
+        if (event.type === "queue_update" && !queueRebuilds.has(taskId)) {
+          recordQueueDeliveryHints(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
+          reconcileQueuedPromptImages(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
         }
-        emit(taskId, normalizeAgentEvent(event, queueDelivery));
-        return;
+        // A delivery hint is only meaningful until the current agent run is
+        // settled. If Pi aborts or drops a queued message without emitting its
+        // message_start event, discard the hint so a later identical prompt
+        // cannot inherit the wrong steering/follow-up classification.
+        if (event.type === "agent_settled") queueDeliveryHints.delete(taskId);
+        if (event.type === "agent_start") executionGroupStarts.set(taskId, Date.now());
+        if (event.type === "agent_settled") {
+          finishExecutionGroup(session, taskId, Date.now());
+        }
+        if (event.type === "message_start" && event.message?.role === "user") {
+          const queueDelivery = consumeQueueDeliveryHint(taskId, queueMessageText(event.message));
+          if (queueDelivery === "followUp") {
+            const boundary = Date.now();
+            finishExecutionGroup(session, taskId, boundary);
+            executionGroupStarts.set(taskId, boundary);
+          } else if (!executionGroupStarts.has(taskId)) {
+            executionGroupStarts.set(taskId, Date.now());
+          }
+          emit(taskId, normalizeAgentEvent(event, queueDelivery));
+          return;
+        }
+        emit(taskId, normalizeAgentEvent(event));
+      } catch (error) {
+        console.error(`PiHost agent event handler failed for ${taskId}`, error);
       }
-      emit(taskId, normalizeAgentEvent(event));
     });
     session.subscribe((event: any) => {
-      if (event.type === "message_end") {
-        // AgentSession persists the message immediately after notifying its
-        // subscribers. Defer the snapshot one tick so the renderer receives
-        // the completed assistant reply before the next queued message starts.
-        setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) }), 0);
-      } else if (event.type === "agent_settled") {
-        emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
+      try {
+        if (event.type === "message_end") {
+          // AgentSession persists the message immediately after notifying its
+          // subscribers. Defer the snapshot one tick so the renderer receives
+          // the completed assistant reply before the next queued message starts.
+          setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) }), 0);
+        } else if (event.type === "agent_settled") {
+          emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
+        }
+      } catch (error) {
+        console.error(`PiHost message snapshot handler failed for ${taskId}`, error);
       }
     });
     agentSessions.set(taskId, session);
@@ -679,6 +697,10 @@ async function handle(request: PiHostRequest): Promise<void> {
         return;
       case "app.changelog": {
         send({ id: request.id, ok: true, result: existsSync(changelogPath()) ? readFileSync(changelogPath(), "utf8") : "" });
+        return;
+      }
+      case "app.info": {
+        send({ id: request.id, ok: true, result: { version: sdkVersion() } });
         return;
       }
       case "projects.list": {
@@ -816,10 +838,10 @@ async function handle(request: PiHostRequest): Promise<void> {
           ok: true,
           result: {
             id: sessionId,
-            title: payload?.name ?? "未命名任务",
+            title: payload?.name ?? "Untitled task",
             projectId: cwd,
             state: "idle",
-            model: "未选择模型",
+            model: "No model selected",
             updatedAt: new Date().toISOString(),
           },
         });
@@ -1057,18 +1079,21 @@ async function handle(request: PiHostRequest): Promise<void> {
         const sessionPath = sessionFiles.get(payload.taskId);
         const session = agentSessions.get(payload.taskId);
         if (session?.isStreaming) await session.abort();
+        await session?.dispose?.();
         if (sessionPath && existsSync(sessionPath)) await unlink(sessionPath);
         sessionFiles.delete(payload.taskId);
         titledSessions.delete(payload.taskId);
         sessionManagers.delete(payload.taskId);
         agentSessions.delete(payload.taskId);
         agentSessionPackageRevisions.delete(payload.taskId);
+        agentSessionRevisions.delete(payload.taskId);
         queuedPromptImages.delete(payload.taskId);
         queueDeliveryHints.delete(payload.taskId);
         queueMutationLocks.delete(payload.taskId);
         queueRebuilds.delete(payload.taskId);
         agentRunReservations.delete(payload.taskId);
         executionGroupStarts.delete(payload.taskId);
+        permissionEngine.dispose(payload.taskId);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -1390,3 +1415,15 @@ parentPort?.on("message", (event: { data: unknown }) => void handle(event.data a
 process.on("message", (request: PiHostRequest) => void handle(request));
 parentPort?.postMessage({ type: "runtime.status", payload: "connected" });
 process.send?.({ type: "runtime.status", payload: "connected" });
+
+// Last-resort guards: an exception inside an SDK callback (e.g. session
+// subscribers) would otherwise terminate the host without telling Main, and
+// the app would sit at "disconnected" forever. Log the failure and keep the
+// process alive so Main's restart flow has a clear reason to trigger.
+process.on("uncaughtException", (error) => {
+  try { process.send?.({ type: "runtime.status", payload: "disconnected", error: error instanceof Error ? error.message : String(error) }); } catch { /* ignore */ }
+  console.error("PiHost uncaught exception", error);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("PiHost unhandled rejection", reason);
+});

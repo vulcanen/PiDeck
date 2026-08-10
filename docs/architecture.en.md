@@ -45,7 +45,7 @@ Main is only responsible for:
 - Creating and destroying the BrowserWindow (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`).
 - Starting, listening to, and stopping PiHost.
 - Orchestrating between Renderer IPC and PiHost requests.
-- Setting timeouts for requests (default 60s; `providers.login`, `sessions.share` 15min; `agent.prompt` and `packages.*` 10min) and handling Host disconnects.
+- Setting timeouts for requests (default 60s; `providers.login`, `sessions.share` 15min; `packages.*` 10min; `agent.prompt` unbounded — its completion is signaled by `agent_settled`, not the RPC response) and handling Host disconnects.
 - Opening protocol-validated HTTP(S) URLs in the system browser and rejecting in-window navigation.
 - Recording project directory references, hidden references, and their display order in Electron `userData/projects.json`.
 - Building the application menu and switching menu language via `app:set-language`; copy comes from `@pideck/i18n`.

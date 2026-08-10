@@ -94,7 +94,7 @@ packages/
 11. 使用 Provider API Key/OAuth 本地认证。
 12. 切换中文/英文和浅色/深色主题。
 13. 使用 Steering / Follow-up 队列、批处理模式和队列消息面板。
-14. 对长会话使用 TanStack Virtual，并按 Session 缓存消息 pane、滚动位置和测量快照。
+14. 对长会话使用"普通文档流 + 早期消息折叠"（只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后），并按 Session 缓存消息 pane、滚动位置和 follow 状态。
 15. 使用 `/copy`、`/share`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models` 的桌面映射；`/share` 依赖本机 `gh` CLI。
 16. 在 Pi Session 自定义 entry 中持久化每次 Agent 运行的精确起止时间，关闭并重启后保持“已处理”耗时一致。
 

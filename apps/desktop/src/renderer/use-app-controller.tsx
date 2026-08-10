@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
-import { deriveSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
+import { deriveSessionTitle, isDefaultSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
 import { copyText, useDialogFocus } from "@pideck/ui-system";
@@ -83,7 +83,7 @@ export function useAppController() {
   const [pendingProjectRemove, setPendingProjectRemove] = useState<ProjectSummary | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [removingProjectCwd, setRemovingProjectCwd] = useState<string | null>(null);
-  const { notices, showNotice } = useNotice();
+  const { notices, showNotice, dismissNotice } = useNotice();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [projectSwitching, setProjectSwitching] = useState(false);
@@ -271,8 +271,7 @@ export function useAppController() {
     setInitialLoading(true);
     setLoadError(null);
     try {
-      const discoveredProjects = await window.pideck.projects.list(projectCwd || undefined);
-      setProjects(discoveredProjects);
+      const discoveredProjects = await window.pideck.projects.list(projectCwd || undefined);      setProjects(discoveredProjects);
       const selectedProject = discoveredProjects.find((project) => project.cwd === projectCwd) ?? discoveredProjects[0];
       if (!selectedProject) {
         clearProjectState();
@@ -295,6 +294,21 @@ export function useAppController() {
     } catch (error) {
       setLoadError(`${t.initialLoadFailed}: ${error instanceof Error ? error.message : String(error)}`);
       setInitialLoading(false);
+    }
+  }
+
+  async function restartHost() {
+    // PiHost crashed or was killed; ask Main to fork a fresh one, then reload
+    // the workspace once it is back. Without this the retry button can never
+    // recover from a disconnected host.
+    setRuntimeStatus("starting");
+    setLoadError(null);
+    try {
+      await window.pideck.app.restartHost();
+      await loadInitialData();
+    } catch (error) {
+      setLoadError(`${t.initialLoadFailed}: ${error instanceof Error ? error.message : String(error)}`);
+      setRuntimeStatus("disconnected");
     }
   }
 
@@ -610,7 +624,7 @@ export function useAppController() {
       }
       showNotice(t.sessionDeleted);
     } catch (error) {
-      showNotice(`${t.sessionDeleteFailed}: ${error instanceof Error ? error.message : String(error)}`);
+      showNotice(`${t.sessionDeleteFailed}: ${error instanceof Error ? error.message : String(error)}`, "error");
     } finally { setDeletingTaskId(null); }
   }
 
@@ -761,7 +775,7 @@ export function useAppController() {
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
     patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", activity: continuingExecution ? activeTaskUi?.activity ?? [] : [], completedActivity: activeTaskUi?.completedActivity ?? [] });
     const taskTitle = deriveSessionTitle(text);
-    const shouldNameTask = !task.title || task.title === copy.zh.newTaskName || task.title === copy.en.newTaskName;
+    const shouldNameTask = isDefaultSessionTitle(task.title);
     const updatedAt = new Date().toISOString();
     updateTaskLists((current) => sortTasksByUpdatedAt(current.map((item) => item.id === task.id ? { ...item, title: shouldNameTask ? taskTitle || item.title : item.title, state: "running", updatedAt } : item)));
     setActiveTask((current) => current?.id === task.id ? { ...current, title: shouldNameTask ? taskTitle || current.title : current.title, state: "running", updatedAt } : current);
@@ -782,8 +796,8 @@ export function useAppController() {
             const clean = (llmTitle ?? "").trim();
             if (!clean) return;
             // Only upgrade if the user has not manually renamed in the meantime.
-            updateTaskLists((current) => current.map((item) => item.id === task.id && (item.title === fallbackTitle || item.title === copy.zh.newTaskName || item.title === copy.en.newTaskName) ? { ...item, title: clean } : item));
-            setActiveTask((current) => current?.id === task.id && (current.title === fallbackTitle || current.title === copy.zh.newTaskName || current.title === copy.en.newTaskName) ? { ...current, title: clean } : current);
+            updateTaskLists((current) => current.map((item) => item.id === task.id && (item.title === fallbackTitle || isDefaultSessionTitle(item.title)) ? { ...item, title: clean } : item));
+            setActiveTask((current) => current?.id === task.id && (current.title === fallbackTitle || isDefaultSessionTitle(current.title)) ? { ...current, title: clean } : current);
             void window.pideck.sessions.rename(task.id, clean, projectCwd).catch(() => {});
           })
           .catch(() => {});
@@ -804,7 +818,7 @@ export function useAppController() {
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
       if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
       updateTaskLists((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
-      showNotice(message);
+      showNotice(message, "error");
     }
   }
 
@@ -1030,13 +1044,13 @@ export function useAppController() {
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, searchQuery, setSearchQuery, createTask, createTaskForProject, chooseProjectDirectory,
     openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions,
-    loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
+    loadInitialData, restartHost, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities,
     composerProps, jumpToLatest, sendPrompt, abortActive,
     paletteOpen, paletteCommands, composer, updateComposer, compactSession, exportSession,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,
     importSession, renameSession, resolveTrust, saveScopedModels,
-    notices, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,
+    notices, dismissNotice, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,
     removingProjectCwd, extensionUiRequest, packagesOpen, settingsOpen, providerFocus, previewImage,
     imageContextMenu, setPendingDelete, setPendingProjectRemove, setContextMenu, setProjectContextMenu,
     setPackagesOpen, setSettingsOpen, setProviderFocus, setPreviewImage, setImageContextMenu, setPaletteOpen,

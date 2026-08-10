@@ -123,5 +123,5 @@ export function sessionModelLabel(sessionInfo: any, sdk: PiSdk): string {
   } catch {
     // Older or partially written session files may not have a model entry.
   }
-  return "未选择模型";
+  return "No model selected";
 }

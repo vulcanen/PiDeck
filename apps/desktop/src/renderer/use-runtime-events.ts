@@ -49,8 +49,13 @@ export function useRuntimeEvents({
   setTaskUi, setMessageLoads, setContextUsage, setActiveTask, refreshWorkspace,
   onQueueActivity,
 }: RuntimeEventsOptions) {
-  useEffect(() => window.pideck.events.subscribe((runtimeEvent: PiDeckRuntimeEvent) => {
-    if (runtimeEvent.type === "runtime.status") {
+  // Context usage only belongs to the conversation currently on screen; a
+  // background task in another project must not overwrite it. Fetching per
+  // event is also cheap to skip: refresh only on boundaries worth reflecting.
+  const refreshContextUsage = (taskId: string) => {
+    void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+  };
+  useEffect(() => window.pideck.events.subscribe((runtimeEvent: PiDeckRuntimeEvent) => {    if (runtimeEvent.type === "runtime.status") {
       const status = runtimeEvent.payload;
       if (status === "connected" || status === "starting" || status === "disconnected") setRuntimeStatus(status);
       return;
@@ -103,7 +108,7 @@ export function useRuntimeEvents({
       });
       const updatedAt = new Date().toISOString();
       updateTaskLists((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "running", updatedAt } : task)));
-      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+      if (taskId === activeTaskId) refreshContextUsage(taskId);
     } else if (event?.type === "message_start" && event.message?.role === "user") {
       const queueDelivery = event.queueDelivery === "steer" ? "steer" : "followUp";
       discardStreamDeltas(taskId);
@@ -126,8 +131,10 @@ export function useRuntimeEvents({
       });
     } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
     else if (event?.type === "compaction_start") patchTaskUi(taskId, { isCompacting: true, workingPhase: "compacting", toolName: undefined });
-    else if (event?.type === "compaction_end") { patchTaskUi(taskId, { isCompacting: false, workingPhase: "thinking" }); void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined); }
-    else if (event?.type === "message_start" || event?.type === "message_end") void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+    else if (event?.type === "compaction_end") { patchTaskUi(taskId, { isCompacting: false, workingPhase: "thinking" }); if (taskId === activeTaskId) refreshContextUsage(taskId); }
+    else if (event?.type === "message_start" || event?.type === "message_end") {
+      if (taskId === activeTaskId) refreshContextUsage(taskId);
+    }
     else if (event?.type === "message_update" && event.stream?.type === "thinking_delta" && event.stream.delta) {
       updateActivity(taskId, (steps) => { const last = steps[steps.length - 1]; if (last?.kind === "thinking" && !last.endedAt) return [...steps.slice(0, -1), { ...last, detail: `${last.detail ?? ""}${event.stream.delta}` }]; return [...steps, { id: `${taskId}:thinking:${Date.now()}`, kind: "thinking", label: copy[language].executionThinking, detail: event.stream.delta, startedAt: Date.now() }]; });
       patchTaskUi(taskId, { workingPhase: "thinking" });
@@ -139,7 +146,7 @@ export function useRuntimeEvents({
       updateActivity(taskId, (steps) => [...steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: startedAt } : step), { id: event.toolCallId ?? `${taskId}:tool:${startedAt}`, kind: "tool", label: event.toolName ?? copy[language].toolResult, args: event.args, startedAt }]);
       patchTaskUi(taskId, { workingPhase: "tool", toolName: event.toolName });
     } else if (event?.type === "tool_execution_update") updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, result: event.partialResult } : step));
-    else if (event?.type === "tool_execution_end") { updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step)); patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined }); void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined); }
+    else if (event?.type === "tool_execution_end") { updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step)); patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined }); if (taskId === activeTaskId) refreshContextUsage(taskId); }
     else if (event?.type === "session_info_changed" && typeof event.name === "string" && event.name.trim()) { const title = event.name.trim(); updateTaskLists((current) => current.map((task) => task.id === taskId ? { ...task, title } : task)); setActiveTask((current) => current?.id === taskId ? { ...current, title } : current); }
     else if (event?.type === "message.snapshot") { discardStreamDeltas(taskId); setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], Array.isArray(event.messages) ? event.messages : [], true) })); setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } })); patchTaskUi(taskId, { streamText: "" }); }
     else if (event?.type === "agent_end") {
@@ -171,7 +178,7 @@ export function useRuntimeEvents({
         const previous = current[taskId] ?? createDefaultTaskUiState();
         return { ...current, [taskId]: { ...previous, completedActivity: applyPersistedRunDurations(previous.completedActivity, records) } };
       })).catch(() => undefined);
-      void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
+      if (taskId === activeTaskId) refreshContextUsage(taskId);
       void refreshWorkspace();
       updateTaskLists((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "idle", updatedAt: new Date().toISOString() } : task)));
     }
