@@ -113,7 +113,6 @@ export function useRuntimeEvents({
       if (event.queueDelivery && taskId === activeTaskId) onQueueActivity();
       setTaskUi((current) => {
         const previous = current[taskId] ?? { ...createDefaultTaskUiState(), isSending: true };
-        const isSteeringMessage = queueDelivery === "steer";
         const hasCompletedWork = previous.activity.some((step) => step.endedAt || step.kind === "tool" || Boolean(step.detail));
         const startedAt = Date.now();
         // A steering message opens a *new* reasoning round inside the same run.
