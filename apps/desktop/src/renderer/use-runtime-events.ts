@@ -148,11 +148,24 @@ export function useRuntimeEvents({
     } else if (event?.type === "tool_execution_update") updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, result: event.partialResult } : step));
     else if (event?.type === "tool_execution_end") { updateActivity(taskId, (steps) => steps.map((step) => step.id === event.toolCallId ? { ...step, endedAt: Date.now(), result: event.result, isError: Boolean(event.isError) } : step)); patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined }); if (taskId === activeTaskId) refreshContextUsage(taskId); }
     else if (event?.type === "session_info_changed" && typeof event.name === "string" && event.name.trim()) { const title = event.name.trim(); updateTaskLists((current) => current.map((task) => task.id === taskId ? { ...task, title } : task)); setActiveTask((current) => current?.id === taskId ? { ...current, title } : current); }
-    else if (event?.type === "message.snapshot") { discardStreamDeltas(taskId); setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], Array.isArray(event.messages) ? event.messages : [], true) })); setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } })); patchTaskUi(taskId, { streamText: "" }); }
+    else if (event?.type === "message.snapshot") {
+      discardStreamDeltas(taskId);
+      const snapshot = Array.isArray(event.messages) ? event.messages : [];
+      // Compaction snapshots carry `replace` because Pi rewrote its message
+      // list in place (older turns folded into a compactionSummary). Merge
+      // semantics would keep the folded-away messages after the summary and
+      // break the timeline order; swapping is the only correct interpretation.
+      setMessagesByTask((current) => ({ ...current, [taskId]: event.replace ? snapshot : mergeMessageSnapshot(current[taskId] ?? [], snapshot, true) }));
+      setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
+      patchTaskUi(taskId, { streamText: "" });
+    }
     else if (event?.type === "agent_end") {
       discardStreamDeltas(taskId);
+      // PiHost emits authoritative message snapshots on message_end and
+      // agent_settled. `agent_end.messages` is the loop's new-message batch,
+      // not a second canonical transcript; merging both paths duplicates
+      // replies when compaction has rebuilt message objects without ids.
       if (Array.isArray(event.messages) && event.messages.length > 0) {
-        setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], event.messages) }));
         setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } }));
       }
       updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt: Date.now() }));

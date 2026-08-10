@@ -653,6 +653,14 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
           setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) }), 0);
         } else if (event.type === "agent_settled") {
           emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
+        } else if (event.type === "compaction_end") {
+          // Compaction rewrites agent.state.messages in place (older entries
+          // fold into a compactionSummary message). Push the rewritten list
+          // with a replace marker so the renderer swaps its whole timeline
+          // instead of merging: the folded-away messages are gone from Pi and
+          // must not linger, and merge-based retention of "unmatched previous"
+          // would keep pre-compaction turns after the compaction summary.
+          emit(taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(session.messages) });
         }
       } catch (error) {
         console.error(`PiHost message snapshot handler failed for ${taskId}`, error);

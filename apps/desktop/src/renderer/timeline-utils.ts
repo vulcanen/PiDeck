@@ -97,6 +97,7 @@ export function restoreCompletedActivity(messages: any[], language: Language, re
   };
 
   for (const message of messages) {
+    if (message?.role === "compactionSummary") continue;
     if (message?.role === "user" && turn.length && hasAssistantInTurn) flushTurn();
     turn.push(message);
     if (message?.role === "assistant") hasAssistantInTurn = true;
@@ -167,6 +168,10 @@ export function buildMessageTimelineItems({
   let hasAssistantInLogicalTurn = false;
   let hasMessageInLogicalTurn = false;
   for (const message of messages) {
+    // Compaction summary messages are Pi's context-fold bookkeeping, not a
+    // user turn. Excluding them keeps turn grouping and activity alignment
+    // correct after an auto/manual compaction rewrites the message list.
+    if (message?.role === "compactionSummary") continue;
     const isSteeringMessage = message?.role === "user" && steeringKeys.has(messageIdentity(message) ?? "");
     if (message?.role === "user") {
       if (!hasMessageInLogicalTurn) {
@@ -246,6 +251,10 @@ export function buildMessageTimelineItems({
   };
 
   for (const message of messages) {
+    // Compaction summary entries carry no user/assistant content and must not
+    // open or extend a turn; the summary itself is rendered by PiDeck as part
+    // of the execution activity, not as a timeline message.
+    if (message?.role === "compactionSummary") continue;
     // Steering messages are delivered inside the current agent run. Keep
     // them in the same timeline turn so the run has one shared summary.
     const isSteeringMessage = message?.role === "user" && steeringKeys.has(messageIdentity(message) ?? "");
