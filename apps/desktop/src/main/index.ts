@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, Tray, type MenuItemConstructorOptions } from "electron";
 import { fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -41,6 +41,7 @@ const dockIconPath = toUnpackedPath(path.join(__dirname, "../../assets/pideck-do
 const nativeRequire = createRequire(__filename);
 type MiniwindowAddon = { installMiniwindowCustomization(handle: Buffer, iconPath: string): boolean };
 let miniwindowAddon: MiniwindowAddon | undefined;
+let tray: Tray | undefined;
 const pending = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -391,6 +392,7 @@ function createWindow() {
   window.on("closed", () => {
     if (hostWindow === window) hostWindow = undefined;
   });
+  createTray();
   // Intercept the close request so we can confirm before quitting. Without this
   // guard the window would destroy itself and `before-quit` would tear down the
   // host mid-task. We only act on the last window; on macOS the app stays alive
@@ -404,8 +406,8 @@ function createWindow() {
     // after the user responds, by which point we decide whether to destroy.
     void dialog.showMessageBox(window, {
       type: "question",
-      buttons: [t.confirmCloseCancel, t.confirmCloseExit],
-      defaultId: 1,
+      buttons: [t.confirmCloseCancel, t.confirmCloseMinimize, t.confirmCloseExit],
+      defaultId: 2,
       cancelId: 0,
       message: t.confirmCloseTitle,
       detail: t.confirmCloseBody,
@@ -413,15 +415,45 @@ function createWindow() {
       checkboxChecked: false,
       noLink: true,
     }).then(({ response, checkboxChecked }) => {
-      if (response !== 1) return;
       if (checkboxChecked) {
         confirmCloseBeforeQuit = false;
         window.webContents.send("app:confirm-close-changed", false);
       }
-      window.destroy();
-      if (BrowserWindow.getAllWindows().length === 0) app.quit();
+      if (response === 1) {
+        window.hide();
+      } else if (response === 2) {
+        window.destroy();
+        if (BrowserWindow.getAllWindows().length === 0) app.quit();
+      }
     });
   });
+}
+
+function createTray() {
+  if (process.platform === "darwin") return;
+  tray ??= new Tray(applicationIconPath);
+  tray.setToolTip("PiDeck");
+  const showWindow = () => {
+    const window = hostWindow ?? BrowserWindow.getAllWindows()[0];
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  };
+  tray.on("click", showWindow);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: copy[currentLanguage].workspace, click: showWindow },
+    { type: "separator" },
+    {
+      label: copy[currentLanguage].confirmCloseExit,
+      click: () => {
+        // Destroying first skips the close-confirm dialog, then quit tears down
+        // the host via `before-quit`.
+        hostWindow?.destroy();
+        if (BrowserWindow.getAllWindows().length === 0) app.quit();
+      },
+    },
+  ]));
 }
 
 app.whenReady().then(() => {
