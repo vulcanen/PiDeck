@@ -109,6 +109,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   background: color-mix(in srgb, var(--canvas) 94%, var(--surface));
   user-select: none;
 }
+.app-shell.platform-overlay .titlebar {
+  /* The native Windows controls are overlaid on the right edge. Reserve their
+     hit area so PiDeck actions never sit underneath the close button. */
+  padding-right: max(140px, calc(100vw - (env(titlebar-area-x, 0px) + env(titlebar-area-width, 100vw)) + 14px));
+}
+.app-shell.platform-overlay .titlebar-actions { -webkit-app-region: no-drag; }
 .app-shell.platform-macos .titlebar {
   padding-left: 78px;
 }

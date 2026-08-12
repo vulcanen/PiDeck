@@ -29,6 +29,7 @@ export function usePreferences() {
   useEffect(() => { localStorage.setItem("pideck.theme", themePreference); document.documentElement.style.colorScheme = theme; }, [theme, themePreference]);
   useEffect(() => { localStorage.setItem("pideck.confirmClose", confirmClose ? "true" : "false"); }, [confirmClose]);
   useEffect(() => { void window.pideck.app.setLanguage(language).catch(() => undefined); }, [language]);
+  useEffect(() => { void window.pideck.app.setWindowTheme(theme).catch(() => undefined); }, [theme]);
   useEffect(() => { void window.pideck.app.setConfirmClose(confirmClose).catch(() => undefined); }, [confirmClose]);
   // Main may ask us to persist "don't ask again" after the user ticks the
   // checkbox in the native close-confirm dialog.

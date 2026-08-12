@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage, QueueDelivery, QueueMode } from "@pideck/contracts";
+import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage, QueueDelivery, QueueMode, WindowTheme } from "@pideck/contracts";
 
 const confirmCloseListeners = new Map<(enabled: boolean) => void, (event: Electron.IpcRendererEvent, enabled: boolean) => void>();
 
 const bridge: PideckBridge = {
   app: {
     setLanguage: (language: AppLanguage) => ipcRenderer.invoke("app:set-language", language),
+    setWindowTheme: (theme: WindowTheme) => ipcRenderer.invoke("app:set-window-theme", theme),
     quit: () => ipcRenderer.invoke("app:quit"),
     setConfirmClose: (enabled: boolean) => ipcRenderer.invoke("app:set-confirm-close", enabled),
     restartHost: () => ipcRenderer.invoke("app:restart-host"),
@@ -40,7 +41,7 @@ const bridge: PideckBridge = {
     capabilities: (taskId?: string, cwd?: string) => ipcRenderer.invoke("sessions:capabilities", taskId, cwd),
     compact: (taskId: string, instructions?: string, cwd?: string) => ipcRenderer.invoke("sessions:compact", taskId, instructions, cwd),
     export: (taskId: string, format: "jsonl" | "html", cwd?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd),
-    import: (taskId: string | undefined, inputPath?: string, cwd?: string) => ipcRenderer.invoke("sessions:import", taskId, inputPath, cwd),
+    import: (taskId: string | undefined, cwd?: string) => ipcRenderer.invoke("sessions:import", taskId, cwd),
     rename: (taskId: string, name: string, cwd?: string) => ipcRenderer.invoke("sessions:rename", taskId, name, cwd),
     generateTitle: (taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => ipcRenderer.invoke("sessions:generateTitle", taskId, message, cwd, model),
     stats: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:stats", taskId, cwd),

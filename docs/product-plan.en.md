@@ -116,7 +116,7 @@ Currently supported:
 `packages/contracts/src/index.ts` is the single authoritative definition. Main capabilities:
 
 ```text
-app.setLanguage/quit
+app.setLanguage/setWindowTheme/quit
 runtime.status
 projects.list/chooseDirectory/remove/setTrust
 sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
@@ -146,7 +146,7 @@ Commands currently mapped or to be mapped to native UI:
 - `/export` → Pi Session HTML/JSONL export.
 - `/new` → create Session.
 - `/reload` → reload Pi resources / re-read initial data.
-- `/import`, `/name`, `/session`, `/share` → PiHost session import, naming, stats, and GitHub Gist sharing.
+- `/import`, `/name`, `/session`, `/share` → PiHost session import through Electron's native JSONL picker, naming, stats, and GitHub Gist sharing.
 - `/copy`, `/changelog`, `/hotkeys`, `/resume`, `/quit` → Renderer/Electron desktop operations.
 - `/trust`, `/scoped-models` → Pi project trust storage and model scoping.
 - `/fork`, `/clone`, `/tree` → not shown yet; on the to-support list.

@@ -41,7 +41,7 @@
 - `/skill:name` 由 Pi `AgentSession.prompt()` 负责展开；PiDeck 按 Pi TUI 的 `parseSkillBlock()` 规则仅显示紧凑 Skill 引用和用户实际输入，不把注入的 Skill 正文重复显示为用户消息。
 - Extension command 的权威来源是当前 Pi `ResourceLoader`，不是静态 fallback。
 
-当前已接入的桌面命令包括 `/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。这些命令分别通过 PiHost、Electron 系统能力或已有会话列表完成桌面映射；`/share` 仍要求本机安装并登录 `gh` CLI。
+当前已接入的桌面命令包括 `/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。这些命令分别通过 PiHost、Electron 系统能力或已有会话列表完成桌面映射。`/import` 会打开 Electron 原生 JSONL 选择器，不接受 Renderer 提供的路径；`/share` 仍要求本机安装并登录 `gh` CLI。
 
 `/fork`、`/clone` 与 `/tree` 暂不在 Composer 建议和命令面板中显示，并列入待支持列表。它们需要把 Pi 的 Session Tree 分支导航、会话替换和消息时间线恢复完整映射到 PiDeck，当前手动输入会提示待支持，不会伪装成已执行。
 

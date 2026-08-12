@@ -1424,14 +1424,10 @@ process.on("message", (request: PiHostRequest) => void handle(request));
 parentPort?.postMessage({ type: "runtime.status", payload: "connected" });
 process.send?.({ type: "runtime.status", payload: "connected" });
 
-// Last-resort guards: an exception inside an SDK callback (e.g. session
-// subscribers) would otherwise terminate the host without telling Main, and
-// the app would sit at "disconnected" forever. Log the failure and keep the
-// process alive so Main's restart flow has a clear reason to trigger.
-process.on("uncaughtException", (error) => {
-  try { process.send?.({ type: "runtime.status", payload: "disconnected", error: error instanceof Error ? error.message : String(error) }); } catch { /* ignore */ }
+// Observe fatal errors without changing Node's default crash semantics. Main
+// owns the exit path: it rejects pending calls, publishes "disconnected", and
+// can fork a clean PiHost on restart. Continuing after an uncaught exception
+// would leave SDK/session state in an undefined condition.
+process.on("uncaughtExceptionMonitor", (error) => {
   console.error("PiHost uncaught exception", error);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("PiHost unhandled rejection", reason);
 });

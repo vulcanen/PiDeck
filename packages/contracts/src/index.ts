@@ -5,6 +5,7 @@ export const IPC_VERSION = 1 as const;
 export type AuthMethod = "api-key" | "oauth";
 export type PermissionMode = "ask" | "allow" | "deny" | "yolo";
 export type AppLanguage = "zh" | "en";
+export type WindowTheme = "light" | "dark";
 
 export interface PermissionStatus {
   mode: PermissionMode;
@@ -143,6 +144,7 @@ export interface WorkspaceSnapshot {
 export interface PideckBridge {
   app: {
     setLanguage(language: AppLanguage): Promise<void>;
+    setWindowTheme(theme: WindowTheme): Promise<void>;
     quit(): Promise<void>;
     setConfirmClose(enabled: boolean): Promise<void>;
     restartHost(): Promise<void>;
@@ -168,7 +170,7 @@ export interface PideckBridge {
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string }>;
-    import(taskId: string | undefined, inputPath?: string, cwd?: string): Promise<ImportedSessionSummary | null>;
+    import(taskId: string | undefined, cwd?: string): Promise<ImportedSessionSummary | null>;
     rename(taskId: string, name: string, cwd?: string): Promise<string>;
     generateTitle(taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }): Promise<string | null>;
     stats(taskId: string, cwd?: string): Promise<PiSessionStats>;

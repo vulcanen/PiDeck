@@ -41,7 +41,7 @@ The Composer reads Pi's real slash command catalog and suggests commands. Final 
 - `/skill:name` expansion is handled by Pi `AgentSession.prompt()`; PiDeck shows only a compact Skill reference and the user's actual input per Pi TUI's `parseSkillBlock()` rules, never re-displaying the injected Skill body as a user message.
 - The authoritative source of Extension commands is the current Pi `ResourceLoader`, not a static fallback.
 
-Desktop commands currently integrated include `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`. These map to desktop actions through PiHost, Electron system capabilities, or the existing session list; `/share` still requires a local, logged-in `gh` CLI.
+Desktop commands currently integrated include `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`. These map to desktop actions through PiHost, Electron system capabilities, or the existing session list. `/import` opens Electron's native JSONL picker and does not accept a Renderer-supplied path; `/share` still requires a local, logged-in `gh` CLI.
 
 `/fork`, `/clone`, and `/tree` are not shown in Composer suggestions or the command palette and are on the to-support list. They require fully mapping Pi's Session Tree branch navigation, session replacement, and message timeline restoration to PiDeck; typing them manually currently shows a "to be supported" prompt rather than faking execution.
 

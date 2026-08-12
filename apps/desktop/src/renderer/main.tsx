@@ -20,7 +20,7 @@ class AppErrorBoundary extends React.Component<React.PropsWithChildren, { error:
     const language: Language = localStorage.getItem("pideck.language") === "en" ? "en" : "zh";
     const theme = localStorage.getItem("pideck.theme") === "dark" ? "dark" : "light";
     const t = copy[language];
-    return <main className={`app-shell ${theme} fatal-error-shell`} role="alert">
+    return <main className={`app-shell ${theme} platform-overlay fatal-error-shell`} role="alert">
       <section className="fatal-error-card">
         <span className="fatal-error-mark" aria-hidden="true">P</span>
         <h1>{t.rendererCrashTitle}</h1>

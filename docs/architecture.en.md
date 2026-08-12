@@ -49,6 +49,7 @@ Main is only responsible for:
 - Opening protocol-validated HTTP(S) URLs in the system browser and rejecting in-window navigation.
 - Recording project directory references, hidden references, and their display order in Electron `userData/projects.json`.
 - Building the application menu and switching menu language via `app:set-language`; copy comes from `@pideck/i18n`.
+- On Windows, using Electron Window Controls Overlay and hiding the native menu bar so the themed Renderer surface continues behind the system window controls; `app:set-window-theme` synchronizes the native background and control-symbol colors with the Renderer theme.
 - Opening native dialogs for directory picking, session import, etc.
 - Setting the Dock icon on macOS and attempting to load `pideck-miniwindow.node` for the minimized-window icon; failures degrade to a warning.
 
@@ -86,7 +87,8 @@ PiDeck/
 │  ├─ public/                             # Renderer static assets
 │  ├─ scripts/
 │  │  ├─ build-native.mjs                 # Native plugin build (skipped on non-macOS)
-│  │  └─ renderer-regressions.test.cjs    # node --test Renderer regression cases
+│  │  ├─ behavior-regressions.test.cjs    # Security, concurrency, and packaging behavior regressions
+│  │  └─ renderer-regressions.test.cjs    # Renderer behavior and structural guards
 │  └─ src/
 │     ├─ main/index.ts                    # Electron Main, app menu, and IPC orchestration
 │     ├─ preload/index.ts                 # contextBridge
@@ -141,10 +143,12 @@ PiDeck/
 │  └─ i18n/                               # zh/en copy and command descriptions
 ├─ docs/                                  # Architecture, product plan, Pi capability matrix
 ├─ rules/                                 # Development and documentation sync rules
+├─ scripts/verify-package-contents.mjs    # Packaged asar runtime/denylist verifier
 ├─ dist-renderer/                         # Renderer build output (not committed)
 ├─ release/                               # electron-builder artifacts (not committed)
+├─ electron-builder.config.cjs            # Shared runtime whitelist and platform packaging rules
 ├─ AGENTS.md
-└─ package.json                           # npm workspaces root config and electron-builder config
+└─ package.json                           # npm workspaces and build/package scripts
 ```
 
 Each `packages/*` package currently has a single `src/index.ts` entry (`ui-system` uses `src/index.tsx`) with no deeper directory layering. They enforce code-boundary splits without introducing a second agent, permission, session, or credential system.
@@ -183,7 +187,7 @@ PiDeck's Renderer `activity`/`completedActivity` remains presentation state of t
 
 Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
 
-- `app.setLanguage/quit`
+- `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
 - `projects.list/chooseDirectory/remove/setTrust`
 - `sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
@@ -195,6 +199,8 @@ Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
 - `packages.list/install/remove/update/configure`
 - `approvals.resolve`
 - `permissions.status/setMode`
+
+Every invoke handler validates that the caller is the active PiDeck window's main frame. Project-scoped calls accept only directories already recorded in Electron's project registry; new directories enter that registry only through the native directory picker. Session import likewise always obtains its JSONL path from Electron's native file picker—the Renderer cannot provide an arbitrary filesystem path.
 - `events.subscribe`
 
 Three naming relationships need attention:
@@ -265,4 +271,4 @@ npm run test:renderer
 npm run build
 ```
 
-`npm run test:renderer` first runs `prebuild` to compile all workspace packages, then runs `apps/desktop/scripts/renderer-regressions.test.cjs` with `node --test`.
+`npm run test:renderer` first runs `prebuild` to compile all workspace packages, then runs the structural renderer guards and behavior-level security/concurrency regressions in `apps/desktop/scripts/*.test.cjs` with `node --test`.

@@ -1,11 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, Tray, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, Tray, type MenuItemConstructorOptions } from "electron";
 import { fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { AppLanguage, PiHostRequest, PiHostResponse } from "@pideck/contracts";
+import type { AppLanguage, PiHostRequest, PiHostResponse, WindowTheme } from "@pideck/contracts";
 import { appMenuCopy, copy } from "@pideck/i18n";
+import { assertKnownProjectCwd, assertTrustedIpcSender } from "./ipc-security";
+import { windowThemeColors } from "./window-theme";
 
 app.setName("PiDeck");
 
@@ -36,6 +38,7 @@ let hostAlive = false;
 let hostStatus: RuntimeStatus = "starting";
 let hostWindow: BrowserWindow | undefined;
 let currentLanguage: AppLanguage = app.getLocale().toLowerCase().startsWith("zh") ? "zh" : "en";
+let currentWindowTheme: WindowTheme = nativeTheme.shouldUseDarkColors ? "dark" : "light";
 const applicationIconPath = toUnpackedPath(path.join(__dirname, "../../assets/pideck-icon.png"));
 const dockIconPath = toUnpackedPath(path.join(__dirname, "../../assets/pideck-dock-icon.png"));
 const nativeRequire = createRequire(__filename);
@@ -295,28 +298,64 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
   });
 }
 
+function applyWindowTheme(theme: WindowTheme): void {
+  currentWindowTheme = theme;
+  const colors = windowThemeColors(theme);
+  if (!hostWindow || hostWindow.isDestroyed()) return;
+  hostWindow.setBackgroundColor(colors.background);
+  if (process.platform !== "darwin") {
+    hostWindow.setTitleBarOverlay({ color: colors.background, symbolColor: colors.symbol, height: 48 });
+  }
+}
+
+function optionalKnownProjectCwd(cwd: string | undefined): string | undefined {
+  return assertKnownProjectCwd(cwd, readProjectRegistry().cwds);
+}
+
+function requireKnownProjectCwd(cwd: string | undefined): string {
+  const known = optionalKnownProjectCwd(cwd);
+  if (!known) throw new Error("A project directory is required");
+  return known;
+}
+
+function registerTrustedIpcHandler(channel: string, listener: Parameters<typeof ipcMain.handle>[1]): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedIpcSender(event, hostWindow);
+    return listener(event, ...args);
+  });
+}
+
 function registerIpcHandlers() {
-  ipcMain.handle("app:set-language", (_event, language: AppLanguage) => {
+  registerTrustedIpcHandler("app:set-language", (_event, language: AppLanguage) => {
     currentLanguage = language === "en" ? "en" : "zh";
     buildApplicationMenu(currentLanguage);
+    updateTrayMenu();
     return currentLanguage;
   });
-  ipcMain.handle("app:set-confirm-close", (_event, enabled: boolean) => {
+  registerTrustedIpcHandler("app:set-window-theme", (_event, theme: WindowTheme) => {
+    applyWindowTheme(theme === "dark" ? "dark" : "light");
+  });
+  registerTrustedIpcHandler("app:set-confirm-close", (_event, enabled: boolean) => {
     confirmCloseBeforeQuit = Boolean(enabled);
   });
-  ipcMain.handle("app:restart-host", async () => {
+  registerTrustedIpcHandler("app:restart-host", async () => {
     teardownHost("restart requested");
     if (!hostWindow) return;
     startHost(hostWindow);
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   });
-  ipcMain.handle("app:quit", () => { app.quit(); });
-  ipcMain.handle("runtime:status", () => hostStatus);
-  ipcMain.handle("projects:list", async (_event, preferredCwd?: string) => {
+  registerTrustedIpcHandler("app:quit", () => { app.quit(); });
+  registerTrustedIpcHandler("runtime:status", () => hostStatus);
+  registerTrustedIpcHandler("projects:list", async (_event, preferredCwd?: string) => {
     const registry = readProjectRegistry();
     const hiddenProjectKeys = new Set(registry.hiddenCwds.map(projectCwdKey));
-    const knownCwds = registry.cwds.filter((cwd) => !hiddenProjectKeys.has(projectCwdKey(cwd)));
-    if (preferredCwd && !hiddenProjectKeys.has(projectCwdKey(preferredCwd))) knownCwds.push(preferredCwd);
+    const preferred = preferredCwd
+      ? registry.cwds.find((cwd) => projectCwdKey(cwd) === projectCwdKey(preferredCwd))
+      : undefined;
+    const visibleKnownCwds = registry.cwds.filter((cwd) => !hiddenProjectKeys.has(projectCwdKey(cwd)));
+    const knownCwds = preferred
+      ? [preferred, ...visibleKnownCwds.filter((cwd) => projectCwdKey(cwd) !== projectCwdKey(preferred))]
+      : visibleKnownCwds;
     const projects = await requestHost("projects.list", { knownCwds }) as Array<{ cwd: string }>;
     const visibleProjects = projects.filter((project) => !hiddenProjectKeys.has(projectCwdKey(project.cwd)));
     writeProjectRegistry({
@@ -325,7 +364,7 @@ function registerIpcHandlers() {
     });
     return visibleProjects;
   });
-  ipcMain.handle("projects:choose-directory", async () => {
+  registerTrustedIpcHandler("projects:choose-directory", async () => {
     if (!hostWindow) return null;
     const result = await dialog.showOpenDialog(hostWindow, {
       title: appMenuCopy[currentLanguage].chooseProjectFolder,
@@ -337,81 +376,82 @@ function registerIpcHandlers() {
     rememberProjectCwd(cwd);
     return { id: cwd, cwd, name: path.basename(cwd) || cwd, taskCount: sessions.length };
   });
-  ipcMain.handle("projects:remove", (_event, cwd: string) => {
-    if (typeof cwd !== "string" || !cwd.trim()) return null;
-    hideProjectCwd(cwd);
+  registerTrustedIpcHandler("projects:remove", (_event, cwd: string) => {
+    hideProjectCwd(requireKnownProjectCwd(cwd));
     return null;
   });
-  ipcMain.handle("projects:set-trust", (_event, cwd: string, trusted: boolean) => requestHost("projects.setTrust", { cwd, trusted }));
-  ipcMain.handle("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: projectId }));
-  ipcMain.handle("sessions:create", (_event, input?: { cwd?: string; name?: string }) => requestHost("sessions.create", input));
-  ipcMain.handle("sessions:delete", (_event, taskId: string, cwd?: string) => requestHost("sessions.delete", { taskId, cwd }));
-  ipcMain.handle("sessions:messages", (_event, taskId: string, cwd?: string) => requestHost("sessions.messages", { taskId, cwd }));
-  ipcMain.handle("sessions:run-metadata", (_event, taskId: string, cwd?: string) => requestHost("sessions.runMetadata", { taskId, cwd }));
-  ipcMain.handle("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd }));
-  ipcMain.handle("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd }));
-  ipcMain.handle("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd }));
-  ipcMain.handle("sessions:import", async (_event, taskId?: string, inputPath?: string, cwd?: string) => {
-    let selectedPath = inputPath?.trim();
-    if (!selectedPath) {
-      if (!hostWindow) return null;
-      const result = await dialog.showOpenDialog(hostWindow, {
-        title: appMenuCopy[currentLanguage].importSession,
-        properties: ["openFile"],
-        filters: [{ name: "Pi JSONL", extensions: ["jsonl"] }, { name: "All files", extensions: ["*"] }],
-      });
-      if (result.canceled) return null;
-      selectedPath = result.filePaths[0];
-    }
-    return requestHost("sessions.import", { taskId, inputPath: selectedPath, cwd });
+  registerTrustedIpcHandler("projects:set-trust", (_event, cwd: string, trusted: boolean) => requestHost("projects.setTrust", { cwd: requireKnownProjectCwd(cwd), trusted }));
+  registerTrustedIpcHandler("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: requireKnownProjectCwd(projectId) }));
+  registerTrustedIpcHandler("sessions:create", (_event, input?: { cwd?: string; name?: string }) => requestHost("sessions.create", { ...input, cwd: requireKnownProjectCwd(input?.cwd) }));
+  registerTrustedIpcHandler("sessions:delete", (_event, taskId: string, cwd?: string) => requestHost("sessions.delete", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:messages", (_event, taskId: string, cwd?: string) => requestHost("sessions.messages", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:run-metadata", (_event, taskId: string, cwd?: string) => requestHost("sessions.runMetadata", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:import", async (_event, taskId?: string, cwd?: string) => {
+    const trustedCwd = requireKnownProjectCwd(cwd);
+    if (!hostWindow) return null;
+    const result = await dialog.showOpenDialog(hostWindow, {
+      title: appMenuCopy[currentLanguage].importSession,
+      properties: ["openFile"],
+      filters: [{ name: "Pi JSONL", extensions: ["jsonl"] }, { name: "All files", extensions: ["*"] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return requestHost("sessions.import", { taskId, inputPath: result.filePaths[0], cwd: trustedCwd });
   });
-  ipcMain.handle("sessions:rename", (_event, taskId: string, name: string, cwd?: string) => requestHost("sessions.rename", { taskId, name, cwd }));
-  ipcMain.handle("sessions:generateTitle", (_event, taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => requestHost("sessions.generateTitle", { taskId, message, cwd, model }));
-  ipcMain.handle("sessions:stats", (_event, taskId: string, cwd?: string) => requestHost("sessions.stats", { taskId, cwd }));
-  ipcMain.handle("sessions:share", (_event, taskId: string, cwd?: string) => requestHost("sessions.share", { taskId, cwd }));
-  ipcMain.handle("sessions:changelog", () => requestHost("app.changelog"));
-  ipcMain.handle("models:list", () => requestHost("models.list"));
-  ipcMain.handle("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd }));
-  ipcMain.handle("providers:list", () => requestHost("providers.list"));
-  ipcMain.handle("providers:login", (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => requestHost("providers.login", { providerId, method, secret }));
-  ipcMain.handle("providers:set-api-key", (_event, providerId: string, apiKey: string) => requestHost("providers.setApiKey", { providerId, apiKey }));
-  ipcMain.handle("providers:logout", (_event, providerId: string) => requestHost("providers.logout", { providerId }));
-  ipcMain.handle("providers:auth-response", (_event, requestId: string, value: string, cancelled?: boolean) => requestHost("providers.auth-response", { requestId, value, cancelled }));
-  ipcMain.handle("providers:open-auth-url", async (_event, url: string) => {
+  registerTrustedIpcHandler("sessions:rename", (_event, taskId: string, name: string, cwd?: string) => requestHost("sessions.rename", { taskId, name, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:generateTitle", (_event, taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => requestHost("sessions.generateTitle", { taskId, message, cwd: requireKnownProjectCwd(cwd), model }));
+  registerTrustedIpcHandler("sessions:stats", (_event, taskId: string, cwd?: string) => requestHost("sessions.stats", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:share", (_event, taskId: string, cwd?: string) => requestHost("sessions.share", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:changelog", () => requestHost("app.changelog"));
+  registerTrustedIpcHandler("models:list", () => requestHost("models.list"));
+  registerTrustedIpcHandler("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("providers:list", () => requestHost("providers.list"));
+  registerTrustedIpcHandler("providers:login", (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => requestHost("providers.login", { providerId, method, secret }));
+  registerTrustedIpcHandler("providers:set-api-key", (_event, providerId: string, apiKey: string) => requestHost("providers.setApiKey", { providerId, apiKey }));
+  registerTrustedIpcHandler("providers:logout", (_event, providerId: string) => requestHost("providers.logout", { providerId }));
+  registerTrustedIpcHandler("providers:auth-response", (_event, requestId: string, value: string, cancelled?: boolean) => requestHost("providers.auth-response", { requestId, value, cancelled }));
+  registerTrustedIpcHandler("providers:open-auth-url", async (_event, url: string) => {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) auth URLs can be opened");
     await shell.openExternal(parsed.toString());
   });
-  ipcMain.handle("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>, delivery?: "steer" | "followUp") => requestHost("agent.prompt", { taskId, text, cwd: cwd ?? process.cwd(), images, delivery }));
-  ipcMain.handle("agent:abort", (_event, taskId: string) => requestHost("agent.abort", { taskId }));
-  ipcMain.handle("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("agent:set-scoped-models", (_event, taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => requestHost("agent.setScopedModels", { taskId, modelIds, persist, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("agent:queue", (_event, taskId: string, cwd?: string) => requestHost("agent.queue", { taskId, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("agent:set-queue-modes", (_event, taskId: string, modes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" }, cwd?: string) => requestHost("agent.setQueueModes", { taskId, cwd: cwd ?? process.cwd(), ...modes }));
-  ipcMain.handle("agent:clear-queue", (_event, taskId: string, cwd?: string) => requestHost("agent.clearQueue", { taskId, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("agent:promote-queue", (_event, taskId: string, followUpIndex: number, cwd?: string) => requestHost("agent.promoteQueue", { taskId, followUpIndex, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
-  ipcMain.handle("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("packages:remove", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.remove", { source, local, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("packages:update", (_event, source?: string, cwd?: string) => requestHost("packages.update", { source, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("packages:configure", (_event, source: string, enabled: boolean, local?: boolean, cwd?: string) => requestHost("packages.configure", { source, enabled, local, cwd: cwd ?? process.cwd() }));
-  ipcMain.handle("approval:resolve", (_event, requestId: string, decision: "allow-once" | "deny") => requestHost("approval.resolve", { requestId, decision }));
-  ipcMain.handle("permissions:status", () => requestHost("permissions.status"));
-  ipcMain.handle("permissions:set-mode", (_event, mode: "ask" | "allow" | "deny" | "yolo") => requestHost("permissions.setMode", { mode }));
+  registerTrustedIpcHandler("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>, delivery?: "steer" | "followUp") => requestHost("agent.prompt", { taskId, text, cwd: requireKnownProjectCwd(cwd), images, delivery }));
+  registerTrustedIpcHandler("agent:abort", (_event, taskId: string) => requestHost("agent.abort", { taskId }));
+  registerTrustedIpcHandler("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:set-scoped-models", (_event, taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => requestHost("agent.setScopedModels", { taskId, modelIds, persist, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:queue", (_event, taskId: string, cwd?: string) => requestHost("agent.queue", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:set-queue-modes", (_event, taskId: string, modes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" }, cwd?: string) => requestHost("agent.setQueueModes", { taskId, cwd: requireKnownProjectCwd(cwd), ...modes }));
+  registerTrustedIpcHandler("agent:clear-queue", (_event, taskId: string, cwd?: string) => requestHost("agent.clearQueue", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:promote-queue", (_event, taskId: string, followUpIndex: number, cwd?: string) => requestHost("agent.promoteQueue", { taskId, followUpIndex, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
+  registerTrustedIpcHandler("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
+  registerTrustedIpcHandler("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
+  registerTrustedIpcHandler("packages:remove", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.remove", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
+  registerTrustedIpcHandler("packages:update", (_event, source?: string, cwd?: string) => requestHost("packages.update", { source, cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
+  registerTrustedIpcHandler("packages:configure", (_event, source: string, enabled: boolean, local?: boolean, cwd?: string) => requestHost("packages.configure", { source, enabled, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
+  registerTrustedIpcHandler("approval:resolve", (_event, requestId: string, decision: "allow-once" | "deny") => requestHost("approval.resolve", { requestId, decision }));
+  registerTrustedIpcHandler("permissions:status", () => requestHost("permissions.status"));
+  registerTrustedIpcHandler("permissions:set-mode", (_event, mode: "ask" | "allow" | "deny" | "yolo") => requestHost("permissions.setMode", { mode }));
 }
 
 function createWindow() {
+  const initialWindowColors = windowThemeColors(currentWindowTheme);
   const window = new BrowserWindow({
     width: 1480,
     height: 940,
     minWidth: 375,
     minHeight: 520,
     icon: applicationIconPath,
-    backgroundColor: "#f7f6f1",
-    titleBarStyle: "hiddenInset",
-    ...(process.platform === "darwin" ? { trafficLightPosition: { x: 14, y: 17 } } : {}),
+    backgroundColor: initialWindowColors.background,
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 17 } }
+      : {
+          titleBarStyle: "hidden" as const,
+          titleBarOverlay: { color: initialWindowColors.background, symbolColor: initialWindowColors.symbol, height: 48 },
+        }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -419,6 +459,9 @@ function createWindow() {
       sandbox: true,
     },
   });
+  if (process.platform !== "darwin") window.setMenuBarVisibility(false);
+  hostWindow = window;
+  applyWindowTheme(currentWindowTheme);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
@@ -484,23 +527,22 @@ function createWindow() {
   });
 }
 
-function createTray() {
-  if (process.platform === "darwin") return;
-  tray ??= new Tray(applicationIconPath);
-  tray.setToolTip("PiDeck");
-  const showWindow = () => {
-    const window = hostWindow ?? BrowserWindow.getAllWindows()[0];
-    if (!window) return;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-  };
-  tray.on("click", showWindow);
+function showMainWindow() {
+  const window = hostWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const t = copy[currentLanguage];
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: copy[currentLanguage].workspace, click: showWindow },
+    { label: t.workspace, click: showMainWindow },
     { type: "separator" },
     {
-      label: copy[currentLanguage].confirmCloseExit,
+      label: t.confirmCloseExit,
       click: () => {
         // Destroying first skips the close-confirm dialog, then quit tears down
         // the host via `before-quit`.
@@ -509,6 +551,16 @@ function createTray() {
       },
     },
   ]));
+}
+
+function createTray() {
+  if (process.platform === "darwin") return;
+  if (!tray) {
+    tray = new Tray(applicationIconPath);
+    tray.setToolTip("PiDeck");
+    tray.on("click", showMainWindow);
+  }
+  updateTrayMenu();
 }
 
 app.whenReady().then(() => {

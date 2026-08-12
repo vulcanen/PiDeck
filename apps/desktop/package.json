@@ -10,7 +10,7 @@
     "prebuild": "npm --workspace @pideck/domain run build && npm --workspace @pideck/pi-adapter run build && npm --workspace @pideck/permission-engine run build && npm --workspace @pideck/pi-host run build && npm --workspace @pideck/i18n run build && npm --workspace @pideck/ui-system run build",
     "build": "npm run build:native && tsc -p tsconfig.json && vite build --config vite.config.ts",
     "pretest:renderer": "npm run prebuild",
-    "test:renderer": "tsc -p tsconfig.json && node --test scripts/renderer-regressions.test.cjs",
+    "test:renderer": "tsc -p tsconfig.json && node --test scripts/renderer-regressions.test.cjs scripts/behavior-regressions.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

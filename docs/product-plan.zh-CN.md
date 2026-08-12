@@ -116,7 +116,7 @@ packages/
 当前唯一权威定义是 `packages/contracts/src/index.ts`。主要能力：
 
 ```text
-app.setLanguage/quit
+app.setLanguage/setWindowTheme/quit
 runtime.status
 projects.list/chooseDirectory/remove/setTrust
 sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
@@ -146,7 +146,7 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 - `/export` → Pi Session HTML/JSONL 导出。
 - `/new` → 新建 Session。
 - `/reload` → 重载 Pi 资源/重新读取初始数据。
-- `/import`、`/name`、`/session`、`/share` → PiHost 会话导入、命名、统计和 GitHub Gist 分享。
+- `/import`、`/name`、`/session`、`/share` → 通过 Electron 原生 JSONL 选择器完成 PiHost 会话导入、命名、统计和 GitHub Gist 分享。
 - `/copy`、`/changelog`、`/hotkeys`、`/resume`、`/quit` → Renderer/Electron 桌面操作。
 - `/trust`、`/scoped-models` → Pi 项目信任存储和模型范围设置。
 - `/fork`、`/clone`、`/tree` → 暂不显示，列入待支持列表。

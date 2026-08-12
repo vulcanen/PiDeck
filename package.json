@@ -19,8 +19,9 @@
     "lint": "eslint .",
     "test:renderer": "npm --workspace @pideck/desktop run test:renderer",
     "typecheck": "npm --workspace @pideck/domain run typecheck && npm --workspace @pideck/pi-adapter run typecheck && npm --workspace @pideck/permission-engine run typecheck && npm --workspace @pideck/pi-host run typecheck && npm --workspace @pideck/i18n run typecheck && npm --workspace @pideck/ui-system run typecheck && npm --workspace @pideck/desktop run typecheck",
-    "package:win": "npm run build && npm exec -- electron-builder --win nsis --x64",
-    "package:mac": "npm run build && npm exec -- electron-builder --mac dmg"
+    "package:win": "npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --win nsis --x64 && npm run verify:package -- release/win-unpacked",
+    "package:mac": "npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --mac dmg && npm run verify:package -- release",
+    "verify:package": "node scripts/verify-package-contents.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -35,83 +36,8 @@
     "@pideck/pi-adapter": "0.1.0",
     "detect-libc": "^2.0.3"
   },
-  "build": {
-    "appId": "com.pideck.desktop",
-    "productName": "PiDeck",
-    "directories": {
-      "output": "release"
-    },
-    "asar": true,
-    "asarUnpack": [
-      "**/*.node",
-      "apps/desktop/assets/**/*"
-    ],
-    "npmRebuild": false,
-    "files": [
-      "apps/desktop/dist/**/*",
-      "apps/desktop/assets/**/*",
-      "dist-renderer/**/*",
-      "packages/domain/dist/**/*",
-      "packages/domain/package.json",
-      "packages/pi-adapter/dist/**/*",
-      "packages/pi-adapter/package.json",
-      "packages/pi-host/dist/**/*",
-      "packages/pi-host/package.json",
-      "packages/permission-engine/dist/**/*",
-      "packages/permission-engine/package.json",
-      "packages/i18n/dist/**/*",
-      "packages/i18n/package.json",
-      "packages/ui-system/dist/**/*",
-      "packages/ui-system/package.json",
-      "package.json",
-      "node_modules/**/*",
-      "!**/*.map",
-      "!**/*.d.ts",
-      "!**/*.d.mts",
-      "!**/*.d.cts",
-      "!**/*.tsbuildinfo",
-      "!node_modules/**/tree-sitter-bash/src/**",
-      "!node_modules/**/tree-sitter-bash/grammar.js"
-    ],
-    "win": {
-      "target": {
-        "target": "nsis",
-        "arch": [
-          "x64"
-        ]
-      },
-      "icon": "apps/desktop/assets/pideck-icon.ico",
-      "files": [
-        "!node_modules/**/@mariozechner/clipboard-{darwin,linux}*/**",
-        "!node_modules/**/@mariozechner/clipboard-win32-arm64-msvc/**",
-        "!node_modules/**/prebuilds/{darwin,linux}-*/**",
-        "!node_modules/**/prebuilds/win32-arm64/**",
-        "!node_modules/**/native/{darwin,linux}/**",
-        "!node_modules/**/native/win32/prebuilds/win32-arm64/**"
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "icon": "apps/desktop/assets/pideck-icon.icns",
-      "category": "public.app-category.developer-tools",
-      "files": [
-        "!node_modules/**/@mariozechner/clipboard-{win32,linux}*/**",
-        "!node_modules/**/prebuilds/{win32,linux}-*/**",
-        "!node_modules/**/native/{win32,linux}/**"
-      ]
-    },
-    "dmg": {
-      "title": "PiDeck"
-    }
-  },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@eslint/js": "^10.0.1",
     "electron-builder": "^26.15.3",
     "eslint": "^10.8.0",

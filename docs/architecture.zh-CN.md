@@ -50,6 +50,7 @@ Main 只负责：
 - 在 Electron `userData/projects.json` 中记录项目目录引用、隐藏引用及其显示顺序。
 - 构建应用菜单并按 `app:set-language` 切换菜单语言，文案取自 `@pideck/i18n`。
 - 打开目录选择、会话导入等原生对话框。
+- Windows 使用 Electron Window Controls Overlay 并隐藏原生菜单栏，让主题化 Renderer 表面延伸到系统窗口按钮下方；`app:set-window-theme` 会把原生背景和控制按钮符号颜色同步到 Renderer 主题。
 - macOS 上设置 Dock 图标，并尝试加载 `pideck-miniwindow.node` 定制最小化窗口图标；加载失败只降级告警。
 
 项目目录清单只保存 `cwd`，不保存 Session 或工作区内容。Renderer 单击项目时通过 `sessions.list(cwd)` 按需展开会话列表，并以独立展开状态保留其它项目，不改变当前中央会话；只有单击具体会话才切换工作区。项目右键“移除”只把 `cwd` 加入隐藏引用，不删除项目文件或 Pi Session。Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
@@ -86,7 +87,8 @@ PiDeck/
 │  ├─ public/                             # Renderer 静态资源
 │  ├─ scripts/
 │  │  ├─ build-native.mjs                 # 原生插件构建（非 macOS 跳过）
-│  │  └─ renderer-regressions.test.cjs    # node --test Renderer 回归用例
+│  │  ├─ behavior-regressions.test.cjs    # 安全、并发和打包行为级回归
+│  │  └─ renderer-regressions.test.cjs    # Renderer 行为与结构守卫
 │  └─ src/
 │     ├─ main/index.ts                    # Electron Main、应用菜单与 IPC 编排
 │     ├─ preload/index.ts                 # contextBridge
@@ -141,10 +143,12 @@ PiDeck/
 │  └─ i18n/                               # zh/en 文案和命令描述
 ├─ docs/                                  # 架构、产品方案与 Pi 能力矩阵
 ├─ rules/                                 # 开发与文档同步规则
+├─ scripts/verify-package-contents.mjs    # 打包后 asar 运行入口/禁入项验证
 ├─ dist-renderer/                         # Renderer 构建产物（不入库）
 ├─ release/                               # electron-builder 打包产物（不入库）
+├─ electron-builder.config.cjs            # 公共运行时白名单与平台打包规则
 ├─ AGENTS.md
-└─ package.json                           # npm workspaces 根配置与 electron-builder 配置
+└─ package.json                           # npm workspaces 与构建/打包脚本
 ```
 
 `packages/*` 每个包当前都只有单一 `src/index.ts`（`ui-system` 为 `src/index.tsx`）作为入口，没有更深的目录分层。它们负责代码边界拆分，不引入第二套 Agent、权限、会话或凭据系统。
@@ -183,7 +187,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 以 `packages/contracts/src/index.ts` 的 `PideckBridge` 为准，当前已声明：
 
-- `app.setLanguage/quit`
+- `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
 - `projects.list/chooseDirectory/remove/setTrust`
 - `sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
@@ -195,6 +199,8 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - `packages.list/install/remove/update/configure`
 - `approvals.resolve`
 - `permissions.status/setMode`
+
+每个 invoke handler 都会验证调用者是当前 PiDeck 窗口的主 frame。项目作用域调用只接受已记录在 Electron 项目注册表中的目录；新目录只能通过原生目录选择器加入注册表。会话导入也始终由 Electron 原生文件选择器取得 JSONL 路径，Renderer 不能提交任意文件系统路径。
 - `events.subscribe`
 
 命名对应关系需要注意三处：
@@ -265,4 +271,4 @@ npm run test:renderer
 npm run build
 ```
 
-`npm run test:renderer` 会先执行 `prebuild` 编译全部 workspace 包，再用 `node --test` 运行 `apps/desktop/scripts/renderer-regressions.test.cjs`。
+`npm run test:renderer` 会先执行 `prebuild` 编译全部 workspace 包，再用 `node --test` 运行 `apps/desktop/scripts/*.test.cjs` 中的 Renderer 结构守卫与安全/并发行为回归测试。

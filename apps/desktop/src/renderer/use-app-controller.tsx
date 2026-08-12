@@ -14,6 +14,7 @@ import { useSentImagesCache } from "./use-sent-images-cache";
 import { useNotice } from "./use-notice";
 import { usePreferences } from "./use-preferences";
 import { useStreamDeltas } from "./use-stream-deltas";
+import { loadQueueForCurrentTask } from "./queue-load";
 
 export function useAppController() {
 
@@ -32,6 +33,7 @@ export function useAppController() {
   const [projectTasksByCwd, setProjectTasksByCwd] = useState<Record<string, TaskSummary[]>>({});
   const [projectTaskLoads, setProjectTaskLoads] = useState<Record<string, MessageLoad>>({});
   const [activeTask, setActiveTask] = useState<TaskSummary | null>(null);
+  const activeTaskId = activeTask?.id;
   const [messagesByTask, setMessagesByTask] = useState<Record<string, any[]>>({});
   const [steeringMessageKeysByTask, setSteeringMessageKeysByTask] = useState<Record<string, string[]>>({});
   const [sentImagesByTask, setSentImagesByTask] = useState<Record<string, SentImageMessage[]>>(() => {
@@ -450,9 +452,21 @@ export function useAppController() {
     void loadInitialData();
   }, []);
   useEffect(() => {
+    let current = true;
     setQueueState(null);
-    if (activeTask && projectCwd) void refreshQueue(activeTask);
-  }, [activeTask?.id, projectCwd]);
+    if (activeTaskId && projectCwd) {
+      void loadQueueForCurrentTask({
+        load: () => window.pideck.agent.queue(activeTaskId, projectCwd),
+        isCurrent: () => current,
+        onLoaded: (next) => {
+          setQueueState(next);
+          setQueueDelivery((delivery) => next.steering.length > 0 ? "steer" : delivery);
+        },
+        onError: (error) => showNotice(error instanceof Error ? error.message : String(error)),
+      });
+    }
+    return () => { current = false; };
+  }, [activeTaskId, projectCwd, showNotice]);
 
   const modelOptions = useMemo(() => [...models].filter((model) => model.authConfigured).sort((a, b) => a.providerName.localeCompare(b.providerName) || a.name.localeCompare(b.name)), [models]);
   const hiddenSlashCommandNames = useMemo(() => new Set(["fork", "clone", "tree", "settings"]), []);
@@ -658,10 +672,10 @@ export function useAppController() {
     ].join("\n"));
   }
 
-  async function importSession(inputPath?: string) {
+  async function importSession() {
     if (!projectCwd) return showNotice(t.selectProjectFirst);
     try {
-      const imported = await window.pideck.sessions.import(activeTask?.id, inputPath, projectCwd || undefined);
+      const imported = await window.pideck.sessions.import(activeTask?.id, projectCwd || undefined);
       if (!imported) return;
       rememberOptimisticTask(imported);
       setTasks((current) => sortTasksByUpdatedAt([imported, ...current.filter((task) => task.id !== imported.id)]));
@@ -735,7 +749,7 @@ export function useAppController() {
     if (command === "export") { await exportSession(argument.toLowerCase() === "jsonl" ? "jsonl" : "html"); return true; }
     if (command === "new") { await createTask(); return true; }
     if (command === "reload") { await loadInitialData(); return true; }
-    if (command === "import") { await importSession(argument || undefined); return true; }
+    if (command === "import") { await importSession(); return true; }
     if (command === "share") { await shareSession(); return true; }
     if (command === "copy") { await copyLastAssistant(); return true; }
     if (command === "name") { if (argument) await renameSession(argument); else if (activeTask) setRenameOpen(true); else showNotice(t.noSessions); return true; }
@@ -923,17 +937,6 @@ export function useAppController() {
     for (const task of listedTasks) optimisticIds.delete(task.id);
     if (optimisticIds.size === 0) delete optimisticTaskIdsRef.current[cwd];
     return sortTasksByUpdatedAt([...listedById.values(), ...optimisticById.values()]);
-  }
-
-  async function refreshQueue(task = activeTask) {
-    if (!task) { setQueueState(null); return; }
-    try {
-      const next = await window.pideck.agent.queue(task.id, projectCwd);
-      setQueueState(next);
-      setQueueDelivery(next.steering.length > 0 ? "steer" : queueDelivery);
-    } catch (error) {
-      showNotice(error instanceof Error ? error.message : String(error));
-    }
   }
 
   async function setQueueModes(modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }) {

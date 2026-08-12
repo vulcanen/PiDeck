@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const NOTICE_VISIBLE_MS = 3_400;
 const NOTICE_EXIT_MS = 220;
@@ -18,7 +18,7 @@ export function useNotice() {
   const counterRef = useRef(0);
   const timersRef = useRef<Map<number, number>>(new Map());
 
-  function dismiss(id: number) {
+  const dismiss = useCallback((id: number) => {
     const existing = timersRef.current.get(id);
     if (existing) window.clearTimeout(existing);
     setNotices((current) => current.map((item) => item.id === id ? { ...item, closing: true } : item));
@@ -27,18 +27,18 @@ export function useNotice() {
       setNotices((current) => current.filter((item) => item.id !== id));
     }, NOTICE_EXIT_MS);
     timersRef.current.set(id, exitTimer);
-  }
+  }, []);
 
   // Errors stay until dismissed so the user can read and act on them; info
   // notices auto-dismiss like before.
-  function showNotice(message: string, kind: NoticeKind = "info") {
+  const showNotice = useCallback((message: string, kind: NoticeKind = "info") => {
     const id = ++counterRef.current;
     setNotices((current) => [...current, { id, message, kind, closing: false }].slice(-NOTICE_MAX));
     if (kind === "info") {
       const visibleTimer = window.setTimeout(() => dismiss(id), NOTICE_VISIBLE_MS);
       timersRef.current.set(id, visibleTimer);
     }
-  }
+  }, [dismiss]);
 
   useEffect(() => {
     const timers = timersRef.current;
