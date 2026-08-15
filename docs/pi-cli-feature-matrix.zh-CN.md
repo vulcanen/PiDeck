@@ -16,7 +16,7 @@
 | 会话删除 | 会话更多菜单 | `sessions.delete` |
 | 会话位置与长会话 | 中央对话线程（普通文档流 + 早期消息折叠） | 不使用虚拟列表；只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后。防跳动依赖 `overflow-anchor: auto` 原生 scroll anchoring；非活动 pane 用 `visibility: hidden` 天然保留 `scrollTop`；follow 仅由真实 wheel/touch 上滑事件退出，程序化滚动期间 latch 住 |
 | Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
-| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调 |
+| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
 | 思考等级 | Composer Thinking 菜单 | `AgentSession.getAvailableThinkingLevels()` |
 | 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 0.84.2 应用 `defaultTools`；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
@@ -29,7 +29,7 @@
 | 本地终端 | 未接入：终端面板与 `Ctrl/Cmd + J` 已移除，`terminal.execute` 桥已删除 | `AgentSession.executeBash()` |
 | 上下文压缩 | Command Palette | `AgentSession.compact()` |
 | Session 导出 | Command Palette | `AgentSession.exportToJsonl()` / `exportToHtml()` |
-| Runtime 状态 | Sidebar | Main/PiHost runtime status event |
+| Runtime 状态 | Sidebar | Main/PiHost runtime status event，以及脱敏的 `runtime.error` 启动失败信息 |
 | 中英文 | 顶部语言按钮 | Renderer i18n |
 | 浅色/深色 | 顶部主题按钮 | Renderer theme preference |
 

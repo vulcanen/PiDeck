@@ -65,6 +65,8 @@ PiDeck 安装包包含项目锁定的 Pi SDK，不要求另行安装 Pi CLI。�
 
 Pi Session、Provider 凭据、OAuth 和 Pi Package 配置由本机 Pi Runtime 管理，因此可以与兼容的 Pi CLI 环境共用。PiDeck 自己只在 Electron `userData` 中保存项目目录引用、显示顺序和界面偏好；从侧栏移除项目不会删除项目文件或 Pi Session。
 
+PiHost 网络请求与 Pi CLI 使用同一套代理分发器。代理优先级为显式 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量、Pi 全局设置中的 `httpProxy`，最后才是 Electron 在 Windows、macOS 或 Linux 上按请求目标解析到的系统代理；PAC、绕过列表和按域分流会逐请求生效。浏览器中的 OAuth 页面仍由系统浏览器及 Provider 自己处理。
+
 PiDeck 不配置分析或遥测导出器。Provider 请求仍由用户选择的 Pi Runtime 和模型服务处理；请按对应 Provider 的隐私政策评估要发送的代码与会话内容。
 
 Agent 工具和 Extension 可能根据当前权限设置读取、修改项目文件或执行命令。首次使用第三方 Package 前请检查其来源，并使用合适的审批级别。

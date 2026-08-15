@@ -61,6 +61,12 @@ export function useRuntimeEvents({
       if (status === "connected" || status === "starting" || status === "disconnected") setRuntimeStatus(status);
       return;
     }
+    if (runtimeEvent.type === "runtime.error") {
+      const payload = runtimeEvent.payload as { message?: string } | undefined;
+      setRuntimeStatus("disconnected");
+      showNotice(`${copy[language].runtimeStartFailed}: ${payload?.message ?? copy[language].runtimeDisconnected}`);
+      return;
+    }
     if (runtimeEvent.type === "extension.ui.request" && runtimeEvent.event && typeof runtimeEvent.event === "object") {
       setExtensionUiRequest(runtimeEvent.event as ExtensionUiRequest);
       return;

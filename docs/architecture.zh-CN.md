@@ -44,6 +44,7 @@ Main 只负责：
 
 - 创建和销毁 BrowserWindow（`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`）。
 - 启动、监听和停止 PiHost。
+- 当显式代理环境变量与 Pi `httpProxy` 都未设置时，通过 Main/PiHost 内部桥按每个请求 URL 调用 Electron 解析操作系统代理。
 - 在 Renderer IPC 与 PiHost 请求之间做编排。
 - 为请求设置超时（默认 60s；`providers.login`、`sessions.share` 15min，`packages.*` 10min；`agent.prompt` 不设超时——其完成由 `agent_settled` 事件标示，而非 RPC 响应），处理 Host 断开。
 - 通过系统浏览器打开经过协议校验的 HTTP(S) URL，并拒绝窗口内新开链接。
@@ -71,9 +72,12 @@ PiHost 负责：
 - 读取/恢复 Pi Session，并通过 `SessionManager.appendCustomEntry()` 写入 `pideck.execution-run` 运行元数据。
 - 转发 Agent event、Approval event、Auth event 和 Extension UI 请求。
 - 执行 Pi built-in tools、Bash、Provider 登录、Pi package 管理、权限模式读写和会话操作。
+- 在报告 `runtime.status=connected` 前初始化 Pi 自带的代理感知 HTTP dispatcher，使 OAuth Token 交换、模型请求和 Provider HTTP 调用使用同一条 PiHost 网络路径。npm、pnpm、git 等 package manager 子进程仍使用各自的代理配置。
 - 将跨进程数据转换成可 JSON 序列化的响应（`jsonSafe`），并对队列中的图片附件做旁路保存，避免 `promoteQueue` 丢附件。
 
 Pi SDK 的动态定位、加载和模型/Session 适配集中在 `packages/pi-adapter`。Pi 权限配置、Extension UI 绑定、审批等待和策略切换集中在 `packages/permission-engine`。两者都不创建第二套 Agent、Provider 或 Session 存储；权威来源仍是 Pi SDK 和 `@gotgenes/pi-permission-system`。
+
+代理优先级依次为显式 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`、Pi 全局 `httpProxy` 设置、Electron 的跨平台系统代理解析结果。`pi-adapter` 先调用与当前 Pi 版本匹配的 `configureHttpDispatcher()`；仅在没有显式/Pi 代理时，才安装一层轻量 dispatcher，为每个请求 URL 请求 Main 执行 `session.resolveProxy(url)`。因此 PAC、绕过列表和按域规则仍保持 URL 感知，不会被压缩为启动时快照。解析失败会拒绝请求，不会静默回退直连；dispatcher 缺失或 API 不兼容时，PiHost 会先发送脱敏的 `runtime.error` 再退出。
 
 ## 3. 当前仓库结构
 
@@ -222,12 +226,13 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 ## 6. 当前事件流
 
-`PiDeckRuntimeEvent` 声明的类型为 `runtime.status`、`agent.event`、`auth.event`、`approval.requested`、`approval.resolved`、`extension.ui.request`、`extension.ui.notify`。
+`PiDeckRuntimeEvent` 声明的类型为 `runtime.status`、`runtime.error`、`agent.event`、`auth.event`、`approval.requested`、`approval.resolved`、`extension.ui.request`、`extension.ui.notify`。
 
-当前实际以顶层 `type` 下发的消息有五种：
+当前实际以顶层 `type` 下发的消息有六种：
 
 ```ts
 { type: "runtime.status", payload: "connected" | "starting" | "disconnected" }
+{ type: "runtime.error", payload: { message: string } }
 { type: "agent.event", taskId, event }
 { type: "approval.requested", taskId, requestId, event: { toolName, args } }
 { type: "auth.event", requestId, event }

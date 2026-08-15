@@ -93,7 +93,7 @@ packages/
 8. 通过 `@file` 引用工作区文件。
 9. 压缩上下文并导出 JSONL/HTML，导入 Pi JSONL 会话、重命名和查看会话统计。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
-11. 使用 Provider API Key/OAuth 本地认证。
+11. 使用 Provider API Key/OAuth 本地认证；PiHost 网络请求依次遵循显式代理环境变量、Pi 全局 `httpProxy` 和跨平台系统代理。
 12. 切换中文/英文和浅色/深色主题。
 13. 使用 Steering / Follow-up 队列、批处理模式和队列消息面板。
 14. 对长会话使用"普通文档流 + 早期消息折叠"（只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后），并按 Session 缓存消息 pane、滚动位置和 follow 状态。
@@ -206,6 +206,7 @@ PiDeck 已将 `@gotgenes/pi-permission-system@25.2.2` 作为桌面 PiHost 的 Ex
 - Renderer 强制执行严格的内容安全策略，并拒绝窗口内导航。
 - 打包版本默认加载安装包内锁定的 Pi SDK，只有 `PIDECK_PI_MODULE` 可显式覆盖。
 - API Key、OAuth Token 不进入 Renderer、日志、事件或 DevTools。
+- PiHost 在进入 connected 状态前安装与当前 Pi 版本匹配的代理感知 HTTP dispatcher；显式环境配置优先于 Pi `httpProxy`，后者又优先于 Electron 解析的系统代理回退。
 - 失败状态必须可见并提供重试或修复操作。
 
 ## 10. 验收命令

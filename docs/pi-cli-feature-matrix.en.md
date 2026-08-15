@@ -16,7 +16,7 @@
 | Session deletion | Session more menu | `sessions.delete` |
 | Session position and long sessions | Central conversation thread (plain document flow + earlier-message folding) | No virtual list; only the most recent 200 messages stay mounted, older ones fold behind a "show earlier" button. Anti-jump relies on native scroll anchoring via `overflow-anchor: auto`; inactive panes keep `scrollTop` naturally with `visibility: hidden`; follow exits only on real wheel/touch upward gestures and is latched during programmatic scrolling |
 | Provider list | Provider settings (search, auth-status filter) | `ModelRuntime.getProviders()`, `listCredentials()` |
-| API Key / OAuth | Provider settings (local credentials, removal confirmation) | `ModelRuntime.login()`, `ModelRuntime.logout()`, Pi auth callback |
+| API Key / OAuth | Provider settings (local credentials, removal confirmation) | `ModelRuntime.login()`, `ModelRuntime.logout()`, Pi auth callback; PiHost initializes Pi's proxy-aware HTTP dispatcher with explicit environment → Pi `httpProxy` → Electron system-proxy precedence before token exchange |
 | Model list | Composer model selector | `ModelRuntime.getModels()` |
 | Thinking level | Composer Thinking menu | `AgentSession.getAvailableThinkingLevels()` |
 | Default built-in tools | Pi global/project `settings.json`; no separate PiDeck catalog | PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.2 applies `defaultTools`; Extension/custom tools remain enabled according to Pi SDK semantics |
@@ -29,7 +29,7 @@
 | Local terminal | Not integrated: the terminal panel and `Ctrl/Cmd + J` were removed, the `terminal.execute` bridge was deleted | `AgentSession.executeBash()` |
 | Context compaction | Command Palette | `AgentSession.compact()` |
 | Session export | Command Palette | `AgentSession.exportToJsonl()` / `exportToHtml()` |
-| Runtime status | Sidebar | Main/PiHost runtime status event |
+| Runtime status | Sidebar | Main/PiHost runtime status event plus sanitized `runtime.error` startup failures |
 | Chinese/English | Language button in the header | Renderer i18n |
 | Light/dark theme | Theme button in the header | Renderer theme preference |
 

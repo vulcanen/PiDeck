@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -31,6 +32,215 @@ export type PiSdk = {
 
 let sdkPromise: Promise<PiSdk> | undefined;
 let modelRuntimePromise: Promise<any> | undefined;
+let httpNetworkingPromise: Promise<void> | undefined;
+
+type PiHttpDispatcher = {
+  applyHttpProxySettings(httpProxy: string | undefined): void;
+  configureHttpDispatcher(timeoutMs?: number): void;
+};
+
+export type SystemProxyResolver = (url: string) => Promise<string>;
+export type SystemProxyRoute = { type: "direct" } | { type: "proxy"; url: string };
+
+type PiDispatchHandler = {
+  onRequestStart?(controller: unknown, context: unknown): void;
+  onRequestUpgrade?(controller: unknown, statusCode: number, headers: unknown, socket: unknown): void;
+  onResponseStart?(controller: unknown, statusCode: number, headers: unknown, statusMessage?: string): void;
+  onResponseData?(controller: unknown, chunk: Buffer): void;
+  onResponseEnd?(controller: unknown, trailers: unknown): void;
+  onResponseError?(controller: unknown, error: Error): void;
+  onResponseStarted?(): void;
+  onBodySent?(chunk: Buffer): void;
+  onRequestSent?(): void;
+};
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => Boolean(value?.trim()))?.trim();
+}
+
+function publicNetworkError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, "$1***@");
+}
+
+function bypassesSystemProxy(origin: URL): boolean {
+  const noProxy = firstNonEmpty(process.env.NO_PROXY, process.env.no_proxy);
+  if (!noProxy) return false;
+  if (noProxy === "*") return true;
+  const hostname = origin.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const port = Number(origin.port || (origin.protocol === "https:" ? 443 : 80));
+  return noProxy.split(/[,\s]+/).some((rawEntry) => {
+    if (!rawEntry) return false;
+    const entry = rawEntry.replace(/^\*?\./, "").toLowerCase();
+    const match = /^\[(.*)\]:(\d+)$/.exec(entry)
+      ?? (entry.includes("::") ? null : /^(.*):(\d+)$/.exec(entry));
+    const entryHostname = (match?.[1] ?? entry).replace(/^\[|\]$/g, "");
+    const entryPort = match ? Number(match[2]) : 0;
+    return (!entryPort || entryPort === port)
+      && (hostname === entryHostname || hostname.endsWith(`.${entryHostname}`));
+  });
+}
+
+function proxyUrl(kind: string, address: string): string | undefined {
+  const normalizedAddress = address.trim();
+  if (!normalizedAddress || /[\r\n\0]/.test(normalizedAddress)) return undefined;
+  const scheme = kind === "HTTPS"
+    ? "https"
+    : kind === "SOCKS" || kind === "SOCKS5"
+      ? "socks5"
+      : kind === "PROXY" || kind === "HTTP"
+        ? "http"
+        : undefined;
+  if (!scheme) return undefined;
+  try {
+    return new URL(`${scheme}://${normalizedAddress}`).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse Chromium proxy rules while preserving their ordered fallback list. */
+export function systemProxyRoutesFromElectronRules(rules: string): SystemProxyRoute[] {
+  const routes: SystemProxyRoute[] = [];
+  for (const rule of rules.split(";")) {
+    const trimmed = rule.trim();
+    if (!trimmed) continue;
+    const [kind = "", ...addressParts] = trimmed.split(/\s+/);
+    const normalizedKind = kind.toUpperCase();
+    if (normalizedKind === "DIRECT") {
+      routes.push({ type: "direct" });
+      continue;
+    }
+    const url = proxyUrl(normalizedKind, addressParts.join(" "));
+    if (url) routes.push({ type: "proxy", url });
+  }
+  return routes;
+}
+
+function isProxyConnectionSetupError(error: unknown): boolean {
+  const retryableCodes = new Set([
+    "ECONNREFUSED",
+    "EHOSTDOWN",
+    "EHOSTUNREACH",
+    "ENETDOWN",
+    "ENETUNREACH",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "UND_ERR_CONNECT_TIMEOUT",
+  ]);
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current !== "object") return false;
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (typeof candidate.code === "string" && retryableCodes.has(candidate.code)) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+function installSystemProxyDispatcher(
+  sdkModule: string,
+  resolveProxy: SystemProxyResolver,
+): void {
+  const requireFromPi = createRequire(sdkModule);
+  const undici = requireFromPi("undici") as {
+    ProxyAgent: new (options: { uri: string }) => { dispatch(options: unknown, handler: unknown): boolean; close(): Promise<void>; destroy(error?: Error): Promise<void> };
+    getGlobalDispatcher(): { dispatch(options: unknown, handler: unknown): boolean; close(): Promise<void>; destroy(error?: Error): Promise<void> };
+    setGlobalDispatcher(dispatcher: unknown): void;
+  };
+  const directDispatcher = undici.getGlobalDispatcher();
+  const proxyDispatchers = new Map<string, InstanceType<typeof undici.ProxyAgent>>();
+  const systemDispatcher = {
+    dispatch(options: { origin?: string | URL; path?: string }, handler: PiDispatchHandler): boolean {
+      let origin: URL;
+      try {
+        origin = new URL(String(options.origin));
+      } catch {
+        handler.onResponseError?.(null, new Error("Pi HTTP request has an invalid origin"));
+        return false;
+      }
+      if (bypassesSystemProxy(origin)) return directDispatcher.dispatch(options, handler);
+      const requestUrl = new URL(options.path ?? "/", origin).toString();
+      void resolveProxy(requestUrl).then((rules) => {
+        const routes = systemProxyRoutesFromElectronRules(rules);
+        if (routes.length === 0) throw new Error(`System proxy returned no supported route for ${origin.hostname}`);
+
+        const dispatchRoute = (routeIndex: number): void => {
+          const route = routes[routeIndex];
+          if (!route) throw new Error(`System proxy exhausted every route for ${origin.hostname}`);
+          const dispatcher = route.type === "direct"
+            ? directDispatcher
+            : proxyDispatchers.get(route.url) ?? (() => {
+                const created = new undici.ProxyAgent({ uri: route.url });
+                proxyDispatchers.set(route.url, created);
+                return created;
+              })();
+          let requestTransmissionStarted = false;
+          const routeHandler: PiDispatchHandler = {
+            onRequestStart: (controller, context) => handler.onRequestStart?.(controller, context),
+            onRequestUpgrade: (controller, statusCode, headers, socket) => {
+              requestTransmissionStarted = true;
+              handler.onRequestUpgrade?.(controller, statusCode, headers, socket);
+            },
+            onResponseStart: (controller, statusCode, headers, statusMessage) => {
+              requestTransmissionStarted = true;
+              handler.onResponseStart?.(controller, statusCode, headers, statusMessage);
+            },
+            onResponseData: (controller, chunk) => handler.onResponseData?.(controller, chunk),
+            onResponseEnd: (controller, trailers) => handler.onResponseEnd?.(controller, trailers),
+            onResponseStarted: () => {
+              requestTransmissionStarted = true;
+              handler.onResponseStarted?.();
+            },
+            onBodySent: (chunk) => {
+              requestTransmissionStarted = true;
+              handler.onBodySent?.(chunk);
+            },
+            onRequestSent: () => {
+              requestTransmissionStarted = true;
+              handler.onRequestSent?.();
+            },
+            onResponseError: (controller, error) => {
+              if (!requestTransmissionStarted && isProxyConnectionSetupError(error) && routeIndex + 1 < routes.length) {
+                try {
+                  dispatchRoute(routeIndex + 1);
+                } catch (fallbackError) {
+                  const detail = publicNetworkError(fallbackError);
+                  handler.onResponseError?.(controller, new Error(`System proxy request failed for ${origin.hostname}: ${detail}`));
+                }
+                return;
+              }
+              const detail = publicNetworkError(error);
+              handler.onResponseError?.(controller, new Error(`System proxy request failed for ${origin.hostname}: ${detail}`));
+            },
+          };
+          try {
+            dispatcher.dispatch(options, routeHandler);
+          } catch (error) {
+            if (!requestTransmissionStarted && isProxyConnectionSetupError(error) && routeIndex + 1 < routes.length) {
+              dispatchRoute(routeIndex + 1);
+              return;
+            }
+            throw error;
+          }
+        };
+
+        dispatchRoute(0);
+      }).catch((error) => {
+        const detail = publicNetworkError(error);
+        handler.onResponseError?.(null, new Error(`System proxy setup failed for ${origin.hostname}: ${detail}`));
+      });
+      return true;
+    },
+    async close(): Promise<void> {
+      await Promise.all([directDispatcher.close(), ...Array.from(proxyDispatchers.values(), (dispatcher) => dispatcher.close())]);
+    },
+    async destroy(error?: Error): Promise<void> {
+      await Promise.all([directDispatcher.destroy(error), ...Array.from(proxyDispatchers.values(), (dispatcher) => dispatcher.destroy(error))]);
+    },
+  };
+  undici.setGlobalDispatcher(systemDispatcher);
+}
 
 function addPiRoots(candidates: string[], root: string): void {
   const normalized = root.trim().replace(/^['"]|['"]$/g, "");
@@ -105,6 +315,16 @@ export function resolvePiModule(): string {
   return resolved;
 }
 
+export function piHttpDispatcherModule(piModule: string = resolvePiModule()): string {
+  const modulePath = path.join(path.dirname(piModule), "core", "http-dispatcher.js");
+  if (!existsSync(modulePath)) {
+    throw new Error(
+      "The installed Pi SDK does not expose its HTTP dispatcher. Install the PiDeck-supported Pi SDK version or remove PIDECK_PI_MODULE.",
+    );
+  }
+  return modulePath;
+}
+
 export function loadPiSdk(): Promise<PiSdk> {
   sdkPromise ??= import(pathToFileURL(resolvePiModule()).href).catch((error) => {
     sdkPromise = undefined;
@@ -113,8 +333,46 @@ export function loadPiSdk(): Promise<PiSdk> {
   return sdkPromise;
 }
 
+/** Configure the same proxy-aware Undici dispatcher used by the Pi CLI. */
+export function configurePiHttpNetworking(options: { resolveSystemProxy?: SystemProxyResolver } = {}): Promise<void> {
+  httpNetworkingPromise ??= (async () => {
+    const sdkModule = resolvePiModule();
+    const [sdk, dispatcherModule] = await Promise.all([
+      loadPiSdk(),
+      import(pathToFileURL(piHttpDispatcherModule(sdkModule)).href) as Promise<Partial<PiHttpDispatcher>>,
+    ]);
+    if (
+      typeof dispatcherModule.applyHttpProxySettings !== "function"
+      || typeof dispatcherModule.configureHttpDispatcher !== "function"
+    ) {
+      throw new Error("The installed Pi SDK has an incompatible HTTP dispatcher API");
+    }
+
+    const agentDir = sdk.getAgentDir?.();
+    const settingsManager = sdk.SettingsManager?.create(process.cwd(), agentDir);
+    const httpProxy = settingsManager?.getGlobalSettings?.().httpProxy as string | undefined;
+    const httpIdleTimeoutMs = settingsManager?.getHttpIdleTimeoutMs?.() as number | undefined;
+    dispatcherModule.applyHttpProxySettings(httpProxy);
+    dispatcherModule.configureHttpDispatcher(httpIdleTimeoutMs);
+    const hasConfiguredProxy = Boolean(firstNonEmpty(
+      process.env.HTTPS_PROXY,
+      process.env.https_proxy,
+      process.env.HTTP_PROXY,
+      process.env.http_proxy,
+    ));
+    if (process.env.PIDECK_USE_SYSTEM_PROXY === "1" && !hasConfiguredProxy) {
+      if (!options.resolveSystemProxy) throw new Error("PiDeck system proxy resolver is unavailable");
+      installSystemProxyDispatcher(sdkModule, options.resolveSystemProxy);
+    }
+  })().catch((error) => {
+    httpNetworkingPromise = undefined;
+    throw error;
+  });
+  return httpNetworkingPromise;
+}
+
 export function getModelRuntime(): Promise<any> {
-  modelRuntimePromise ??= loadPiSdk().then((sdk) => sdk.ModelRuntime.create({ allowModelNetwork: false })).catch((error) => {
+  modelRuntimePromise ??= configurePiHttpNetworking().then(loadPiSdk).then((sdk) => sdk.ModelRuntime.create({ allowModelNetwork: false })).catch((error) => {
     modelRuntimePromise = undefined;
     throw error;
   });

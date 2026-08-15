@@ -44,6 +44,7 @@ Main is only responsible for:
 
 - Creating and destroying the BrowserWindow (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`).
 - Starting, listening to, and stopping PiHost.
+- Resolving the operating-system proxy through an internal Main/PiHost bridge for each request URL when neither explicit proxy environment variables nor Pi `httpProxy` are set.
 - Orchestrating between Renderer IPC and PiHost requests.
 - Setting timeouts for requests (default 60s; `providers.login`, `sessions.share` 15min; `packages.*` 10min; `agent.prompt` unbounded — its completion is signaled by `agent_settled`, not the RPC response) and handling Host disconnects.
 - Opening protocol-validated HTTP(S) URLs in the system browser and rejecting in-window navigation.
@@ -71,9 +72,12 @@ PiHost is responsible for:
 - Reading/restoring Pi Sessions and writing `pideck.execution-run` run metadata via `SessionManager.appendCustomEntry()`.
 - Forwarding Agent events, Approval events, Auth events, and Extension UI requests.
 - Executing Pi built-in tools, Bash, Provider login, Pi package management, permission-mode reads/writes, and session operations.
+- Initializing Pi's own proxy-aware HTTP dispatcher before reporting `runtime.status=connected`, so OAuth token exchange, model requests, and Provider HTTP calls share the same PiHost route. Package-manager subprocesses such as npm, pnpm, and git retain their own proxy configuration.
 - Converting cross-process data into JSON-serializable responses (`jsonSafe`) and saving queued image attachments out-of-band so `promoteQueue` does not drop them.
 
 Dynamic Pi SDK resolution, loading, and model/Session adaptation live in `packages/pi-adapter`. Pi permission configuration, Extension UI binding, approval waiting, and policy switching live in `packages/permission-engine`. Neither creates a second agent, Provider, or Session store; the authoritative sources remain the Pi SDK and `@gotgenes/pi-permission-system`.
+
+Proxy precedence is explicit `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, Pi's global `httpProxy` setting, then Electron's cross-platform system-proxy resolution. `pi-adapter` first calls Pi's version-matched `configureHttpDispatcher()`; only when no explicit/Pi proxy exists does it install a thin dispatcher that asks Main to run `session.resolveProxy(url)` for every request URL. PAC, bypass, and domain-specific rules therefore remain URL-aware instead of being flattened into a startup snapshot. Resolution failures reject the request rather than silently falling back to direct traffic. A missing or incompatible dispatcher fails PiHost startup with a sanitized `runtime.error` before process exit.
 
 ## 3. Current Repository Structure
 
@@ -222,12 +226,13 @@ If the docs disagree with `packages/contracts`, contracts and the implementation
 
 ## 6. Current Event Flow
 
-`PiDeckRuntimeEvent` declares the types `runtime.status`, `agent.event`, `auth.event`, `approval.requested`, `approval.resolved`, `extension.ui.request`, `extension.ui.notify`.
+`PiDeckRuntimeEvent` declares the types `runtime.status`, `runtime.error`, `agent.event`, `auth.event`, `approval.requested`, `approval.resolved`, `extension.ui.request`, `extension.ui.notify`.
 
-Five message shapes are currently dispatched with a top-level `type`:
+Six message shapes are currently dispatched with a top-level `type`:
 
 ```ts
 { type: "runtime.status", payload: "connected" | "starting" | "disconnected" }
+{ type: "runtime.error", payload: { message: string } }
 { type: "agent.event", taskId, event }
 { type: "approval.requested", taskId, requestId, event: { toolName, args } }
 { type: "auth.event", requestId, event }

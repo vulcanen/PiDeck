@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, Tray, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session as electronSession, shell, Tray, type MenuItemConstructorOptions } from "electron";
 import { fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -209,6 +209,31 @@ function resolveNodeExecutable(): string {
   return process.execPath;
 }
 
+function piHostEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  return {
+    ...environment,
+    PIDECK_USE_SYSTEM_PROXY: "1",
+    PIDECK_HOST_PROCESS: "1",
+    ELECTRON_RUN_AS_NODE: "1",
+  };
+}
+
+async function resolveProxyForHost(sourceHost: ChildProcess, requestId: string, url: string): Promise<void> {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Unsupported proxy target protocol");
+    const rules = await electronSession.defaultSession.resolveProxy(parsed.toString());
+    if (host === sourceHost && sourceHost.connected) {
+      sourceHost.send?.({ type: "proxy.resolve-result", requestId, rules });
+    }
+  } catch {
+    if (host === sourceHost && sourceHost.connected) {
+      sourceHost.send?.({ type: "proxy.resolve-result", requestId, error: "System proxy resolution failed" });
+    }
+  }
+}
+
 function startHost(window: BrowserWindow) {
   hostWindow = window;
   if (host && hostAlive) {
@@ -218,16 +243,21 @@ function startHost(window: BrowserWindow) {
 
   publishRuntimeStatus("starting");
   const hostPath = path.join(__dirname, "../../../../packages/pi-host/dist/index.js");
-  host = forkNode(hostPath, [], {
+  const startedHost = forkNode(hostPath, [], {
     execPath: resolveNodeExecutable(),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
-    env: { ...process.env, PIDECK_HOST_PROCESS: "1", ELECTRON_RUN_AS_NODE: "1" },
+    env: piHostEnvironment(),
   });
+  host = startedHost;
   hostAlive = true;
-  host.stderr?.on("data", (chunk) => {
+  startedHost.stderr?.on("data", (chunk) => {
     if (process.env.PIDECK_DEBUG) console.error(`[PiHost] ${String(chunk).trimEnd()}`);
   });
-  host.on("message", (message: PiHostResponse | { type?: string; payload?: unknown }) => {
+  startedHost.on("message", (message: PiHostResponse | { type?: string; payload?: unknown; requestId?: string; url?: string }) => {
+    if ("type" in message && message.type === "proxy.resolve" && typeof message.requestId === "string" && typeof message.url === "string") {
+      void resolveProxyForHost(startedHost, message.requestId, message.url);
+      return;
+    }
     if (!message || typeof message !== "object" || !("id" in message)) {
       if (message?.type === "runtime.status" && message.payload === "connected") {
         publishRuntimeStatus("connected");
@@ -243,11 +273,11 @@ function startHost(window: BrowserWindow) {
     if (message.ok) request.resolve(message.result);
     else request.reject(new Error(message.error ?? "PiHost request failed"));
   });
-  host.on("error", (error) => {
+  startedHost.on("error", (error) => {
     console.error("PiHost process error", error);
     if (hostAlive) teardownHost("PiHost process error");
   });
-  host.on("exit", () => {
+  startedHost.on("exit", () => {
     teardownHost("PiHost exited");
   });
 }

@@ -65,6 +65,30 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Unexpected permission status: ${JSON.stringify(message)}`));
         return;
       }
+      child.send({ id: "projects-list", command: "projects.list", payload: { knownCwds: [root] } });
+      return;
+    }
+    if (message?.id === "projects-list") {
+      if (!message.ok || !Array.isArray(message.result)) {
+        finish(new Error(`Unexpected projects.list response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "models-list", command: "models.list" });
+      return;
+    }
+    if (message?.id === "models-list") {
+      if (!message.ok || !Array.isArray(message.result)) {
+        finish(new Error(`Unexpected models.list response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "providers-list", command: "providers.list" });
+      return;
+    }
+    if (message?.id === "providers-list") {
+      if (!message.ok || !Array.isArray(message.result)) {
+        finish(new Error(`Unexpected providers.list response: ${JSON.stringify(message)}`));
+        return;
+      }
       child.send({ id: "session-create", command: "sessions.create", payload: { cwd: root, name: "Permission extension smoke" } });
       return;
     }
@@ -74,6 +98,14 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Could not create smoke session: ${JSON.stringify(message)}`));
         return;
       }
+      child.send({ id: "session-run-metadata", command: "sessions.runMetadata", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "session-run-metadata") {
+      if (!message.ok || !Array.isArray(message.result)) {
+        finish(new Error(`Unexpected sessions.runMetadata response: ${JSON.stringify(message)}`));
+        return;
+      }
       child.send({ id: "session-capabilities", command: "sessions.capabilities", payload: { taskId, cwd: root } });
       return;
     }
@@ -81,6 +113,14 @@ await new Promise((resolve, reject) => {
       const commands = Array.isArray(message.result?.slashCommands) ? message.result.slashCommands : [];
       if (!message.ok || !commands.some((command) => command?.name === "permission-system")) {
         finish(new Error(`Permission Extension did not load: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "workspace-snapshot", command: "workspace.snapshot", payload: { cwd: root } });
+      return;
+    }
+    if (message?.id === "workspace-snapshot") {
+      if (!message.ok || !message.result || !Array.isArray(message.result.files)) {
+        finish(new Error(`Unexpected workspace.snapshot response: ${JSON.stringify(message)}`));
         return;
       }
       finish();

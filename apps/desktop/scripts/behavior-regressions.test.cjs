@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -8,7 +9,7 @@ const { pathToFileURL } = require("node:url");
 const { assertKnownProjectCwd, assertTrustedIpcSender } = require("../dist/main/ipc-security.js");
 const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
-const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules } = require("../../../packages/pi-adapter/dist/index.js");
+const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
 
 function deferred() {
@@ -20,6 +21,112 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("system proxy rules preserve per-URL HTTP, SOCKS, and direct fallback order", () => {
+  assert.deepEqual(systemProxyRoutesFromElectronRules("PROXY 127.0.0.1:7897; SOCKS5 localhost:1080; DIRECT"), [
+    { type: "proxy", url: "http://127.0.0.1:7897/" },
+    { type: "proxy", url: "socks5://localhost:1080" },
+    { type: "direct" },
+  ]);
+  assert.deepEqual(systemProxyRoutesFromElectronRules("DIRECT"), [{ type: "direct" }]);
+});
+
+test("Pi HTTP networking gives Pi settings priority over the system-proxy fallback", () => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-proxy-settings-"));
+  const root = path.join(__dirname, "../../..");
+  const adapterPath = path.join(root, "packages/pi-adapter/dist/index.js");
+  const piModule = path.join(root, "node_modules/@earendil-works/pi-coding-agent/dist/index.js");
+  const script = `
+    const { configurePiHttpNetworking } = require(${JSON.stringify(adapterPath)});
+    configurePiHttpNetworking({ resolveSystemProxy: async () => { throw new Error("system resolver must not run"); } }).then(() => process.stdout.write(JSON.stringify({
+      http: process.env.HTTP_PROXY ?? null,
+      https: process.env.HTTPS_PROXY ?? null,
+      noProxy: process.env.NO_PROXY ?? null,
+    })));
+  `;
+  const environment = {
+    ...process.env,
+    PI_CODING_AGENT_DIR: agentDir,
+    PIDECK_PI_MODULE: piModule,
+    PIDECK_USE_SYSTEM_PROXY: "1",
+  };
+  for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"]) delete environment[key];
+
+  try {
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ httpProxy: "http://pi.proxy:9000" }));
+    const output = execFileSync(process.execPath, ["-e", script], { encoding: "utf8", env: environment });
+    assert.deepEqual(JSON.parse(output), {
+      http: "http://pi.proxy:9000",
+      https: "http://pi.proxy:9000",
+      noProxy: null,
+    });
+
+  } finally {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("Pi HTTP networking resolves each request URL and fails over before transmission", () => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-dynamic-proxy-"));
+  const root = path.join(__dirname, "../../..");
+  const adapterPath = path.join(root, "packages/pi-adapter/dist/index.js");
+  const piModule = path.join(root, "node_modules/@earendil-works/pi-coding-agent/dist/index.js");
+  fs.writeFileSync(path.join(agentDir, "settings.json"), "{}");
+  const script = `
+    const http = require("node:http");
+    const { configurePiHttpNetworking } = require(${JSON.stringify(adapterPath)});
+    (async () => {
+      const origins = [];
+      let proxyHits = 0;
+      const proxy = http.createServer((request, response) => {
+        proxyHits += 1;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ path: request.url, method: request.method }));
+      });
+      const unavailableProxy = http.createServer();
+      const direct = http.createServer((_request, response) => response.end("direct"));
+      await new Promise((resolve) => unavailableProxy.listen(0, "127.0.0.1", resolve));
+      const unavailableAddress = unavailableProxy.address();
+      await new Promise((resolve) => unavailableProxy.close(resolve));
+      await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+      await new Promise((resolve) => direct.listen(0, "127.0.0.1", resolve));
+      const address = proxy.address();
+      const directAddress = direct.address();
+      await configurePiHttpNetworking({
+        resolveSystemProxy: async (origin) => {
+          origins.push(origin);
+          return "PROXY 127.0.0.1:" + unavailableAddress.port + "; PROXY 127.0.0.1:" + address.port + "; DIRECT";
+        },
+      });
+      const response = await fetch("http://pideck-proxy-target.invalid/token", { method: "POST", body: "code=test" });
+      const result = await response.json();
+      process.env.NO_PROXY = "127.0.0.1";
+      const directResult = await fetch("http://127.0.0.1:" + directAddress.port + "/health").then((value) => value.text());
+      await new Promise((resolve) => proxy.close(resolve));
+      await new Promise((resolve) => direct.close(resolve));
+      process.stdout.write(JSON.stringify({ origins, path: result.path, method: result.method, proxyHits, directResult }));
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `;
+  const environment = {
+    ...process.env,
+    PI_CODING_AGENT_DIR: agentDir,
+    PIDECK_PI_MODULE: piModule,
+    PIDECK_USE_SYSTEM_PROXY: "1",
+  };
+  for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"]) delete environment[key];
+  try {
+    const output = execFileSync(process.execPath, ["-e", script], { encoding: "utf8", env: environment });
+    assert.deepEqual(JSON.parse(output), {
+      origins: ["http://pideck-proxy-target.invalid/token"],
+      path: "http://pideck-proxy-target.invalid/token",
+      method: "POST",
+      proxyHits: 1,
+      directResult: "direct",
+    });
+  } finally {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  }
+});
 
 test("a stale queue request cannot overwrite the newly selected task", async () => {
   const first = deferred();
@@ -83,6 +190,17 @@ test("IPC accepts only the active window main frame", () => {
     () => assertTrustedIpcSender({ sender: webContents, senderFrame: mainFrame }, { ...window, isDestroyed: () => true }),
     /untrusted renderer/,
   );
+});
+
+test("PiHost networking startup failures reach the Renderer as sanitized runtime errors", () => {
+  const contracts = fs.readFileSync(path.join(__dirname, "../../../packages/contracts/src/index.ts"), "utf8");
+  const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  const runtimeEvents = fs.readFileSync(path.join(__dirname, "../src/renderer/use-runtime-events.ts"), "utf8");
+  assert.match(contracts, /"runtime\.error"/);
+  assert.match(host, /publicRuntimeError\(error\)/);
+  assert.match(host, /type: "runtime\.error"/);
+  assert.match(runtimeEvents, /runtimeEvent\.type === "runtime\.error"/);
+  assert.match(runtimeEvents, /runtimeStartFailed/);
 });
 
 test("Electron renderer enforces CSP and rejects in-window navigation", () => {

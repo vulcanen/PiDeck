@@ -1,8 +1,9 @@
 import type { PermissionMode, PiHostRequest, PiHostResponse, SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
-import { getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
+import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { readdir, stat } from "node:fs/promises";
@@ -16,6 +17,41 @@ const parentPort = (process as typeof process & {
     postMessage(message: unknown): void;
   };
 }).parentPort;
+const proxyResolveWaiters = new Map<string, {
+  resolve: (rules: string) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+function resolveSystemProxy(url: string): Promise<string> {
+  if (!process.send) return Promise.reject(new Error("PiDeck system proxy bridge is unavailable"));
+  const requestId = randomUUID();
+  return new Promise<string>((resolve, reject) => {
+    const hostname = new URL(url).hostname;
+    const timer = setTimeout(() => {
+      proxyResolveWaiters.delete(requestId);
+      reject(new Error(`System proxy resolution timed out for ${hostname}`));
+    }, 10_000);
+    proxyResolveWaiters.set(requestId, { resolve, reject, timer });
+    process.send?.({ type: "proxy.resolve", requestId, url });
+  });
+}
+
+function handleProxyResolveResult(message: { requestId: string; rules?: string; error?: string }): void {
+  const waiter = proxyResolveWaiters.get(message.requestId);
+  if (!waiter) return;
+  proxyResolveWaiters.delete(message.requestId);
+  clearTimeout(waiter.timer);
+  if (typeof message.rules === "string") waiter.resolve(message.rules);
+  else waiter.reject(new Error(message.error || "System proxy resolution failed"));
+}
+
+function publicRuntimeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, "$1***@");
+}
+
+const httpNetworkingReady = configurePiHttpNetworking({ resolveSystemProxy });
 const sessionManagers = new Map<string, any>();
 const sessionFiles = new Map<string, string>();
 const titledSessions = new Set<string>();
@@ -699,6 +735,7 @@ async function ensureCapabilitySession(cwd: string): Promise<any> {
 
 async function handle(request: PiHostRequest): Promise<void> {
   try {
+    await httpNetworkingReady;
     switch (request.command) {
       case "runtime.status":
         send({ id: request.id, ok: true, result: "connected" });
@@ -1420,9 +1457,31 @@ async function handle(request: PiHostRequest): Promise<void> {
 }
 
 parentPort?.on("message", (event: { data: unknown }) => void handle(event.data as PiHostRequest));
-process.on("message", (request: PiHostRequest) => void handle(request));
-parentPort?.postMessage({ type: "runtime.status", payload: "connected" });
-process.send?.({ type: "runtime.status", payload: "connected" });
+process.on("message", (message: PiHostRequest | { type?: string; requestId?: string; rules?: string; error?: string }) => {
+  if ("type" in message && message.type === "proxy.resolve-result" && typeof message.requestId === "string") {
+    handleProxyResolveResult({ requestId: message.requestId, rules: message.rules, error: message.error });
+    return;
+  }
+  void handle(message as PiHostRequest);
+});
+process.on("disconnect", () => {
+  for (const waiter of proxyResolveWaiters.values()) {
+    clearTimeout(waiter.timer);
+    waiter.reject(new Error("PiDeck system proxy bridge disconnected"));
+  }
+  proxyResolveWaiters.clear();
+});
+void httpNetworkingReady.then(() => {
+  parentPort?.postMessage({ type: "runtime.status", payload: "connected" });
+  process.send?.({ type: "runtime.status", payload: "connected" });
+}).catch((error) => {
+  const message = { type: "runtime.error", payload: { message: publicRuntimeError(error) } };
+  parentPort?.postMessage(message);
+  process.send?.(message);
+  console.error(`PiHost HTTP networking initialization failed: ${publicRuntimeError(error)}`);
+  process.exitCode = 1;
+  setTimeout(() => process.exit(1), 100);
+});
 
 // Observe fatal errors without changing Node's default crash semantics. Main
 // owns the exit path: it rejects pending calls, publishes "disconnected", and

@@ -65,6 +65,8 @@ PiDeck installers contain the project's locked Pi SDK and do not require a separ
 
 Pi sessions, provider credentials, OAuth, and Pi Package configuration are managed by the local Pi Runtime and can be shared with a compatible Pi CLI environment. PiDeck itself stores only project directory references, display order, and UI preferences in Electron `userData`; removing a project from the sidebar does not delete project files or Pi sessions.
 
+PiHost network requests use the same proxy-aware dispatcher as Pi CLI. Explicit `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` environment variables take priority, followed by Pi's global `httpProxy` setting, then the system proxy resolved by Electron for each request target on Windows, macOS, or Linux; PAC, bypass, and domain-specific rules therefore remain effective. OAuth pages in the browser remain under the system browser and Provider's control.
+
 PiDeck does not configure an analytics or telemetry exporter. Provider requests are still handled by the selected Pi Runtime and model service; evaluate code and session content under the corresponding provider's privacy policy before sending it.
 
 Agent tools and extensions may read or modify project files or execute commands according to the active permission settings. Review the source of third-party packages and choose an appropriate approval level before using them.
