@@ -252,7 +252,7 @@ test("release workflow builds both macOS architectures and Windows x64", () => {
   assert.match(workflow, /runner: macos-15-intel\n\s+arch: x64/);
   assert.match(workflow, /runs-on: windows-2025/);
   assert.match(workflow, /gh release create/);
-  assert.match(workflow, /--draft/);
+  assert.doesNotMatch(workflow, /--draft/);
   assert.match(workflow, /ref: refs\/tags\//);
   assert.match(workflow, /git merge-base --is-ancestor/);
   assert.match(workflow, /environment: release-signing/);

@@ -233,7 +233,6 @@ jobs:
             gh release upload "$RELEASE_TAG" artifacts/* --clobber
           else
             gh release create "$RELEASE_TAG" artifacts/* \
-              --draft \
               --generate-notes \
               --title "PiDeck $RELEASE_TAG"
           fi
