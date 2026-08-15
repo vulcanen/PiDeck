@@ -123,7 +123,8 @@ jobs:
           ./node_modules/.bin/electron-builder \
             --config electron-builder.config.cjs \
             --mac dmg \
-            --${{ matrix.arch }}
+            --${{ matrix.arch }} \
+            --publish never
       - name: Verify packaged application
         run: npm run verify:package -- release
       - name: Smoke packaged PiHost and bundled SDK
@@ -161,7 +162,7 @@ jobs:
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           PIDECK_FORCE_CODE_SIGNING: ${{ secrets.WIN_CSC_LINK != '' }}
-        run: .\node_modules\.bin\electron-builder.cmd --config electron-builder.config.cjs --win nsis --x64
+        run: .\node_modules\.bin\electron-builder.cmd --config electron-builder.config.cjs --win nsis --x64 --publish never
       - name: Verify packaged application
         run: npm run verify:package -- release/win-unpacked
       - name: Smoke packaged PiHost and bundled SDK
