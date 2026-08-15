@@ -121,10 +121,10 @@ export function useAppController() {
   const isWorking = isSending || isCompacting;
   const streamText = activeTaskUi?.streamText ?? "";
   const workingPhase = activeTaskUi?.workingPhase ?? null;
-  const rawMessages = activeTask ? messagesByTask[activeTask.id] ?? [] : [];
+  const rawMessages = useMemo(() => activeTaskId ? messagesByTask[activeTaskId] ?? [] : [], [activeTaskId, messagesByTask]);
   const messages = useMemo(() => {
-    if (!activeTask) return rawMessages;
-    const pendingImages = [...(sentImagesByTask[activeTask.id] ?? [])];
+    if (!activeTaskId) return rawMessages;
+    const pendingImages = [...(sentImagesByTask[activeTaskId] ?? [])];
     if (!pendingImages.length) return rawMessages;
     return rawMessages.map((message) => {
       if (message?.role !== "user" || (Array.isArray(message.content) && message.content.some((part: any) => part?.type === "image"))) return message;
@@ -133,7 +133,7 @@ export function useAppController() {
       const sent = pendingImages.splice(matchIndex, 1)[0];
       return { ...message, content: [{ type: "text", text: sent.text }, ...sent.images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] };
     });
-  }, [activeTask, rawMessages, sentImagesByTask]);
+  }, [activeTaskId, rawMessages, sentImagesByTask]);
   const messageLoad = activeTask ? messageLoads[activeTask.id] ?? { status: "idle" as const } : { status: "idle" as const };
   const activeProject = projects.find((project) => project.cwd === projectCwd) ?? null;
 
@@ -299,6 +299,9 @@ export function useAppController() {
     }
   }
 
+  const loadInitialDataRef = useRef(loadInitialData);
+  loadInitialDataRef.current = loadInitialData;
+
   async function restartHost() {
     // PiHost crashed or was killed; ask Main to fork a fresh one, then reload
     // the workspace once it is back. Without this the retry button can never
@@ -449,7 +452,7 @@ export function useAppController() {
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
-    void loadInitialData();
+    void loadInitialDataRef.current();
   }, []);
   useEffect(() => {
     let current = true;
@@ -482,7 +485,7 @@ export function useAppController() {
       ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
     ];
     return slashItems.filter((item) => item.name.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
-  }, [capabilities, language, suggestionMode, suggestionQuery, workspace]);
+  }, [capabilities, hiddenSlashCommandNames, language, suggestionMode, suggestionQuery, workspace]);
   const paletteCommands = useMemo(() => {
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];

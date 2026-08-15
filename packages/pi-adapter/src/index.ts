@@ -53,10 +53,36 @@ function addPiExecutable(candidates: string[], executable: string): void {
   }
 }
 
+export function packagedPiNodeModules(adapterDirectory: string = __dirname): string | undefined {
+  const normalized = adapterDirectory.replaceAll("\\", "/");
+  const marker = "/app.asar/";
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  return path.join(normalized.slice(0, markerIndex + "/app.asar".length), "node_modules");
+}
+
+export function isPackagedPiAdapter(adapterDirectory: string = __dirname): boolean {
+  return packagedPiNodeModules(adapterDirectory) !== undefined;
+}
+
 /** Locate the installed Pi SDK without making Renderer or Main depend on its internals. */
 export function resolvePiModule(): string {
   if (process.env.PIDECK_PI_MODULE && existsSync(process.env.PIDECK_PI_MODULE)) return process.env.PIDECK_PI_MODULE;
   const candidates: string[] = [];
+  const packagedNodeModules = packagedPiNodeModules();
+
+  // Official installers carry a lockfile-pinned Pi SDK inside app.asar. Never
+  // let an unrelated global `pi` command silently replace that SDK: packaged
+  // builds use the bundled copy unless PIDECK_PI_MODULE explicitly opts into a
+  // compatibility test. Development builds retain global discovery as a
+  // convenience for working on Pi and PiDeck together.
+  if (packagedNodeModules) {
+    addPiRoots(candidates, packagedNodeModules);
+    const bundled = candidates.find((candidate) => existsSync(candidate));
+    if (bundled) return bundled;
+    throw new Error("Could not locate the bundled Pi SDK. Reinstall PiDeck or set PIDECK_PI_MODULE for compatibility testing.");
+  }
+
   try {
     const executable = process.platform === "win32"
       ? execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "where.exe"), ["pi"], { encoding: "utf8" }).split(/\r?\n/).find(Boolean) ?? ""
@@ -97,11 +123,12 @@ export function getModelRuntime(): Promise<any> {
 
 export function modelSummary(provider: any, model: any, authConfigured: boolean) {
   const thinkingLevelMap = model.thinkingLevelMap as Record<string, string | null | undefined> | undefined;
-  const supportedThinkingLevels = ["off", "minimal", "low", "medium", "high"];
+  const supportedThinkingLevels = ["off", "minimal", "low", "medium", "high"]
+    .filter((level) => thinkingLevelMap?.[level] !== null);
   // Pi supports the extended levels only when the model explicitly maps
   // them. Keep this in lockstep with getSupportedThinkingLevels().
-  if (thinkingLevelMap?.xhigh !== undefined) supportedThinkingLevels.push("xhigh");
-  if (thinkingLevelMap?.max !== undefined) supportedThinkingLevels.push("max");
+  if (thinkingLevelMap?.xhigh !== undefined && thinkingLevelMap.xhigh !== null) supportedThinkingLevels.push("xhigh");
+  if (thinkingLevelMap?.max !== undefined && thinkingLevelMap.max !== null) supportedThinkingLevels.push("max");
   return {
     id: model.id,
     providerId: provider.id,

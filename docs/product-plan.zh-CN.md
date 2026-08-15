@@ -2,7 +2,7 @@
 
 > 文档状态：与当前代码基线对齐；未实现项单独标记为计划。
 >
-> 更新日期：2026-08-04
+> 更新日期：2026-08-15
 >
 > 目标平台：Windows、macOS
 
@@ -18,6 +18,8 @@ PiDeck 是 `@earendil-works/pi-coding-agent` 的桌面 UI 适配层。它不重�
 Provider API Key、OAuth、Token 刷新和 Session 文件仍由 Pi Runtime 管理，凭据不进入 Renderer。
 
 ## 2. 当前实现基线
+
+Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.2`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.2 会应用项目/全局 `defaultTools` 设置，同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。
 
 当前可运行结构：
 
@@ -37,7 +39,7 @@ React Renderer
 ```text
 apps/desktop/
 ├─ index.html                    # Vite Renderer 宿主页面
-├─ vite.config.ts                # Renderer 构建，输出 dist-renderer/
+├─ vite.config.mts               # Renderer ESM 构建配置，输出 dist-renderer/
 ├─ assets/ · native/ · public/   # 图标、macOS 原生定制源码、静态资源
 ├─ scripts/                      # build-native.mjs、renderer-regressions.test.cjs
 └─ src/
@@ -167,7 +169,7 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 
 ### 7.2 `@gotgenes/pi-permission-system` 现状
 
-PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。桌面端提供以下模式：
+PiDeck 已将 `@gotgenes/pi-permission-system@25.2.2` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。该版本会将 bash 中的 `$HOME`、`${HOME}` 与 `$PWD` 路径解析后纳入 `external_directory` 检查，并改进子 Agent 审批转发、Authorizer Chain 记录以及重定向和 heredoc 内嵌套命令的权限判断。桌面端提供以下模式：
 
 - `allow`：静默允许工具执行。
 - `ask`：执行前由 Pi 权限系统请求审批。
@@ -201,6 +203,8 @@ PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Ex
 - PiHost 承担 Pi SDK、Agent、Tool、Provider、Session 和资源。
 - 跨进程只传 JSON/structured-clone 可序列化 DTO。
 - 外部 URL 只允许 HTTP(S)，通过系统浏览器打开。
+- Renderer 强制执行严格的内容安全策略，并拒绝窗口内导航。
+- 打包版本默认加载安装包内锁定的 Pi SDK，只有 `PIDECK_PI_MODULE` 可显式覆盖。
 - API Key、OAuth Token 不进入 Renderer、日志、事件或 DevTools。
 - 失败状态必须可见并提供重试或修复操作。
 
@@ -210,11 +214,15 @@ PiDeck 已将 `@gotgenes/pi-permission-system@24.0.0` 作为桌面 PiHost 的 Ex
 
 ```bash
 npm install
+npm run notices:check
+npm ls --all
 npm ls --depth=0 --workspaces
 npm run typecheck
 npm run test:renderer
 npm run build
 ```
+
+Release Tag 还会验证 Tag commit 属于 `main` 并锁定其 SHA，在 Linux 上执行同一套验证，再分别在匹配的原生 GitHub Runner 上构建 Windows x64、macOS arm64 和 macOS x64 安装包。工作流从每个平台最终包生成独立 SBOM，并创建包含 SHA-256 校验和的 Draft Release；可信公开分发还需要在受保护的 `release-signing` Environment 中配置平台签名和 macOS 公证 Secret。
 
 PiHost 相关修改还要验证：
 

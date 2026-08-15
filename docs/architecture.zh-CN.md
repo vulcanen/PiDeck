@@ -32,7 +32,7 @@ Sandboxed React Renderer
 两个运行时定位入口：
 
 - `PIDECK_NODE_EXECUTABLE`：显式指定 PiHost 使用的 Node 可执行文件，缺省为 `process.execPath`（Electron 内置 Node）。
-- `PIDECK_PI_MODULE`：显式指定 Pi SDK 入口文件，缺省由 `packages/pi-adapter` 在候选路径中查找。
+- `PIDECK_PI_MODULE`：显式指定 Pi SDK 入口文件。打包版本否则必须使用 `app.asar` 内由锁文件固定的 SDK；开发版本还可发现全局 Pi 安装。
 
 `packages/pi-host` 同时向 `process.send` 和 `worker_threads` 的 `parentPort` 投递消息，因此进程宿主方式可替换，但当前 Main 只使用 `child_process.fork`。
 
@@ -81,7 +81,8 @@ Pi SDK 的动态定位、加载和模型/Session 适配集中在 `packages/pi-ad
 PiDeck/
 ├─ apps/desktop/
 │  ├─ index.html                          # Vite Renderer 宿主页面
-│  ├─ vite.config.ts                      # Renderer 构建，输出到根目录 dist-renderer/
+│  ├─ vite.config.mts                     # Renderer ESM 构建配置，输出到根目录 dist-renderer/
+│  ├─ entitlements.mac.plist              # macOS 正式签名构建的 Hardened Runtime 权限
 │  ├─ assets/                             # 应用图标、mac Info.plist、原生插件产物
 │  ├─ native/miniwindow.mm                # macOS 最小化窗口图标原生定制源码
 │  ├─ public/                             # Renderer 静态资源
@@ -141,9 +142,17 @@ PiDeck/
 │  ├─ permission-engine/                  # Pi 权限配置、Extension UI 和审批等待
 │  ├─ ui-system/                          # Renderer 共享 Icon、焦点和剪贴板基元
 │  └─ i18n/                               # zh/en 文案和命令描述
-├─ docs/                                  # 架构、产品方案与 Pi 能力矩阵
+├─ docs/                                  # 架构、产品方案、Pi 能力矩阵与发布指南
 ├─ rules/                                 # 开发与文档同步规则
-├─ scripts/verify-package-contents.mjs    # 打包后 asar 运行入口/禁入项验证
+├─ .github/workflows/
+│  ├─ ci.yml                              # main/PR 验证
+│  └─ release.yml                         # Tag 原生安装包与 GitHub Draft Release
+├─ scripts/verify-package-contents.mjs    # 打包后 asar 运行入口/许可证/禁入项验证
+├─ scripts/smoke-source-runtime.mjs       # 启动构建后的 PiHost 并执行真实运行时 IPC
+├─ scripts/smoke-packaged-runtime.mjs     # 启动打包后 PiHost 并校验内置 Pi SDK
+├─ scripts/generate-packaged-sbom.mjs     # 从最终 asar 生成平台对应的 CycloneDX SBOM
+├─ scripts/generate-third-party-notices.mjs # 确定性的生产依赖许可证清单
+├─ scripts/verify-release-version.mjs     # Release Tag 与包版本一致性守卫
 ├─ dist-renderer/                         # Renderer 构建产物（不入库）
 ├─ release/                               # electron-builder 打包产物（不入库）
 ├─ electron-builder.config.cjs            # 公共运行时白名单与平台打包规则
@@ -247,7 +256,15 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 对于当前没有稳定 Bridge 或 UI 的能力，必须显示未实现，不能伪造成功状态。PiDeck 不额外维护一套独立的 Pi CLI 执行面板。
 
-## 8. 运行时验证
+## 8. 打包与分发
+
+本地打包保留按当前主机运行的 `package:mac`，并为匹配的原生 Runner 提供显式的 `package:mac:arm64`、`package:mac:x64` 和 `package:win:x64`。安装包文件名包含操作系统和架构；每次构建后都会验证 asar 运行入口、PiDeck 声明、Electron/Chromium 运行时许可证与禁入项。随后原生打包 Job 会从 `app.asar` 启动 PiHost，调用 `runtime.status`，并通过 `app.info` 校验内置 Pi SDK 与锁定版本一致。
+
+`.github/workflows/release.yml` 由匹配版本的 Tag 触发（也可手动重建已有 Tag），要求 Tag commit 已包含在 `main` 中并锁定该 SHA，会拒绝与 `package.json` 版本不一致的 Tag，重新执行依赖声明、lint/typecheck/test/build 检查，再分别构建 Windows x64、macOS arm64 和 macOS x64。每个原生 Job 根据最终 `app.asar` 生成对应平台的 CycloneDX SBOM；最终 Job 生成 `SHA256SUMS.txt` 和 GitHub provenance attestation，并创建或更新 GitHub Draft Release。
+
+原生打包 Job 通过受保护的 `release-signing` Environment，只在对应的 `electron-builder` 步骤中注入证书材料。存在相应签名与 Apple API Secret 时启用 macOS Hardened Runtime、entitlements 和公证；Windows Authenticode 使用独立证书 Secret。没有可信证书时仍可生成测试安装包，但不适合直接作为可信公开发行包。
+
+## 9. 运行时验证
 
 修改 PiHost、contracts、Main、Preload 或 Provider/Session 相关能力后，至少执行：
 

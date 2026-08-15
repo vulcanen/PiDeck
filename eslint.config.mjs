@@ -49,7 +49,7 @@ export default tseslint.config(
       "apps/desktop/src/main/**/*",
       "apps/desktop/src/preload/**/*",
       "apps/desktop/scripts/**/*",
-      "apps/desktop/vite.config.ts",
+      "apps/desktop/vite.config.mts",
       "*.mjs",
       "*.cjs",
     ],

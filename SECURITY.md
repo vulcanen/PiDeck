@@ -4,11 +4,12 @@ PiDeck handles Provider API keys, OAuth credentials, and session data. Security 
 
 ## Reporting a vulnerability
 
-Do **not** open a public issue for security vulnerabilities. Instead, report privately:
+Do **not** open a public issue for security vulnerabilities. Report through
+[GitHub Private Vulnerability Reporting](https://github.com/vulcanen/PiDeck/security/advisories/new).
 
-- **Preferred**: GitHub Private Vulnerability Reporting
-  - Go to the repository's **Security** tab → **Report a vulnerability**
-- **Alternative**: email the maintainer with the subject prefix `[PiDeck Security]`
+Repository maintainers must keep Private Vulnerability Reporting enabled before
+making the repository public. The report form is available from the repository's
+**Security** tab under **Report a vulnerability**.
 
 Please include:
 
@@ -34,5 +35,10 @@ Out of scope:
 - Local machine compromise where the attacker already controls the user account
 
 ## Supported versions
+
+| Version | Supported |
+| --- | --- |
+| Latest release | Yes |
+| Older releases | No |
 
 Security fixes are released on the latest version. Patch releases may be cut for critical vulnerabilities.

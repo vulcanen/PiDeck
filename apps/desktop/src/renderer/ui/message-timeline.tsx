@@ -232,7 +232,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     return () => {
       if (scrollHandleRef.current === handle) scrollHandleRef.current = null;
     };
-  }, [active, conversationRef, onAtEndChange, pinToBottom, scrollHandleRef, scrollKey, scrollPositionsRef, setFollow]);
+  }, [active, beginPinning, conversationRef, onAtEndChange, pinToBottom, scrollHandleRef, scrollKey, scrollPositionsRef, setFollow]);
 
   // Revealing older messages inserts content above the viewport. Native scroll
   // anchoring keeps the reader's current row visually fixed, so no manual

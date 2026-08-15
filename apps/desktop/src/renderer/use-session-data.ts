@@ -80,5 +80,9 @@ export function useSessionData({
       }
     });
     return () => { cancelled = true; };
-  }, [language, projectCwd, taskId, models, messageReload, setTaskUi]);
+  }, [
+    language, messageReload, models, projectCwd, setActiveModel, setCapabilities,
+    setContextUsage, setMessageLoads, setMessagesByTask, setTaskUi,
+    setThinkingLevel, setThinkingLevels, showNotice, taskId,
+  ]);
 }

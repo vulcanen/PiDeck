@@ -32,7 +32,7 @@ The current implementation uses plain Node `child_process.fork` with `process.se
 Two runtime resolution entry points:
 
 - `PIDECK_NODE_EXECUTABLE`: explicitly sets the Node executable used by PiHost; defaults to `process.execPath` (Electron bundled Node).
-- `PIDECK_PI_MODULE`: explicitly sets the Pi SDK entry file; defaults to lookup through candidate paths in `packages/pi-adapter`.
+- `PIDECK_PI_MODULE`: explicitly sets the Pi SDK entry file. Packaged builds otherwise require the lockfile-pinned SDK inside `app.asar`; development builds may additionally discover a global Pi installation.
 
 `packages/pi-host` posts messages to both `process.send` and the `worker_threads` `parentPort`, so the process host can be swapped, but Main currently only uses `child_process.fork`.
 
@@ -81,7 +81,8 @@ Dynamic Pi SDK resolution, loading, and model/Session adaptation live in `packag
 PiDeck/
 ├─ apps/desktop/
 │  ├─ index.html                          # Vite Renderer host page
-│  ├─ vite.config.ts                      # Renderer build, outputs to root dist-renderer/
+│  ├─ vite.config.mts                     # Renderer ESM build config, outputs to root dist-renderer/
+│  ├─ entitlements.mac.plist              # Hardened-runtime entitlements for signed macOS builds
 │  ├─ assets/                             # App icons, mac Info.plist, native plugin artifacts
 │  ├─ native/miniwindow.mm                # macOS minimized-window icon native customization source
 │  ├─ public/                             # Renderer static assets
@@ -141,9 +142,17 @@ PiDeck/
 │  ├─ permission-engine/                  # Pi permission config, Extension UI, approval waiting
 │  ├─ ui-system/                          # Shared Renderer Icon, focus, clipboard primitives
 │  └─ i18n/                               # zh/en copy and command descriptions
-├─ docs/                                  # Architecture, product plan, Pi capability matrix
+├─ docs/                                  # Architecture, product plan, Pi capability matrix, release guide
 ├─ rules/                                 # Development and documentation sync rules
-├─ scripts/verify-package-contents.mjs    # Packaged asar runtime/denylist verifier
+├─ .github/workflows/
+│  ├─ ci.yml                              # Main/PR verification
+│  └─ release.yml                         # Tagged native installers and draft GitHub Release
+├─ scripts/verify-package-contents.mjs    # Packaged asar runtime/license/denylist verifier
+├─ scripts/smoke-source-runtime.mjs       # Starts built PiHost and exercises a real runtime IPC call
+├─ scripts/smoke-packaged-runtime.mjs     # Starts packaged PiHost and verifies the bundled Pi SDK
+├─ scripts/generate-packaged-sbom.mjs     # Inventories the final asar into a platform-specific CycloneDX SBOM
+├─ scripts/generate-third-party-notices.mjs # Deterministic production dependency license inventory
+├─ scripts/verify-release-version.mjs     # Release tag/package version guard
 ├─ dist-renderer/                         # Renderer build output (not committed)
 ├─ release/                               # electron-builder artifacts (not committed)
 ├─ electron-builder.config.cjs            # Shared runtime whitelist and platform packaging rules
@@ -247,7 +256,15 @@ Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-resp
 
 Capabilities without a stable Bridge or UI must be shown as unimplemented, never faked as successful. PiDeck does not maintain a separate Pi CLI execution panel.
 
-## 8. Runtime Verification
+## 8. Packaging and Distribution
+
+Local packaging keeps the current-host `package:mac` command and exposes explicit `package:mac:arm64`, `package:mac:x64`, and `package:win:x64` commands for matching native runners. Installer filenames include the operating system and architecture; package verification checks the asar runtime entries, PiDeck notices, Electron/Chromium runtime licenses, and denylist after each build. Native packaging jobs then start PiHost from the packaged `app.asar`, call `runtime.status`, and verify through `app.info` that the bundled Pi SDK matches the locked version.
+
+`.github/workflows/release.yml` starts on a matching version tag (or a manual rebuild of an existing tag), requires the tag commit to be contained in `main`, pins that commit SHA, rejects tags that differ from `package.json`, reruns dependency-notice/lint/typecheck/test/build checks, and packages Windows x64, macOS arm64, and macOS x64 separately. Each native job inventories its final `app.asar` into a platform-specific CycloneDX SBOM. The final job generates `SHA256SUMS.txt`, creates GitHub provenance attestations, and creates or updates a draft GitHub Release.
+
+The native packaging jobs run through the protected `release-signing` Environment and expose certificate material only to their `electron-builder` step. macOS hardened runtime, entitlements, and notarization are enabled when the corresponding signing and Apple API secrets are present; Windows Authenticode uses its own certificate secrets. Without trusted certificates the workflow remains useful for test installers, but those artifacts are not suitable as trusted public releases.
+
+## 9. Runtime Verification
 
 After changing PiHost, contracts, Main, Preload, or Provider/Session-related capabilities, at minimum execute:
 

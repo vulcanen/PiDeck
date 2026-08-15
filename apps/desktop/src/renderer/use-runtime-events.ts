@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionRunRecord } from "@pideck/contracts";
 import type { TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
@@ -55,7 +55,8 @@ export function useRuntimeEvents({
   const refreshContextUsage = (taskId: string) => {
     void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
   };
-  useEffect(() => window.pideck.events.subscribe((runtimeEvent: PiDeckRuntimeEvent) => {    if (runtimeEvent.type === "runtime.status") {
+  const handleRuntimeEvent = useEffectEvent((runtimeEvent: PiDeckRuntimeEvent) => {
+    if (runtimeEvent.type === "runtime.status") {
       const status = runtimeEvent.payload;
       if (status === "connected" || status === "starting" || status === "disconnected") setRuntimeStatus(status);
       return;
@@ -195,5 +196,6 @@ export function useRuntimeEvents({
       void refreshWorkspace();
       updateTaskLists((current) => sortTasksByUpdatedAt(current.map((task) => task.id === taskId ? { ...task, state: "idle", updatedAt: new Date().toISOString() } : task)));
     }
-  }), [projectCwd, language, activeTaskId, queueState?.steeringMode, queueState?.followUpMode, onQueueActivity]);
+  });
+  useEffect(() => window.pideck.events.subscribe(handleRuntimeEvent), []);
 }

@@ -12,10 +12,14 @@ Thanks for your interest in contributing to PiDeck.
 Requirements:
 
 - Node.js `>=22.19.0`
-- Pi CLI available on the system, or a local path to the Pi SDK (via `PIDECK_PI_MODULE`)
+- npm
+
+The locked Pi SDK is installed with the repository dependencies. A separate Pi
+CLI is not required; `PIDECK_PI_MODULE` is only for explicit compatibility
+testing.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -26,6 +30,9 @@ npm run lint
 npm run typecheck
 npm run test:renderer
 npm run build
+npm run smoke:runtime
+npm run notices:check
+npm ls --all
 ```
 
 ## Submitting changes
@@ -38,7 +45,7 @@ npm run build
 
 ## Reporting issues
 
-- Use the issue templates when available.
+- Use the repository's bug or feature request template.
 - Include PiDeck version, OS, and steps to reproduce.
 - For security vulnerabilities, follow [SECURITY.md](SECURITY.md) and report privately.
 

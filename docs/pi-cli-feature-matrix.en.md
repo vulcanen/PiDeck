@@ -19,6 +19,7 @@
 | API Key / OAuth | Provider settings (local credentials, removal confirmation) | `ModelRuntime.login()`, `ModelRuntime.logout()`, Pi auth callback |
 | Model list | Composer model selector | `ModelRuntime.getModels()` |
 | Thinking level | Composer Thinking menu | `AgentSession.getAvailableThinkingLevels()` |
+| Default built-in tools | Pi global/project `settings.json`; no separate PiDeck catalog | PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.2 applies `defaultTools`; Extension/custom tools remain enabled according to Pi SDK semantics |
 | Pi slash command catalog | Suggestions for known `/` prefixes at line start; command palette | Pi built-in catalog, Prompt, Skill, Extension commands; paths and plain text never trigger command suggestions |
 | `@file` suggestions | Composer `@` | Workspace file snapshot from `workspace.snapshot` |
 | Agent streaming events | Central thread | `agent_start`, `agent_end.messages`, `agent_settled`, `message_update`, `tool_execution_*`, etc. |

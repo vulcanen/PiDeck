@@ -9,12 +9,16 @@ const REQUIRED_PATHS = [
   "apps/desktop/dist/preload/index.js",
   "packages/pi-host/dist/index.js",
   "dist-renderer/index.html",
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.txt",
 ];
 
 const FORBIDDEN_PATHS = [
   /^\.(?:claude|codex|pi|playwright-cli|workbuddy)(?:\/|$)/,
   /^apps\/desktop\/(?:src|scripts|native|public)(?:\/|$)/,
   /^packages\/[^/]+\/src(?:\/|$)/,
+  /^node_modules\/@pideck\/[^/]+\/(?:src|tsconfig\.json)(?:\/|$)/,
+  /^node_modules\/(?:@oxc-project|@rolldown|@vitejs|electron|lightningcss(?:-[^/]+)?|rolldown|vite)(?:\/|$)/,
   /^(?:docs|rules)(?:\/|$)/,
   /^(?:AGENTS|CLAUDE|CONTRIBUTING|SECURITY)\.md$/i,
   /^README(?:\.[^.]+)?\.md$/i,
@@ -53,10 +57,18 @@ function findAsarFiles(root) {
 export function verifyPackagedApplication(releaseRoot) {
   const candidates = findAsarFiles(releaseRoot);
   if (!candidates.length) throw new Error(`No app.asar found under ${releaseRoot}`);
-  return candidates.map((asarPath) => ({
-    asarPath,
-    ...validatePackagePaths(listPackage(asarPath)),
-  }));
+  return candidates.map((asarPath) => {
+    const resourcesDirectory = path.dirname(asarPath);
+    const missingRuntimeLicenses = ["LICENSE.electron.txt", "LICENSES.chromium.html"]
+      .filter((filename) => !existsSync(path.join(resourcesDirectory, filename)));
+    if (missingRuntimeLicenses.length) {
+      throw new Error(`Missing Electron runtime licenses beside app.asar:\n- ${missingRuntimeLicenses.join("\n- ")}`);
+    }
+    return {
+      asarPath,
+      ...validatePackagePaths(listPackage(asarPath)),
+    };
+  });
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";

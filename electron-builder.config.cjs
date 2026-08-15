@@ -15,6 +15,8 @@ const commonFiles = [
   "packages/ui-system/dist/**/*",
   "packages/ui-system/package.json",
   "package.json",
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.txt",
   "!.claude/**/*",
   "!.codex/**/*",
   "!.pi/**/*",
@@ -25,6 +27,16 @@ const commonFiles = [
   "!apps/desktop/native/**/*",
   "!apps/desktop/public/**/*",
   "!packages/*/src/**/*",
+  "!node_modules/@pideck/*/src/**/*",
+  "!node_modules/@pideck/*/tsconfig.json",
+  "!node_modules/@oxc-project/**/*",
+  "!node_modules/@rolldown/**/*",
+  "!node_modules/@vitejs/**/*",
+  "!node_modules/electron/**/*",
+  "!node_modules/lightningcss/**/*",
+  "!node_modules/lightningcss-*/**/*",
+  "!node_modules/rolldown/**/*",
+  "!node_modules/vite/**/*",
   "!docs/**/*",
   "!rules/**/*",
   "!AGENTS.md",
@@ -41,16 +53,29 @@ const commonFiles = [
   "!node_modules/**/tree-sitter-bash/grammar.js",
 ];
 
+const macSigningConfigured = Boolean(process.env.CSC_LINK || process.env.CSC_NAME);
+const macNotarizationConfigured = Boolean(
+  process.env.APPLE_API_KEY
+  && process.env.APPLE_API_KEY_ID
+  && process.env.APPLE_API_ISSUER,
+);
+
 module.exports = {
   appId: "com.pideck.desktop",
   productName: "PiDeck",
   directories: { output: "release" },
+  forceCodeSigning: process.env.PIDECK_FORCE_CODE_SIGNING === "true",
   asar: true,
   asarUnpack: ["**/*.node", "apps/desktop/assets/**/*"],
   npmRebuild: false,
   files: commonFiles,
+  extraResources: [
+    { from: "node_modules/electron/dist/LICENSE", to: "LICENSE.electron.txt" },
+    { from: "node_modules/electron/dist/LICENSES.chromium.html", to: "LICENSES.chromium.html" },
+  ],
   win: {
     target: { target: "nsis", arch: ["x64"] },
+    artifactName: "${productName}-${version}-windows-${arch}-setup.${ext}",
     icon: "apps/desktop/assets/pideck-icon.ico",
     files: [
       ...commonFiles,
@@ -69,8 +94,17 @@ module.exports = {
   },
   mac: {
     target: ["dmg"],
+    artifactName: "${productName}-${version}-macos-${arch}.${ext}",
     icon: "apps/desktop/assets/pideck-icon.icns",
     category: "public.app-category.developer-tools",
+    minimumSystemVersion: "12.0",
+    hardenedRuntime: macSigningConfigured,
+    ...(macSigningConfigured ? {} : { identity: null }),
+    ...(macSigningConfigured ? {
+      entitlements: "apps/desktop/entitlements.mac.plist",
+      entitlementsInherit: "apps/desktop/entitlements.mac.plist",
+    } : {}),
+    ...(macSigningConfigured && macNotarizationConfigured ? { notarize: true } : {}),
     files: [
       ...commonFiles,
       "!node_modules/**/@mariozechner/clipboard-{win32,linux}*/**",

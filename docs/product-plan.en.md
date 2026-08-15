@@ -2,7 +2,7 @@
 
 > Document status: aligned with the current code baseline; unimplemented items are explicitly marked as planned.
 >
-> Last updated: 2026-08-04
+> Last updated: 2026-08-15
 >
 > Target platforms: Windows, macOS
 
@@ -18,6 +18,8 @@ Explicitly out of scope:
 Provider API keys, OAuth, token refresh, and session files remain managed by the Pi Runtime; credentials never enter the Renderer.
 
 ## 2. Current Implementation Baseline
+
+Pi SDK baseline: `@earendil-works/pi-coding-agent@0.84.2`. PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.2 applies its project/global `defaultTools` setting while keeping Extension and custom tools enabled. Model summaries also omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result.
 
 Current runnable topology:
 
@@ -37,7 +39,7 @@ The current code is neither Electron `utilityProcess` nor MessagePort. `packages
 ```text
 apps/desktop/
 ├─ index.html                    # Vite Renderer host page
-├─ vite.config.ts                # Renderer build, outputs to dist-renderer/
+├─ vite.config.mts               # Renderer ESM build config, outputs to dist-renderer/
 ├─ assets/ · native/ · public/   # Icons, macOS native customization source, static assets
 ├─ scripts/                      # build-native.mjs, renderer-regressions.test.cjs
 └─ src/
@@ -167,7 +169,7 @@ PiHost currently adapts via `AgentSession.agent.beforeToolCall`:
 
 ### 7.2 `@gotgenes/pi-permission-system` Status
 
-PiDeck has `@gotgenes/pi-permission-system@24.0.0` as an Extension dependency of the desktop PiHost, loaded via Pi `DefaultResourceLoader.additionalExtensionPaths`. The desktop offers these modes:
+PiDeck has `@gotgenes/pi-permission-system@25.2.2` as an Extension dependency of the desktop PiHost, loaded via Pi `DefaultResourceLoader.additionalExtensionPaths`. This version resolves `$HOME`, `${HOME}`, and `$PWD` paths in bash before applying the `external_directory` gate, and improves subagent approval forwarding, Authorizer Chain records, and nested-command checks in redirects and heredocs. The desktop offers these modes:
 
 - `allow`: silently allow tool execution.
 - `ask`: Pi's permission system requests approval before execution.
@@ -201,6 +203,8 @@ Still planned, not current product promises:
 - PiHost owns the Pi SDK, Agent, Tool, Provider, Session, and resources.
 - Cross-process messages carry only JSON/structured-clone serializable DTOs.
 - External URLs are limited to HTTP(S) and open in the system browser.
+- The Renderer enforces a restrictive Content Security Policy and rejects in-window navigation.
+- Packaged builds load the bundled, lockfile-pinned Pi SDK unless `PIDECK_PI_MODULE` explicitly overrides it.
 - API keys and OAuth tokens never enter the Renderer, logs, events, or DevTools.
 - Failure states must be visible and offer retry or repair actions.
 
@@ -210,11 +214,15 @@ Run after any change to dependencies, contracts, PiHost, Providers, Sessions, or
 
 ```bash
 npm install
+npm run notices:check
+npm ls --all
 npm ls --depth=0 --workspaces
 npm run typecheck
 npm run test:renderer
 npm run build
 ```
+
+Release tags must resolve to a commit contained in `main`; the workflow pins that SHA, runs the same verification on Linux, then builds the Windows x64, macOS arm64, and macOS x64 installers on matching native GitHub runners. It generates a separate SBOM from each final package and creates a draft release with SHA-256 checksums; trusted public distribution additionally requires platform signing and macOS notarization secrets in the protected `release-signing` Environment.
 
 PiHost-related changes additionally verify:
 

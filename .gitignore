@@ -22,3 +22,8 @@ apps/desktop/assets/pideck-miniwindow.node
 *.local
 credentials*
 *.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.mobileprovision

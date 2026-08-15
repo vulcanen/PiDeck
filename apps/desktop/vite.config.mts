@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 export default defineConfig({
   root: ".",
@@ -15,6 +15,10 @@ export default defineConfig({
   build: {
     outDir: "../../dist-renderer",
     emptyOutDir: true,
+    // Mermaid diagram engines are loaded on demand and the largest lazy chunk
+    // is intentionally below this reviewed ceiling; it does not delay the
+    // initial workspace render.
+    chunkSizeWarningLimit: 700,
   },
   server: {
     port: 5173,

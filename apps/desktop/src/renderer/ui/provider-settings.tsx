@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthMethod, ProviderSummary } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon, useDialogFocus } from "@pideck/ui-system";
@@ -57,7 +57,7 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
   useDialogFocus(authPromptRef, () => void cancelAuthPrompt(), Boolean(authPrompt));
   useDialogFocus(logoutPromptRef, () => { if (!busyProvider) setPendingLogout(null); }, Boolean(pendingLogout));
 
-  async function loadProviders() {
+  const loadProviders = useCallback(async () => {
     setLoading(true); setListError(null);
     try {
       const next = await window.pideck.providers.list();
@@ -65,8 +65,8 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
       setProviderStates(Object.fromEntries(next.map((provider) => [provider.id, provider.authState])));
     } catch (error) { setListError(`${t.providerLoadFailed}: ${error instanceof Error ? error.message : String(error)}`); }
     finally { setLoading(false); }
-  }
-  useEffect(() => { void loadProviders(); }, []);
+  }, [t.providerLoadFailed]);
+  useEffect(() => { void loadProviders(); }, [loadProviders]);
   useEffect(() => {
     if (!focusProviderId || !providers.length) return;
     setProviderQuery("");
@@ -108,7 +108,7 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
         });
       }
     }
-  }), [language]);
+  }), [t.authPromptFallback, t.authUrlAutoOpenFailed]);
 
   async function auth(providerId: string, method: AuthMethod, secret?: string) {
     if (method === "api-key" && !secret?.trim()) { setFieldErrors((current) => ({ ...current, [providerId]: t.apiKeyRequired })); return; }

@@ -9,6 +9,21 @@
   },
   "main": "apps/desktop/dist/main/index.js",
   "description": "A calm, editorial desktop workspace for Pi.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vulcanen/PiDeck.git"
+  },
+  "homepage": "https://github.com/vulcanen/PiDeck#readme",
+  "bugs": {
+    "url": "https://github.com/vulcanen/PiDeck/issues"
+  },
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "electron",
+    "desktop",
+    "ai"
+  ],
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -19,16 +34,28 @@
     "lint": "eslint .",
     "test:renderer": "npm --workspace @pideck/desktop run test:renderer",
     "typecheck": "npm --workspace @pideck/domain run typecheck && npm --workspace @pideck/pi-adapter run typecheck && npm --workspace @pideck/permission-engine run typecheck && npm --workspace @pideck/pi-host run typecheck && npm --workspace @pideck/i18n run typecheck && npm --workspace @pideck/ui-system run typecheck && npm --workspace @pideck/desktop run typecheck",
-    "package:win": "npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --win nsis --x64 && npm run verify:package -- release/win-unpacked",
-    "package:mac": "npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --mac dmg && npm run verify:package -- release",
-    "verify:package": "node scripts/verify-package-contents.mjs"
+    "package:win": "npm run package:win:x64",
+    "package:win:x64": "npm run notices:check && npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --win nsis --x64 && npm run verify:package -- release/win-unpacked && npm run smoke:package -- release/win-unpacked",
+    "package:mac": "npm run notices:check && npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --mac dmg && npm run verify:package -- release && npm run smoke:package -- release",
+    "package:mac:arm64": "npm run notices:check && npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --mac dmg --arm64 && npm run verify:package -- release && npm run smoke:package -- release",
+    "package:mac:x64": "npm run notices:check && npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --mac dmg --x64 && npm run verify:package -- release && npm run smoke:package -- release",
+    "notices:generate": "node scripts/generate-third-party-notices.mjs",
+    "notices:check": "node scripts/generate-third-party-notices.mjs --check",
+    "release:check": "node scripts/verify-release-version.mjs",
+    "verify:package": "node scripts/verify-package-contents.mjs",
+    "smoke:runtime": "node scripts/smoke-source-runtime.mjs",
+    "smoke:package": "node scripts/smoke-packaged-runtime.mjs",
+    "sbom:package": "node scripts/generate-packaged-sbom.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
   },
+  "overrides": {
+    "nanoid": "3.3.18"
+  },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.1",
-    "@gotgenes/pi-permission-system": "^24.0.0",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@gotgenes/pi-permission-system": "^25.2.2",
     "@pideck/contracts": "0.1.0",
     "@pideck/domain": "0.1.0",
     "@pideck/i18n": "0.1.0",
@@ -54,6 +81,8 @@
     "@rolldown/binding-linux-x64-musl": "1.2.3",
     "@rolldown/binding-win32-arm64-msvc": "1.2.3",
     "@rolldown/binding-win32-x64-msvc": "1.2.3",
+    "lightningcss-darwin-arm64": "1.33.0",
+    "lightningcss-darwin-x64": "1.33.0",
     "lightningcss-linux-x64-gnu": "1.33.0",
     "lightningcss-linux-x64-musl": "1.33.0",
     "lightningcss-win32-x64-msvc": "1.33.0"

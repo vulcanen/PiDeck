@@ -473,6 +473,12 @@ function createWindow() {
     return { action: "deny" };
   });
 
+  // PiDeck has no in-window navigation surface. Model-authored Markdown and
+  // extension content may contain links, so reject every page-initiated
+  // navigation and leave explicitly validated HTTP(S) links to the system
+  // browser handler above.
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
+
   if (process.env.VITE_DEV_SERVER_URL) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PiPackageSummary } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon, useDialogFocus } from "@pideck/ui-system";
@@ -13,7 +13,7 @@ function PackageSettings({ language, cwd, onClose, onNotice, onPackagesChanged }
   const [error, setError] = useState<string | null>(null);
   const loadVersionRef = useRef(0);
   useDialogFocus(dialogRef, onClose);
-  async function load() {
+  const load = useCallback(async () => {
     const loadVersion = ++loadVersionRef.current;
     const requestCwd = cwd || undefined;
     setError(null);
@@ -22,8 +22,8 @@ function PackageSettings({ language, cwd, onClose, onNotice, onPackagesChanged }
       if (loadVersion === loadVersionRef.current) setPackages(next);
     }
     catch (reason) { if (loadVersion === loadVersionRef.current) setError(reason instanceof Error ? reason.message : String(reason)); }
-  }
-  useEffect(() => { void load(); }, [cwd]);
+  }, [cwd]);
+  useEffect(() => { void load(); }, [load]);
   async function run(action: () => Promise<void>, successMessage: string = t.packageManager) {
     setBusy(true); setError(null);
     try { await action(); onPackagesChanged?.(); await load(); setSource(""); onNotice(successMessage); }

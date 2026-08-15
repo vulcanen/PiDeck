@@ -19,6 +19,7 @@
 | API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调 |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
 | 思考等级 | Composer Thinking 菜单 | `AgentSession.getAvailableThinkingLevels()` |
+| 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 0.84.2 应用 `defaultTools`；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
 | Pi slash command catalog | 行首已知 `/` 前缀建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
 | `@file` 提示 | Composer `@` | `workspace.snapshot` 返回的当前工作区文件快照 |
 | Agent 流式事件 | 中央线程 | `agent_start`、`agent_end.messages`、`agent_settled`、`message_update`、`tool_execution_*` 等 |
