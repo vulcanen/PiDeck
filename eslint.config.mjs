@@ -46,6 +46,7 @@ export default tseslint.config(
   {
     files: [
       "packages/**/*",
+      "scripts/**/*",
       "apps/desktop/src/main/**/*",
       "apps/desktop/src/preload/**/*",
       "apps/desktop/scripts/**/*",

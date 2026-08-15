@@ -1,3 +1,5 @@
+const { copyElectronRuntimeLicenses } = require("./scripts/copy-electron-runtime-licenses.cjs");
+
 const commonFiles = [
   "apps/desktop/dist/**/*",
   "apps/desktop/assets/**/*",
@@ -69,10 +71,7 @@ module.exports = {
   asarUnpack: ["**/*.node", "apps/desktop/assets/**/*"],
   npmRebuild: false,
   files: commonFiles,
-  extraResources: [
-    { from: "node_modules/electron/dist/LICENSE", to: "LICENSE.electron.txt" },
-    { from: "node_modules/electron/dist/LICENSES.chromium.html", to: "LICENSES.chromium.html" },
-  ],
+  afterExtract: copyElectronRuntimeLicenses,
   win: {
     target: { target: "nsis", arch: ["x64"] },
     artifactName: "${productName}-${version}-windows-${arch}-setup.${ext}",

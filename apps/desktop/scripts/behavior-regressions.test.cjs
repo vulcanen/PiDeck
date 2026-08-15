@@ -9,6 +9,7 @@ const { assertKnownProjectCwd, assertTrustedIpcSender } = require("../dist/main/
 const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules } = require("../../../packages/pi-adapter/dist/index.js");
+const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
 
 function deferred() {
   let resolve;
@@ -176,7 +177,7 @@ test("native window colors follow the Renderer theme contract", () => {
 
 test("each platform package target inherits the runtime whitelist", () => {
   const config = require("../../../electron-builder.config.cjs");
-  assert.deepEqual(config.extraResources.map((item) => item.to), ["LICENSE.electron.txt", "LICENSES.chromium.html"]);
+  assert.equal(config.afterExtract, copyElectronRuntimeLicenses);
   for (const target of [config.win.files, config.mac.files]) {
     assert.ok(target.includes("apps/desktop/dist/**/*"));
     assert.ok(target.includes("packages/pi-host/dist/**/*"));
@@ -184,6 +185,52 @@ test("each platform package target inherits the runtime whitelist", () => {
     assert.ok(target.includes("THIRD_PARTY_NOTICES.txt"));
     assert.ok(target.includes("!apps/desktop/src/**/*"));
     assert.equal(target.includes("node_modules/**/*"), false);
+  }
+});
+
+test("Electron runtime licenses are copied from the extracted distribution", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-electron-licenses-"));
+  try {
+    const macOutDir = path.join(root, "mac");
+    fs.mkdirSync(path.join(macOutDir, "Electron.app", "Contents", "Resources"), { recursive: true });
+    fs.writeFileSync(path.join(macOutDir, "LICENSE"), "electron-mac-license");
+    fs.writeFileSync(path.join(macOutDir, "LICENSES.chromium.html"), "chromium-mac-licenses");
+    await copyElectronRuntimeLicenses({
+      appOutDir: macOutDir,
+      electronPlatformName: "darwin",
+      packager: { info: { framework: { distMacOsAppName: "Electron.app" } } },
+    });
+    assert.equal(
+      fs.readFileSync(path.join(macOutDir, "Electron.app", "Contents", "Resources", "LICENSE.electron.txt"), "utf8"),
+      "electron-mac-license",
+    );
+    assert.equal(
+      fs.readFileSync(path.join(macOutDir, "Electron.app", "Contents", "Resources", "LICENSES.chromium.html"), "utf8"),
+      "chromium-mac-licenses",
+    );
+
+    const winOutDir = path.join(root, "win");
+    fs.mkdirSync(path.join(winOutDir, "resources"), { recursive: true });
+    fs.writeFileSync(path.join(winOutDir, "LICENSE.electron.txt"), "electron-win-license");
+    fs.writeFileSync(path.join(winOutDir, "LICENSES.chromium.html"), "chromium-win-licenses");
+    await copyElectronRuntimeLicenses({ appOutDir: winOutDir, electronPlatformName: "win32" });
+    assert.equal(
+      fs.readFileSync(path.join(winOutDir, "resources", "LICENSE.electron.txt"), "utf8"),
+      "electron-win-license",
+    );
+    assert.equal(
+      fs.readFileSync(path.join(winOutDir, "resources", "LICENSES.chromium.html"), "utf8"),
+      "chromium-win-licenses",
+    );
+
+    const incompleteOutDir = path.join(root, "incomplete");
+    fs.mkdirSync(path.join(incompleteOutDir, "resources"), { recursive: true });
+    await assert.rejects(
+      copyElectronRuntimeLicenses({ appOutDir: incompleteOutDir, electronPlatformName: "win32" }),
+      /Missing Electron runtime license after extraction/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -216,6 +263,7 @@ test("release workflow builds both macOS architectures and Windows x64", () => {
   assert.match(workflow, /Smoke packaged PiHost and bundled SDK/);
   assert.match(workflow, /actions\/attest-build-provenance@[0-9a-f]{40}/);
   assert.match(workflow, /artifact-metadata: write/);
+  assert.equal(workflow.match(/--publish never/g)?.length, 2);
   assert.doesNotMatch(workflow, /\n[ ]{4}env:\n[ ]{6}CSC_LINK:/, "signing secrets must not be job-scoped");
   assert.match(workflow, /- name: Build installer\n[\s\S]*?env:\n\s+CSC_LINK:/);
   assert.doesNotMatch(workflow, /uses: actions\/(?:checkout|setup-node|upload-artifact|download-artifact)@v\d/);
