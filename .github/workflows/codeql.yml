@@ -14,8 +14,10 @@ permissions:
 jobs:
   analyze:
     name: Analyze JavaScript and TypeScript
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       packages: read
       security-events: write
