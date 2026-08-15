@@ -52,10 +52,9 @@ PiDeck installers contain the project's locked Pi SDK and do not require a separ
 ### macOS
 
 1. Download the arm64 or x64 DMG for your Mac.
-2. Open the DMG and drag PiDeck into Applications.
-3. Start PiDeck from Applications.
-
-The release workflow can generate **unsigned test installers** when certificates are not configured. Treat an installer as a trusted public build only when its Release page clearly identifies it as signed and the signing/notarization checks pass. If Gatekeeper or SmartScreen warns about its origin, verify the Release source, signing status, and SHA-256 before proceeding instead of bypassing the operating system warning.
+2. Before installation, enable “Allow applications from anywhere” in System Settings → Privacy & Security.
+3. Open the DMG and drag PiDeck into Applications.
+4. Start PiDeck from Applications.
 
 ## First run
 
