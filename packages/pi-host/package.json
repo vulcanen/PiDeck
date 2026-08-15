@@ -1,6 +1,6 @@
 {
   "name": "@pideck/pi-host",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -18,9 +18,9 @@
     "@types/node": "^24.9.0"
   },
   "dependencies": {
-    "@pideck/contracts": "0.1.0",
-    "@pideck/domain": "0.1.0",
-    "@pideck/permission-engine": "0.1.0",
-    "@pideck/pi-adapter": "0.1.0"
+    "@pideck/contracts": "0.1.1",
+    "@pideck/domain": "0.1.1",
+    "@pideck/permission-engine": "0.1.1",
+    "@pideck/pi-adapter": "0.1.1"
   }
 }
