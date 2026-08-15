@@ -261,7 +261,10 @@ test("release workflow builds both macOS architectures and Windows x64", () => {
   assert.match(workflow, /pideck-sbom-macos-x64\.cdx\.json/);
   assert.match(workflow, /pideck-sbom-windows-x64\.cdx\.json/);
   assert.match(workflow, /Smoke packaged PiHost and bundled SDK/);
-  assert.match(workflow, /actions\/attest-build-provenance@[0-9a-f]{40}/);
+  assert.match(
+    workflow,
+    /- name: Attest release artifacts\n\s+if: github\.event\.repository\.private == false\n\s+uses: actions\/attest-build-provenance@[0-9a-f]{40}/,
+  );
   assert.match(workflow, /artifact-metadata: write/);
   assert.equal(workflow.match(/--publish never/g)?.length, 2);
   assert.doesNotMatch(workflow, /\n[ ]{4}env:\n[ ]{6}CSC_LINK:/, "signing secrets must not be job-scoped");
