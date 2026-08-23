@@ -59,6 +59,9 @@ function ConversationPaneSlot({
   // thumb is the only position cue in long conversations. It writes styles
   // directly to the DOM inside a rAF to avoid re-rendering per scroll event.
   useLayoutEffect(() => {
+    // Cached panes retain their DOM and scrollTop, but only the visible pane
+    // needs scroll, resize, and mutation observers doing work.
+    if (!active) return;
     const pane = paneRef.current;
     const indicator = indicatorRef.current;
     if (!pane || !indicator) return;
@@ -102,7 +105,7 @@ function ConversationPaneSlot({
       observer.disconnect();
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [active]);
 
   if (!retained) return null;
 
@@ -230,6 +233,7 @@ export interface AppConversationProps {
   onJumpToLatest: () => void;
   onResolveApproval: (decision: "allow-once" | "deny") => Promise<void>;
   onPermissionStatus: (status: PermissionStatus) => void;
+  backgroundInert?: boolean;
 }
 
 export function AppConversation({
@@ -238,7 +242,7 @@ export function AppConversation({
   loadError, messageLoad, messages, isWorking, streamText, workingPhase, activeTaskUi,
   steeringMessageKeys, showJumpToLatest, permissionStatus, composerProps, onTimelineAtEnd,
   onRetryInitialLoad, onChooseProject, onCreateTask, onRetryMessages, onJumpToLatest,
-  onResolveApproval, onPermissionStatus,
+  onResolveApproval, onPermissionStatus, backgroundInert = false,
 }: AppConversationProps) {
   const activeData = useMemo<ConversationPaneData | null>(() => activeTask ? {
     task: activeTask,
@@ -252,7 +256,7 @@ export function AppConversation({
   } : null, [activeTask, activeTaskUi, isWorking, messageLoad, messages, steeringMessageKeys, streamText, workingPhase]);
 
   return <>
-    <main className="main-column" id="main-content" tabIndex={-1}>
+    <main className="main-column" id="main-content" tabIndex={-1} inert={backgroundInert} aria-hidden={backgroundInert || undefined}>
       {activeTask && <div className="conversation-header"><div className="conversation-title"><div className="breadcrumb"><span>{activeProject?.name ?? "PiDeck"}</span><span>/</span><span>{activeTask.title ?? t.conversation}</span></div><h1>{activeTask.title ?? t.conversation}</h1></div></div>}
       <ConversationPaneDeck
         activeData={activeData}

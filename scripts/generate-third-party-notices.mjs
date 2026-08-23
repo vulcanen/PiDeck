@@ -52,7 +52,9 @@ const output = [
 ].join("\n");
 
 if (process.argv.includes("--check")) {
-  const current = existsSync(noticePath) ? readFileSync(noticePath, "utf8") : "";
+  // Git may check the file out with CRLF on Windows. Notices are stale only
+  // when their content differs, not when the working-tree newline policy does.
+  const current = existsSync(noticePath) ? readFileSync(noticePath, "utf8").replace(/\r\n?/g, "\n") : "";
   if (current !== output) {
     process.stderr.write("THIRD_PARTY_NOTICES.txt is stale. Run npm run notices:generate.\n");
     process.exitCode = 1;

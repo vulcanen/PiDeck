@@ -224,6 +224,30 @@ test("agent_end messages and auth cancellation stay on the bridge", () => {
   assert.doesNotMatch(host, /void runtime\.setRuntimeApiKey/);
 });
 
+test("OpenAI Codex OAuth prefers the loopback callback and restores the desktop window", () => {
+  const host = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
+    "utf8",
+  );
+  const main = fs.readFileSync(
+    path.join(__dirname, "../src/main/index.ts"),
+    "utf8",
+  );
+  const providerSettings = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui/provider-settings.tsx"),
+    "utf8",
+  );
+
+  assert.match(host, /OPENAI_CODEX_LOOPBACK_PORT = 1455/);
+  assert.match(host, /await waiter\.beforeResolve\?\.\(payload\.value as string\);\s+authWaiters\.delete/);
+  assert.match(host, /PIDECK_OAUTH_CALLBACK_UNAVAILABLE/);
+  assert.match(host, /signal\?\.addEventListener\("abort", onAbort, \{ once: true \}\)/);
+  assert.match(host, /authWaiters\.delete\(promptId\);\s+waiter\.reject/);
+  assert.match(main, /if \(method === "oauth"\) focusHostWindow\(\)/);
+  assert.match(providerSettings, /authPrompt\.type !== "manual_code" \|\| manualAuthVisible/);
+  assert.match(providerSettings, /setAuthPrompt\(null\); setManualAuthVisible\(false\); setAuthNotice\(null\)/);
+});
+
 test("message identity remains stable when Pi omits message ids", () => {
   const value = {
     role: "user",

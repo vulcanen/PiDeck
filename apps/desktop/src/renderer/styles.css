@@ -23,7 +23,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   outline-offset: 2px;
 }
 
-.app-shell {
+.app-shell, .overlay-root {
+  --titlebar-height: 48px;
   --canvas: #f7f6f1;
   --sidebar: #efeee9;
   --surface: #fffefa;
@@ -56,8 +57,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   --conversation-width: 920px;
   --message-font-size: 14px;
   --message-line-height: 1.75;
+}
+
+.app-shell {
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
   width: 100vw;
   height: 100dvh;
   overflow: hidden;
@@ -66,14 +70,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   transition: background-color 200ms var(--motion), color 200ms var(--motion);
 }
 
+.overlay-root {
+  color: var(--text);
+}
+
 /* Smooth the system/manual theme flip on the primary surfaces only;
    transitioning every element would cause visible stagger. */
 .app-shell .titlebar, .app-shell .sidebar, .app-shell .main-column,
-.app-shell .settings-sheet, .app-shell .user-message .message-bubble {
+.overlay-root .settings-sheet, .app-shell .user-message .message-bubble {
   transition: background-color 200ms var(--motion), border-color 200ms var(--motion), color 200ms var(--motion);
 }
 
-.app-shell.dark {
+.app-shell.dark, .overlay-root.dark {
   --canvas: #1f1e1b;
   --sidebar: #181714;
   --surface: #292722;
@@ -103,10 +111,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   display: flex;
   align-items: center;
   min-width: 0;
-  height: 48px;
+  height: var(--titlebar-height);
   padding: 0 14px 0 18px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--canvas) 94%, var(--surface));
+  /* Match Main's titleBarOverlay color exactly so the native Windows caption
+     buttons read as one continuous title bar instead of an attached block. */
+  background: var(--canvas);
   user-select: none;
 }
 .app-shell.platform-overlay .titlebar {
@@ -656,6 +666,12 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 
 /* Provider settings */
 .settings-backdrop { z-index: var(--layer-drawer); display: flex; justify-content: flex-end; }
+.overlay-root.platform-overlay .settings-backdrop {
+  /* Electron's native caption buttons own this strip. Keep right-side drawers
+     below it so their headers and close buttons remain visible and clickable. */
+  top: var(--titlebar-height);
+}
+.overlay-root.platform-overlay .settings-sheet { border-top: 1px solid var(--line); }
 .settings-sheet { position: relative; display: flex; width: min(520px, 100vw); height: 100%; min-width: 0; flex-direction: column; border-left: 1px solid var(--line-strong); background: var(--surface); box-shadow: var(--shadow); animation: drawer-in 280ms var(--motion) both; }
 .settings-header { display: flex; justify-content: space-between; gap: 22px; padding: 30px 28px 22px; border-bottom: 1px solid var(--line); }
 .settings-header h2 { margin: 6px 0 6px; font: 26px/1.12 var(--font-serif); letter-spacing: -.025em; }
@@ -681,6 +697,7 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .permission-mode-dot.deny { background: var(--red); }
 .permission-mode-dot.yolo { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .auth-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid color-mix(in srgb, var(--blue) 36%, var(--line)); background: color-mix(in srgb, var(--blue) 8%, transparent); color: var(--muted); }
+.auth-notice-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .auth-error { display: grid; max-height: 190px; overflow: auto; gap: 10px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line)); background: color-mix(in srgb, var(--red) 8%, transparent); color: var(--red); }
 .auth-error-copy { max-height: 116px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .auth-error-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -790,6 +807,8 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
   .api-key-controls input { flex: 1 1 100%; }
   .settings-header, .settings-footer { padding-right: 18px; padding-left: 18px; }
   .locality-note, .auth-notice, .auth-error, .permission-settings, .provider-tools { margin-right: 18px; margin-left: 18px; }
+  .auth-notice { align-items: stretch; flex-direction: column; }
+  .auth-notice-actions { justify-content: flex-start; }
   .permission-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-list { padding-right: 14px; padding-left: 14px; }
 }

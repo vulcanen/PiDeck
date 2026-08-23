@@ -64,7 +64,7 @@ const bridge: PideckBridge = {
   },
   agent: {
     prompt: (taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery) => ipcRenderer.invoke("agent:prompt", taskId, text, cwd, images, delivery),
-    abort: (taskId: string) => ipcRenderer.invoke("agent:abort", taskId),
+    abort: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:abort", taskId, cwd),
     setThinkingLevel: (taskId: string, level: string, cwd?: string) => ipcRenderer.invoke("agent:set-thinking-level", taskId, level, cwd),
     setModel: (taskId: string, providerId: string, modelId: string, cwd?: string) => ipcRenderer.invoke("agent:set-model", taskId, providerId, modelId, cwd),
     setScopedModels: (taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => ipcRenderer.invoke("agent:set-scoped-models", taskId, modelIds, persist, cwd),

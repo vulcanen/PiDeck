@@ -35,16 +35,21 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round"><path d={icons[name] ?? icons.file} /></svg>;
 }
 
+const dialogFocusStack: symbol[] = [];
+
 export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () => void, enabled = true) {
   const escapeRef = useRef(onEscape);
   useEffect(() => { escapeRef.current = onEscape; }, [onEscape]);
   useEffect(() => {
     if (!enabled) return;
+    const layer = Symbol("dialog-focus-layer");
+    dialogFocusStack.push(layer);
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const root = ref.current;
     const focusable = () => Array.from(root?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex='-1'])") ?? []);
     window.requestAnimationFrame(() => focusable()[0]?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
+      if (dialogFocusStack.at(-1) !== layer) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -62,6 +67,8 @@ export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () 
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
+      const layerIndex = dialogFocusStack.lastIndexOf(layer);
+      if (layerIndex >= 0) dialogFocusStack.splice(layerIndex, 1);
       window.requestAnimationFrame(() => previous?.focus());
     };
   }, [enabled, ref]);

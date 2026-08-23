@@ -57,6 +57,7 @@ export class PermissionEngine {
   private mode: PermissionMode = loadPermissionMode();
   private revisionValue = 0;
   private readonly approvalWaiters = new Map<string, (allow: boolean) => void>();
+  private readonly approvalTaskIds = new Map<string, string>();
   private readonly uiWaiters = new Map<string, (value: string | boolean | undefined) => void>();
 
   constructor(private readonly callbacks: PermissionEngineCallbacks) {}
@@ -73,26 +74,28 @@ export class PermissionEngine {
     if (mode === "allow" || mode === "yolo" || mode === "deny") {
       const decision = mode === "deny" ? "deny" : "allow-once";
       for (const [requestId, resolve] of this.approvalWaiters.entries()) {
+        const taskId = this.approvalTaskIds.get(requestId) ?? requestId;
         resolve(decision === "allow-once");
-        const separator = requestId.indexOf(":");
-        const taskId = separator > 0 ? requestId.slice(0, separator) : requestId;
         this.callbacks.emitEvent(taskId, { type: "approval.resolved", requestId, decision, source: "permission-mode" });
       }
       this.approvalWaiters.clear();
+      this.approvalTaskIds.clear();
     }
     persistPermissionMode(mode);
     return this.status();
   }
 
-  async beforeToolCall(taskId: string, context: any, previous: BeforeToolCall | undefined, signal?: AbortSignal): Promise<unknown> {
+  async beforeToolCall(taskId: string, context: any, previous: BeforeToolCall | undefined, signal?: AbortSignal, scopeId = taskId): Promise<unknown> {
     const toolName = context.toolCall?.name ?? "unknown";
     if (this.mode === "deny") return { block: true, reason: "Permission mode blocks this tool call." };
     if (this.mode === "allow" || this.mode === "yolo") return undefined;
-    const requestId = `${taskId}:${context.toolCall?.id ?? Date.now()}`;
+    const requestId = `${encodeURIComponent(scopeId)}:${context.toolCall?.id ?? Date.now()}`;
     this.callbacks.emitApproval(requestId, taskId, toolName, context.args);
+    this.approvalTaskIds.set(requestId, taskId);
     const allowed = await new Promise<boolean>((resolve) => {
       const settled = (allow: boolean) => {
         if (this.approvalWaiters.get(requestId) === settle) this.approvalWaiters.delete(requestId);
+        this.approvalTaskIds.delete(requestId);
         resolve(allow);
       };
       const settle = (allow: boolean) => settled(allow);
@@ -110,15 +113,17 @@ export class PermissionEngine {
     const resolve = this.approvalWaiters.get(requestId);
     if (!resolve) throw new Error(`Unknown approval request: ${requestId}`);
     this.approvalWaiters.delete(requestId);
+    this.approvalTaskIds.delete(requestId);
     resolve(decision === "allow-once");
   }
 
   /** Deny any pending approval/UI waits belonging to a session being torn down so its Promise never hangs. */
-  dispose(taskId: string): void {
-    const prefix = `${taskId}:`;
+  dispose(scopeId: string): void {
+    const prefix = `${encodeURIComponent(scopeId)}:`;
     for (const [requestId, resolve] of this.approvalWaiters.entries()) {
       if (requestId.startsWith(prefix)) {
         this.approvalWaiters.delete(requestId);
+        this.approvalTaskIds.delete(requestId);
         resolve(false);
       }
     }
@@ -137,9 +142,9 @@ export class PermissionEngine {
     resolve(value);
   }
 
-  createUi(taskId: string) {
+  createUi(taskId: string, scopeId = taskId) {
     const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>) => new Promise<T | undefined>((resolve) => {
-      const requestId = `${taskId}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const requestId = `${encodeURIComponent(scopeId)}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
       this.uiWaiters.set(requestId, (value) => resolve(value as T));
       if (this.callbacks.emitUiRequest) this.callbacks.emitUiRequest(requestId, taskId, { kind, ...payload });
       else {
@@ -178,7 +183,7 @@ export class PermissionEngine {
     };
   }
 
-  async beforeToolCallWithExtension(taskId: string, context: any, previous: BeforeToolCall | undefined, extensionLoaded: boolean, signal?: AbortSignal): Promise<unknown> {
+  async beforeToolCallWithExtension(taskId: string, context: any, previous: BeforeToolCall | undefined, extensionLoaded: boolean, signal?: AbortSignal, scopeId = taskId): Promise<unknown> {
     if (extensionLoaded) {
       if (this.mode === "deny") return { block: true, reason: "PiDeck 权限模式已禁止工具调用。" };
       if (this.mode === "allow" || this.mode === "yolo") return undefined;
@@ -186,7 +191,7 @@ export class PermissionEngine {
     }
     const toolName = context.toolCall?.name ?? "unknown";
     if (this.mode === "ask" && new Set(["read", "grep", "find", "ls"]).has(toolName)) return previous?.(context, signal);
-    return this.beforeToolCall(taskId, context, previous, signal);
+    return this.beforeToolCall(taskId, context, previous, signal, scopeId);
   }
 }
 

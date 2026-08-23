@@ -268,7 +268,10 @@ export function packagedPiNodeModules(adapterDirectory: string = __dirname): str
   const marker = "/app.asar/";
   const markerIndex = normalized.indexOf(marker);
   if (markerIndex < 0) return undefined;
-  return path.join(normalized.slice(0, markerIndex + "/app.asar".length), "node_modules");
+  // Keep the separator style derived from the inspected path, not from the
+  // machine running the check. Forward slashes work with Node on Windows and
+  // let release validation inspect macOS paths without corrupting them.
+  return `${normalized.slice(0, markerIndex + "/app.asar".length)}/node_modules`;
 }
 
 export function isPackagedPiAdapter(adapterDirectory: string = __dirname): boolean {

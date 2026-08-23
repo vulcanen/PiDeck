@@ -12,6 +12,28 @@ const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
 
+function readText(filePath) {
+  return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
+}
+
+function cssThemeTokens(css, selector) {
+  const selectorStart = css.indexOf(`${selector} {`);
+  assert.notEqual(selectorStart, -1, `missing CSS theme block: ${selector}`);
+  const blockStart = css.indexOf("{", selectorStart);
+  const blockEnd = css.indexOf("}", blockStart);
+  return Object.fromEntries([...css.slice(blockStart + 1, blockEnd).matchAll(/(--[\w-]+):\s*(#[\da-f]{6});/gi)].map((match) => [match[1], match[2]]));
+}
+
+function contrastRatio(foreground, background) {
+  const luminance = (hex) => {
+    const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+    return channels.map((channel) => channel <= .03928 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
+      .reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+  };
+  const values = [luminance(foreground), luminance(background)].sort((left, right) => right - left);
+  return (values[0] + .05) / (values[1] + .05);
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -215,6 +237,60 @@ test("Electron renderer enforces CSP and rejects in-window navigation", () => {
   assert.match(main, /webContents\.on\("will-navigate", \(event\) => event\.preventDefault\(\)\)/);
 });
 
+test("PiHost lifecycle ignores events from a replaced process and waits for real IPC readiness", () => {
+  const main = readText(path.join(__dirname, "../src/main/index.ts"));
+  assert.match(main, /if \(host !== startedHost\) return;/);
+  assert.match(main, /teardownHost\("PiHost exited", startedHost\)/);
+  assert.match(main, /await requestHost\("runtime\.status"\)/);
+  assert.doesNotMatch(main, /setTimeout\(resolve, 50\)/);
+});
+
+test("PiHost scopes same-ID session resources to their project", () => {
+  const host = readText(path.join(__dirname, "../../../packages/pi-host/src/index.ts"));
+  assert.match(host, /function sessionStateKey\(taskId: string, cwd: string\)/);
+  assert.match(host, /const stateKey = sessionStateKey\(payload\.taskId, cwd\);[\s\S]*?sessionFiles\.delete\(stateKey\)/);
+  assert.match(host, /permissionEngine\.dispose\(stateKey\)/);
+});
+
+test("inactive conversation panes suspend observers and modal overlays isolate the shell", () => {
+  const conversation = readText(path.join(__dirname, "../src/renderer/app-conversation.tsx"));
+  const view = readText(path.join(__dirname, "../src/renderer/app-view.tsx"));
+  const overlays = readText(path.join(__dirname, "../src/renderer/app-overlays.tsx"));
+  const styles = readText(path.join(__dirname, "../src/renderer/styles.css"));
+  assert.match(conversation, /if \(!active\) return;[\s\S]*?\}, \[active\]\);/);
+  assert.match(view, /inert=\{modalOverlayOpen\}/);
+  assert.match(view, /aria-hidden=\{modalOverlayOpen \|\| undefined\}/);
+  assert.match(view, /backgroundInert=\{mobileSidebarOpen\}/);
+  assert.match(overlays, /className=\{`overlay-root \$\{theme\}\$\{isMac \? " platform-macos" : " platform-overlay"\}`\}/);
+  assert.match(styles, /\.app-shell, \.overlay-root \{[\s\S]*?--layer-modal: 40;/);
+  assert.match(styles, /\.overlay-root \{\s*color: var\(--text\);\s*\}/);
+  assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark \{/);
+  assert.match(styles, /\.overlay-root\.platform-overlay \.settings-backdrop \{[\s\S]*?top: var\(--titlebar-height\);/);
+  assert.match(styles, /\.titlebar \{[\s\S]*?background: var\(--canvas\);/);
+});
+
+test("light and dark semantic text colors remain readable on primary surfaces", () => {
+  const styles = readText(path.join(__dirname, "../src/renderer/styles.css"));
+  const themes = [
+    ["light", cssThemeTokens(styles, ".app-shell, .overlay-root")],
+    ["dark", cssThemeTokens(styles, ".app-shell.dark, .overlay-root.dark")],
+  ];
+  const pairs = [
+    ["--text", "--canvas"], ["--text", "--surface"],
+    ["--muted", "--canvas"], ["--muted", "--surface"],
+    ["--faint", "--canvas"], ["--faint", "--surface"],
+    ["--green", "--surface"], ["--amber", "--surface"], ["--red", "--surface"],
+    ["--accent-foreground", "--accent"],
+  ];
+  for (const [themeName, tokens] of themes) {
+    for (const [foreground, background] of pairs) {
+      assert.ok(tokens[foreground] && tokens[background], `${themeName} is missing ${foreground} or ${background}`);
+      const ratio = contrastRatio(tokens[foreground], tokens[background]);
+      assert.ok(ratio >= 4.5, `${themeName} ${foreground} on ${background} contrast ${ratio.toFixed(2)} is below 4.5:1`);
+    }
+  }
+});
+
 test("packaged Pi adapter paths are detected on macOS and Windows", () => {
   const macPath = "/Applications/PiDeck.app/Contents/Resources/app.asar/node_modules/@pideck/pi-adapter/dist";
   const windowsPath = "C:\\Program Files\\PiDeck\\resources\\app.asar\\node_modules\\@pideck\\pi-adapter\\dist";
@@ -361,10 +437,7 @@ test("release package names identify the operating system and architecture", () 
 });
 
 test("release workflow builds both macOS architectures and Windows x64", () => {
-  const workflow = fs.readFileSync(
-    path.join(__dirname, "../../../.github/workflows/release.yml"),
-    "utf8",
-  );
+  const workflow = readText(path.join(__dirname, "../../../.github/workflows/release.yml"));
 
   assert.match(workflow, /runner: macos-15\n\s+arch: arm64/);
   assert.match(workflow, /runner: macos-15-intel\n\s+arch: x64/);
@@ -393,7 +466,7 @@ test("release workflow builds both macOS architectures and Windows x64", () => {
 test("all GitHub workflows pin third-party actions and limit default permissions", () => {
   const workflowDirectory = path.join(__dirname, "../../../.github/workflows");
   for (const filename of fs.readdirSync(workflowDirectory).filter((entry) => entry.endsWith(".yml"))) {
-    const workflow = fs.readFileSync(path.join(workflowDirectory, filename), "utf8");
+    const workflow = readText(path.join(workflowDirectory, filename));
     for (const match of workflow.matchAll(/uses:\s+([^\s@]+)@([^\s#]+)/g)) {
       if (match[1].startsWith("./")) continue;
       assert.match(match[2], /^[0-9a-f]{40}$/, `${filename} must pin ${match[1]} to a full commit SHA`);

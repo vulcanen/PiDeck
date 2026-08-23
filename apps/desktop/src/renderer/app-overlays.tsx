@@ -7,7 +7,7 @@ import type { AppController } from "./use-app-controller";
 // file; the controller contract stays the single source of state.
 export function AppOverlays({ controller }: { controller: AppController }) {
   const {
-    language, t, shortcut, projectCwd, tasks, activeTask, activeProject,
+    language, theme, t, shortcut, projectCwd, tasks, activeTask, activeProject, isMac,
     paletteOpen, setPaletteOpen, paletteCommands, composer, updateComposer, createTask, openProviderSettings, setPackagesOpen, compactSession, exportSession,
     notices, contextMenu, setContextMenu, projectContextMenu, setProjectContextMenu,
     pendingDelete, setPendingDelete, deletingTaskId, deleteTask,
@@ -19,7 +19,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     scopedModelsOpen, setScopedModelsOpen, modelOptions, capabilities, saveScopedModels,
     previewImage, setPreviewImage, imageContextMenu, setImageContextMenu, openImageContextMenu,
   } = controller;
-  return <>
+  return <div className={`overlay-root ${theme}${isMac ? " platform-macos" : " platform-overlay"}`}>
     {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onPackages={() => { setPaletteOpen(false); setPackagesOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
     {notices.length > 0 && <div className="toast-stack">
       {notices.map((item) => <div key={item.id} className={`toast ${item.kind === "error" ? "toast-error" : ""} ${item.closing ? "closing" : ""}`} role={item.kind === "error" ? "alert" : "status"} aria-live="polite"><span className="toast-message">{item.message}</span>{item.kind === "error" && <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>}</div>)}
@@ -38,5 +38,5 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     {scopedModelsOpen && <ScopedModelsDialog language={language} models={modelOptions} selectedIds={capabilities?.scopedModels?.length ? capabilities.scopedModels : modelOptions.map((model) => `${model.providerId}/${model.id}`)} onSave={(modelIds, persist) => void saveScopedModels(modelIds, persist)} onClose={() => setScopedModelsOpen(false)} />}
     {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}
     {imageContextMenu && <ImageContextMenu language={language} x={imageContextMenu.x} y={imageContextMenu.y} onCopy={async () => { const copied = await copyImageToClipboard(imageContextMenu.image.src); setImageContextMenu(null); showNotice(copied ? t.copiedImage : t.copyImageFailed); }} />}
-  </>;
+  </div>;
 }

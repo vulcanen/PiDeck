@@ -93,7 +93,7 @@ packages/
 8. 通过 `@file` 引用工作区文件。
 9. 压缩上下文并导出 JSONL/HTML，导入 Pi JSONL 会话、重命名和查看会话统计。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
-11. 使用 Provider API Key/OAuth 本地认证；PiHost 网络请求依次遵循显式代理环境变量、Pi 全局 `httpProxy` 和跨平台系统代理。
+11. 使用 Provider API Key/OAuth 本地认证；OpenAI Codex 浏览器登录默认使用 Pi 的本地回调，手动输入回调地址仅作为兜底，成功后自动聚焦 PiDeck。PiHost 网络请求依次遵循显式代理环境变量、Pi 全局 `httpProxy` 和跨平台系统代理。
 12. 切换中文/英文和浅色/深色主题。
 13. 使用 Steering / Follow-up 队列、批处理模式和队列消息面板。
 14. 对长会话使用"普通文档流 + 早期消息折叠"（只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后），并按 Session 缓存消息 pane、滚动位置和 follow 状态。

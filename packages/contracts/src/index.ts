@@ -193,7 +193,7 @@ export interface PideckBridge {
   };
   agent: {
     prompt(taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery): Promise<void>;
-    abort(taskId: string): Promise<void>;
+    abort(taskId: string, cwd?: string): Promise<void>;
     setThinkingLevel(taskId: string, level: string, cwd?: string): Promise<void>;
     setModel(taskId: string, providerId: string, modelId: string, cwd?: string): Promise<void>;
     setScopedModels(taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string): Promise<string[]>;

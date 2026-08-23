@@ -2,14 +2,29 @@ import type { PermissionMode, PiHostRequest, PiHostResponse, SessionRunRecord } 
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { readdir, stat } from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { pathToFileURL } from "node:url";
+
+function execFileText(file: string, args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, {
+      ...options,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true,
+    }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
 
 const parentPort = (process as typeof process & {
   parentPort?: {
@@ -87,9 +102,22 @@ let packageConfigRevision = 0;
 type AuthWaiter = {
   resolve: (value: string) => void;
   reject: (reason?: unknown) => void;
+  beforeResolve?: (value: string) => Promise<void>;
 };
 const authWaiters = new Map<string, AuthWaiter>();
 const agentSessionRevisions = new Map<string, number>();
+
+/**
+ * Pi session IDs are normally UUIDs, but imported JSONL files can preserve an
+ * ID that already exists in another project. Keep every in-memory resource
+ * scoped to its project so an operation in one workspace can never address a
+ * same-ID session in another workspace.
+ */
+function sessionStateKey(taskId: string, cwd: string): string {
+  const resolvedCwd = path.resolve(cwd);
+  const normalizedCwd = process.platform === "win32" ? resolvedCwd.toLowerCase() : resolvedCwd;
+  return JSON.stringify([normalizedCwd, taskId]);
+}
 function normalizePackageInstallSource(source: string): string {
   const trimmed = source.trim();
   // Pi's package manager distinguishes npm packages with the `npm:` prefix.
@@ -140,7 +168,38 @@ function emitAuth(requestId: string, event: unknown) {
  * the value already entered in the settings form for the first prompt; any
  * additional provider-specific fields still use the normal interactive prompt.
  */
-function createAuthInteraction(requestId: string, initialSecret?: string) {
+const OPENAI_CODEX_LOOPBACK_SDK_VERSION = "0.84.2";
+const OPENAI_CODEX_LOOPBACK_PORT = 1455;
+
+function isOpenAICodexBrowserMethodPrompt(providerId: string, prompt: any): boolean {
+  if (providerId !== "openai-codex" || sdkVersion() !== OPENAI_CODEX_LOOPBACK_SDK_VERSION || prompt?.type !== "select") return false;
+  const optionIds = Array.isArray(prompt.options) ? prompt.options.map((option: any) => option?.id) : [];
+  return optionIds.includes("browser") && optionIds.includes("device_code");
+}
+
+/**
+ * Pi 0.84.2's OpenAI Codex browser flow silently falls back to manual URL
+ * entry when its fixed loopback listener cannot bind. Probe the same endpoint
+ * immediately before Pi starts it so the UI can keep the method picker open
+ * and offer device-code login instead of presenting a mysterious stale form.
+ */
+async function assertOpenAICodexLoopbackAvailable(): Promise<void> {
+  const host = process.env.PI_OAUTH_CALLBACK_HOST?.trim() || "127.0.0.1";
+  await new Promise<void>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      reject(new Error(`PIDECK_OAUTH_CALLBACK_UNAVAILABLE:${error.code ?? "UNKNOWN"}`));
+    });
+    server.listen({ host, port: OPENAI_CODEX_LOOPBACK_PORT, exclusive: true }, () => {
+      server.close((error) => {
+        if (error) reject(new Error("PIDECK_OAUTH_CALLBACK_UNAVAILABLE:CLOSE_FAILED"));
+        else resolve();
+      });
+    });
+  });
+}
+
+function createAuthInteraction(requestId: string, providerId: string, initialSecret?: string) {
   let initialSecretAvailable = Boolean(initialSecret);
   let promptSequence = 0;
   return {
@@ -151,7 +210,26 @@ function createAuthInteraction(requestId: string, initialSecret?: string) {
       }
       const promptId = `${requestId}:${++promptSequence}`;
       emitAuth(promptId, { type: "prompt", prompt: jsonSafe(prompt) });
-      return new Promise<string>((resolve, reject) => authWaiters.set(promptId, { resolve, reject }));
+      const beforeResolve = isOpenAICodexBrowserMethodPrompt(providerId, prompt)
+        ? async (value: string) => { if (value === "browser") await assertOpenAICodexLoopbackAvailable(); }
+        : undefined;
+      return new Promise<string>((resolve, reject) => {
+        const signal = prompt?.signal as AbortSignal | undefined;
+        const cleanup = () => signal?.removeEventListener("abort", onAbort);
+        const waiter: AuthWaiter = {
+          beforeResolve,
+          resolve: (value) => { cleanup(); resolve(value); },
+          reject: (reason) => { cleanup(); reject(reason); },
+        };
+        const onAbort = () => {
+          if (authWaiters.get(promptId) !== waiter) return;
+          authWaiters.delete(promptId);
+          waiter.reject(signal?.reason ?? new Error("Authentication prompt cancelled"));
+        };
+        authWaiters.set(promptId, waiter);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
+      });
     },
     notify: (event: unknown) => emitAuth(requestId, { type: "notify", event: jsonSafe(event) }),
   };
@@ -162,7 +240,7 @@ async function persistProviderApiKey(runtime: any, providerId: string, apiKey: s
   if (!provider?.auth?.apiKey?.login) throw new Error(`${provider?.name ?? providerId} does not support API-key login`);
   // ModelRuntime.login persists the returned credential through Pi's
   // credential store. setRuntimeApiKey is intentionally runtime-only.
-  await runtime.login(providerId, "api-key", createAuthInteraction(requestId, apiKey));
+  await runtime.login(providerId, "api-key", createAuthInteraction(requestId, providerId, apiKey));
 }
 
 function emitApproval(requestId: string, taskId: string, toolName: string, args: unknown) {
@@ -203,9 +281,9 @@ function persistSessionRun(session: any, taskId: string, startedAt: number, ende
   }
 }
 
-function finishExecutionGroup(session: any, taskId: string, endedAt: number): void {
-  const startedAt = executionGroupStarts.get(taskId);
-  executionGroupStarts.delete(taskId);
+function finishExecutionGroup(session: any, stateKey: string, taskId: string, endedAt: number): void {
+  const startedAt = executionGroupStarts.get(stateKey);
+  executionGroupStarts.delete(stateKey);
   if (startedAt !== undefined) persistSessionRun(session, taskId, startedAt, endedAt);
 }
 
@@ -483,10 +561,12 @@ async function listWorkspaceFiles(cwd: string): Promise<Array<{ path: string; ki
   return files;
 }
 
-function gitChanges(cwd: string): Array<{ path: string; status: string; additions: number; deletions: number }> {
+async function gitChanges(cwd: string): Promise<Array<{ path: string; status: string; additions: number; deletions: number }>> {
   try {
-    const statusOutput = execFileSync("git", ["-C", cwd, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" });
-    const statOutput = execFileSync("git", ["-C", cwd, "diff", "--numstat", "HEAD"], { encoding: "utf8" });
+    const [statusOutput, statOutput] = await Promise.all([
+      execFileText("git", ["-C", cwd, "status", "--porcelain", "--untracked-files=all"], { timeout: 10_000 }),
+      execFileText("git", ["-C", cwd, "diff", "--numstat", "HEAD"], { timeout: 10_000 }),
+    ]);
     const numstat = new Map<string, { additions: number; deletions: number }>();
     for (const line of statOutput.split(/\r?\n/)) {
       const match = /^(\d+|-)\s+(\d+|-)\s+(.+)$/.exec(line.trim());
@@ -590,38 +670,39 @@ function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "followUp"): 
 }
 
 async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
-  const existing = agentSessions.get(taskId);
+  const stateKey = sessionStateKey(taskId, cwd);
+  const existing = agentSessions.get(stateKey);
   if (existing) {
-    const sessionRevision = agentSessionRevisions.get(taskId);
-    const sessionPackageRevision = agentSessionPackageRevisions.get(taskId);
-    if ((sessionRevision === permissionEngine.revision && sessionPackageRevision === packageConfigRevision) || existing.isStreaming || agentRunReservations.has(taskId)) {
+    const sessionRevision = agentSessionRevisions.get(stateKey);
+    const sessionPackageRevision = agentSessionPackageRevisions.get(stateKey);
+    if ((sessionRevision === permissionEngine.revision && sessionPackageRevision === packageConfigRevision) || existing.isStreaming || agentRunReservations.has(stateKey)) {
       if (!existing.isStreaming) normalizeSessionImages(existing.sessionManager);
       return existing;
     }
     // Do not interrupt an active turn. Once idle, recreate against the new
     // extension configuration while keeping the same Pi SessionManager/file.
     existing.dispose?.();
-    agentSessions.delete(taskId);
-    agentSessionRevisions.delete(taskId);
-    agentSessionPackageRevisions.delete(taskId);
+    agentSessions.delete(stateKey);
+    agentSessionRevisions.delete(stateKey);
+    agentSessionPackageRevisions.delete(stateKey);
     // Queue contents live only on AgentSession. Drop renderer-side queue
     // sidecars and delivery hints when the idle session is recreated.
-    queuedPromptImages.delete(taskId);
-    queueDeliveryHints.delete(taskId);
-    queueRebuilds.delete(taskId);
-    agentRunReservations.delete(taskId);
+    queuedPromptImages.delete(stateKey);
+    queueDeliveryHints.delete(stateKey);
+    queueRebuilds.delete(stateKey);
+    agentRunReservations.delete(stateKey);
   }
-  const pending = agentSessionPromises.get(taskId);
+  const pending = agentSessionPromises.get(stateKey);
   if (pending) return pending;
 
   const creationRevision = permissionEngine.revision;
   const creation = (async () => {
     const sdk = await loadPiSdk();
-    let manager = sessionManagers.get(taskId);
+    let manager = sessionManagers.get(stateKey);
     if (!manager) {
-      const sessionPath = sessionFiles.get(taskId);
+      const sessionPath = sessionFiles.get(stateKey);
       manager = sessionPath ? sdk.SessionManager.open(sessionPath) : sdk.SessionManager.create(cwd);
-      sessionManagers.set(taskId, manager);
+      sessionManagers.set(stateKey, manager);
     }
     normalizeSessionImages(manager);
     const permissionExtensionPath = resolvePermissionExtensionPath();
@@ -639,7 +720,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     // Give every loaded Pi extension the desktop UI bridge. The permission
     // extension uses the same select/input/confirm primitives as other
     // extensions, so it no longer needs a separate TUI-only implementation.
-    await session.bindExtensions?.({ uiContext: permissionEngine.createUi(taskId) });
+    await session.bindExtensions?.({ uiContext: permissionEngine.createUi(taskId, stateKey) });
     const previousBeforeToolCall = session.agent.beforeToolCall;
     session.agent.beforeToolCall = (context: any, signal?: AbortSignal) => permissionEngine.beforeToolCallWithExtension(
       taskId,
@@ -647,30 +728,31 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       previousBeforeToolCall,
       permissionExtensionLoaded,
       signal,
+      stateKey,
     );
     session.subscribe((event: any) => {
       try {
-        if (event.type === "queue_update" && !queueRebuilds.has(taskId)) {
-          recordQueueDeliveryHints(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
-          reconcileQueuedPromptImages(taskId, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
+        if (event.type === "queue_update" && !queueRebuilds.has(stateKey)) {
+          recordQueueDeliveryHints(stateKey, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
+          reconcileQueuedPromptImages(stateKey, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
         }
         // A delivery hint is only meaningful until the current agent run is
         // settled. If Pi aborts or drops a queued message without emitting its
         // message_start event, discard the hint so a later identical prompt
         // cannot inherit the wrong steering/follow-up classification.
-        if (event.type === "agent_settled") queueDeliveryHints.delete(taskId);
-        if (event.type === "agent_start") executionGroupStarts.set(taskId, Date.now());
+        if (event.type === "agent_settled") queueDeliveryHints.delete(stateKey);
+        if (event.type === "agent_start") executionGroupStarts.set(stateKey, Date.now());
         if (event.type === "agent_settled") {
-          finishExecutionGroup(session, taskId, Date.now());
+          finishExecutionGroup(session, stateKey, taskId, Date.now());
         }
         if (event.type === "message_start" && event.message?.role === "user") {
-          const queueDelivery = consumeQueueDeliveryHint(taskId, queueMessageText(event.message));
+          const queueDelivery = consumeQueueDeliveryHint(stateKey, queueMessageText(event.message));
           if (queueDelivery === "followUp") {
             const boundary = Date.now();
-            finishExecutionGroup(session, taskId, boundary);
-            executionGroupStarts.set(taskId, boundary);
-          } else if (!executionGroupStarts.has(taskId)) {
-            executionGroupStarts.set(taskId, Date.now());
+            finishExecutionGroup(session, stateKey, taskId, boundary);
+            executionGroupStarts.set(stateKey, boundary);
+          } else if (!executionGroupStarts.has(stateKey)) {
+            executionGroupStarts.set(stateKey, Date.now());
           }
           emit(taskId, normalizeAgentEvent(event, queueDelivery));
           return;
@@ -702,16 +784,16 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
         console.error(`PiHost message snapshot handler failed for ${taskId}`, error);
       }
     });
-    agentSessions.set(taskId, session);
-    agentSessionRevisions.set(taskId, creationRevision);
-    agentSessionPackageRevisions.set(taskId, packageConfigRevision);
+    agentSessions.set(stateKey, session);
+    agentSessionRevisions.set(stateKey, creationRevision);
+    agentSessionPackageRevisions.set(stateKey, packageConfigRevision);
     return session;
   })();
-  agentSessionPromises.set(taskId, creation);
+  agentSessionPromises.set(stateKey, creation);
   try {
     return await creation;
   } finally {
-    agentSessionPromises.delete(taskId);
+    agentSessionPromises.delete(stateKey);
   }
 }
 
@@ -822,7 +904,7 @@ async function handle(request: PiHostRequest): Promise<void> {
           : resolveWorkspaceCwd();
         const sdk = await loadPiSdk();
         const sessions = await sdk.SessionManager.list(cwd);
-        for (const session of sessions) sessionFiles.set(session.id, session.path);
+        for (const session of sessions) sessionFiles.set(sessionStateKey(session.id, cwd), session.path);
         send({
           id: request.id,
           ok: true,
@@ -863,7 +945,7 @@ async function handle(request: PiHostRequest): Promise<void> {
           result: {
             cwd,
             files: await listWorkspaceFiles(cwd),
-            changes: gitChanges(cwd),
+            changes: await gitChanges(cwd),
             refreshedAt: new Date().toISOString(),
           },
         });
@@ -875,9 +957,10 @@ async function handle(request: PiHostRequest): Promise<void> {
         const sessionManager = (await loadPiSdk()).SessionManager.create(cwd);
         if (payload?.name) sessionManager.appendSessionInfo(payload.name);
         const sessionId = sessionManager.getSessionId();
-        sessionManagers.set(sessionId, sessionManager);
+        const stateKey = sessionStateKey(sessionId, cwd);
+        sessionManagers.set(stateKey, sessionManager);
         const sessionFile = sessionManager.getSessionFile?.();
-        if (sessionFile) sessionFiles.set(sessionId, sessionFile);
+        if (sessionFile) sessionFiles.set(stateKey, sessionFile);
         send({
           id: request.id,
           ok: true,
@@ -895,10 +978,12 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "sessions.messages": {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
-        const manager = sessionManagers.get(payload.taskId);
-        const session = agentSessions.get(payload.taskId) ?? await ensureAgentSession(
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const manager = sessionManagers.get(stateKey);
+        const session = agentSessions.get(stateKey) ?? await ensureAgentSession(
           payload.taskId,
-          payload.cwd ?? manager?.getCwd?.() ?? resolveWorkspaceCwd(),
+          cwd,
         );
         if (session) {
           send({ id: request.id, ok: true, result: jsonSafe(session.messages) });
@@ -928,7 +1013,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         // AgentSession intact but read command/prompt/skill metadata from a
         // fresh capability session so disabled package commands disappear
         // immediately from the desktop suggestions.
-        const commandSession = payload?.taskId && agentSessionPackageRevisions.get(payload.taskId) !== packageConfigRevision
+        const commandSession = payload?.taskId && agentSessionPackageRevisions.get(sessionStateKey(payload.taskId, cwd)) !== packageConfigRevision
           ? await ensureCapabilitySession(cwd)
           : session;
         const slash = await listSlashCommands(commandSession);
@@ -972,8 +1057,9 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!existsSync(inputPath)) throw new Error(`Session file not found: ${inputPath}`);
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const sdk = await loadPiSdk();
-        const currentPath = payload.taskId ? sessionFiles.get(payload.taskId) : undefined;
-        const currentManager = payload.taskId ? sessionManagers.get(payload.taskId) : undefined;
+        const currentStateKey = payload.taskId ? sessionStateKey(payload.taskId, cwd) : undefined;
+        const currentPath = currentStateKey ? sessionFiles.get(currentStateKey) : undefined;
+        const currentManager = currentStateKey ? sessionManagers.get(currentStateKey) : undefined;
         const scratchManager = sdk.SessionManager.create(cwd);
         const targetDir = currentManager?.getSessionDir?.() ?? (currentPath ? path.dirname(currentPath) : undefined) ?? scratchManager.getSessionDir?.() ?? path.join(cwd, ".pi", "sessions");
         mkdirSync(targetDir, { recursive: true });
@@ -982,8 +1068,9 @@ async function handle(request: PiHostRequest): Promise<void> {
         const manager = sdk.SessionManager.open(destination, targetDir, cwd);
         normalizeSessionImages(manager);
         const sessionId = manager.getSessionId();
-        sessionManagers.set(sessionId, manager);
-        sessionFiles.set(sessionId, destination);
+        const stateKey = sessionStateKey(sessionId, cwd);
+        sessionManagers.set(stateKey, manager);
+        sessionFiles.set(stateKey, destination);
         const titleSource = manager.getSessionName?.() || firstUserText(manager);
         send({
           id: request.id,
@@ -1055,17 +1142,17 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        execFileSync("gh", ["auth", "status"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        await execFileText("gh", ["auth", "status"], { timeout: 30_000 });
         const tempPath = path.join(os.tmpdir(), `pideck-session-${Date.now()}.html`);
         try {
           await session.exportToHtml(tempPath);
-          const gistUrl = execFileSync("gh", ["gist", "create", "--public=false", tempPath], { encoding: "utf8" }).trim();
+          const gistUrl = (await execFileText("gh", ["gist", "create", "--public=false", tempPath], { timeout: 10 * 60_000 })).trim();
           const gistId = gistUrl.split("/").filter(Boolean).pop();
           if (!gistId) throw new Error("Could not parse the gist URL returned by gh");
           const viewerBase = process.env.PI_SHARE_VIEWER_URL ?? "https://pi.dev/session/";
           send({ id: request.id, ok: true, result: { url: `${viewerBase}#${gistId}`, gistUrl } });
         } finally {
-          try { unlinkSync(tempPath); } catch { /* Best effort cleanup. */ }
+          try { await unlink(tempPath); } catch { /* Best effort cleanup. */ }
         }
         return;
       }
@@ -1073,21 +1160,23 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string; text?: string; cwd?: string; images?: Array<{ data: string; mimeType: string }>; delivery?: "steer" | "followUp" } | undefined;
         const images = normalizePromptImages(payload?.images);
         if (!payload?.taskId || (!payload.text && !images?.length)) throw new Error("taskId and text or images are required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
         const sessionName = session.sessionManager?.getSessionName?.();
-        if (!titledSessions.has(payload.taskId) && (isDefaultSessionTitle(sessionName) || isCommandDerivedSessionTitle(sessionName))) {
+        if (!titledSessions.has(stateKey) && (isDefaultSessionTitle(sessionName) || isCommandDerivedSessionTitle(sessionName))) {
           const title = deriveSessionTitle(payload.text ?? "");
           if (title) {
             if (typeof session.setSessionName === "function") session.setSessionName(title);
             else session.sessionManager?.appendSessionInfo?.(title);
-            titledSessions.add(payload.taskId);
+            titledSessions.add(stateKey);
           }
         }
-        const wasStreaming = Boolean(session.isStreaming || agentRunReservations.has(payload.taskId));
+        const wasStreaming = Boolean(session.isStreaming || agentRunReservations.has(stateKey));
         const queuedDelivery = wasStreaming ? payload.delivery ?? "followUp" as const : undefined;
-        if (!queuedDelivery) agentRunReservations.add(payload.taskId);
+        if (!queuedDelivery) agentRunReservations.add(stateKey);
         const runPrompt = async () => {
-          if (queuedDelivery) trackQueuedPrompt(payload.taskId!, queuedDelivery, payload.text ?? "", images);
+          if (queuedDelivery) trackQueuedPrompt(stateKey, queuedDelivery, payload.text ?? "", images);
           await session.prompt(payload.text ?? "", {
             source: "interactive",
             images,
@@ -1095,16 +1184,16 @@ async function handle(request: PiHostRequest): Promise<void> {
           });
           if (queuedDelivery) {
             const current = queueState(session);
-            reconcileQueuedPromptImages(payload.taskId!, current.steering, current.followUp);
+            reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
           }
         };
         try {
-          if (queuedDelivery) await withQueueMutationLock(payload.taskId, runPrompt);
+          if (queuedDelivery) await withQueueMutationLock(stateKey, runPrompt);
           else await runPrompt();
         } catch (error) {
           if (queuedDelivery) {
             const current = queueState(session);
-            reconcileQueuedPromptImages(payload.taskId!, current.steering, current.followUp);
+            reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
           }
           // A failed prompt must not leave Pi's AgentSession streaming. Aborting
           // here lets the next user prompt start a fresh execution group.
@@ -1113,39 +1202,42 @@ async function handle(request: PiHostRequest): Promise<void> {
           }
           throw error;
         } finally {
-          if (!queuedDelivery) agentRunReservations.delete(payload.taskId!);
+          if (!queuedDelivery) agentRunReservations.delete(stateKey);
         }
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
       case "sessions.delete": {
-        const payload = request.payload as { taskId?: string } | undefined;
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
-        const sessionPath = sessionFiles.get(payload.taskId);
-        const session = agentSessions.get(payload.taskId);
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const sessionPath = sessionFiles.get(stateKey);
+        const session = agentSessions.get(stateKey);
         if (session?.isStreaming) await session.abort();
         await session?.dispose?.();
         if (sessionPath && existsSync(sessionPath)) await unlink(sessionPath);
-        sessionFiles.delete(payload.taskId);
-        titledSessions.delete(payload.taskId);
-        sessionManagers.delete(payload.taskId);
-        agentSessions.delete(payload.taskId);
-        agentSessionPackageRevisions.delete(payload.taskId);
-        agentSessionRevisions.delete(payload.taskId);
-        queuedPromptImages.delete(payload.taskId);
-        queueDeliveryHints.delete(payload.taskId);
-        queueMutationLocks.delete(payload.taskId);
-        queueRebuilds.delete(payload.taskId);
-        agentRunReservations.delete(payload.taskId);
-        executionGroupStarts.delete(payload.taskId);
-        permissionEngine.dispose(payload.taskId);
+        sessionFiles.delete(stateKey);
+        titledSessions.delete(stateKey);
+        sessionManagers.delete(stateKey);
+        agentSessions.delete(stateKey);
+        agentSessionPackageRevisions.delete(stateKey);
+        agentSessionRevisions.delete(stateKey);
+        queuedPromptImages.delete(stateKey);
+        queueDeliveryHints.delete(stateKey);
+        queueMutationLocks.delete(stateKey);
+        queueRebuilds.delete(stateKey);
+        agentRunReservations.delete(stateKey);
+        executionGroupStarts.delete(stateKey);
+        permissionEngine.dispose(stateKey);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
       case "agent.abort": {
-        const payload = request.payload as { taskId?: string } | undefined;
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
-        const session = agentSessions.get(payload.taskId);
+        const stateKey = sessionStateKey(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const session = agentSessions.get(stateKey);
         if (session) await session.abort();
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -1198,9 +1290,11 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "agent.queue": {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
         const current = queueState(session);
-        reconcileQueuedPromptImages(payload.taskId, current.steering, current.followUp);
+        reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
         send({ id: request.id, ok: true, result: current });
         return;
       }
@@ -1216,16 +1310,18 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "agent.clearQueue": {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        await withQueueMutationLock(payload.taskId, async () => {
-          queueRebuilds.add(payload.taskId!);
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        await withQueueMutationLock(stateKey, async () => {
+          queueRebuilds.add(stateKey);
           try {
             session.clearQueue();
-            setQueuedPromptImages(payload.taskId!, [], []);
-            queueDeliveryHints.delete(payload.taskId!);
+            setQueuedPromptImages(stateKey, [], []);
+            queueDeliveryHints.delete(stateKey);
             send({ id: request.id, ok: true, result: queueState(session) });
           } finally {
-            queueRebuilds.delete(payload.taskId!);
+            queueRebuilds.delete(stateKey);
           }
         });
         return;
@@ -1234,23 +1330,24 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string; cwd?: string; followUpIndex?: number } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
         if (!Number.isInteger(payload.followUpIndex) || (payload.followUpIndex ?? -1) < 0) throw new Error("followUpIndex is required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        const taskId = payload.taskId;
-        await withQueueMutationLock(taskId, async () => {
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        await withQueueMutationLock(stateKey, async () => {
           // Validate against the live queue before clearing it. A stale UI
           // index must never cause a different message to be promoted.
           const liveQueue = queueState(session);
           const followUpIndex = payload.followUpIndex!;
           if (typeof liveQueue.followUp[followUpIndex] !== "string") throw new Error("Queued message is no longer available");
 
-          const imageState = queuedPromptImageState(taskId);
+          const imageState = queuedPromptImageState(stateKey);
           const queued = {
             steering: liveQueue.steering.map((text, index) => imageState.steering[index] ?? { text, images: [] }),
             followUp: liveQueue.followUp.map((text, index) => imageState.followUp[index] ?? { text, images: [] }),
           };
           const selected = queued.followUp[followUpIndex];
           if (!selected) throw new Error("Queued message is no longer available");
-          queueRebuilds.add(taskId);
+          queueRebuilds.add(stateKey);
           try {
             session.clearQueue();
             try {
@@ -1270,7 +1367,7 @@ async function handle(request: PiHostRequest): Promise<void> {
                 for (const message of queued.followUp) await session.followUp(message.text, message.images);
                 const restored = queueState(session);
                 setQueuedPromptImages(
-                  taskId,
+                  stateKey,
                   queuedPromptImagesForTexts(restored.steering, queued.steering),
                   queuedPromptImagesForTexts(restored.followUp, queued.followUp),
                 );
@@ -1284,13 +1381,13 @@ async function handle(request: PiHostRequest): Promise<void> {
             }
             const next = queueState(session);
             setQueuedPromptImages(
-              taskId,
+              stateKey,
               queuedPromptImagesForTexts(next.steering, [selected, ...queued.steering]),
               queuedPromptImagesForTexts(next.followUp, queued.followUp.filter((_message, index) => index !== followUpIndex)),
             );
             send({ id: request.id, ok: true, result: next });
           } finally {
-            queueRebuilds.delete(taskId);
+            queueRebuilds.delete(stateKey);
           }
         });
         return;
@@ -1389,7 +1486,7 @@ async function handle(request: PiHostRequest): Promise<void> {
           if (!apiKey) throw new Error("An API key is required");
           await persistProviderApiKey(runtime, payload.providerId, apiKey, request.id);
         } else {
-          await runtime.login(payload.providerId, "oauth", createAuthInteraction(request.id));
+          await runtime.login(payload.providerId, "oauth", createAuthInteraction(request.id, payload.providerId));
         }
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -1417,9 +1514,17 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.requestId || (!payload.cancelled && payload.value === undefined)) throw new Error("requestId and value are required");
         const waiter = authWaiters.get(payload.requestId);
         if (!waiter) throw new Error("Auth prompt is no longer active");
-        authWaiters.delete(payload.requestId);
-        if (payload.cancelled) waiter.reject(new Error("Authentication cancelled"));
-        else waiter.resolve(payload.value as string);
+        if (payload.cancelled) {
+          authWaiters.delete(payload.requestId);
+          waiter.reject(new Error("Authentication cancelled"));
+        } else {
+          // Validation failures deliberately leave the Pi prompt pending. The
+          // Renderer can display the actionable error and the user can select
+          // device-code login without restarting the whole auth operation.
+          await waiter.beforeResolve?.(payload.value as string);
+          authWaiters.delete(payload.requestId);
+          waiter.resolve(payload.value as string);
+        }
         send({ id: request.id, ok: true, result: undefined });
         return;
       }

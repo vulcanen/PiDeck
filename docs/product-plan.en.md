@@ -93,7 +93,7 @@ Currently supported:
 8. Reference workspace files via `@file`.
 9. Compact context and export JSONL/HTML; import Pi JSONL sessions, rename, and view session stats.
 10. Use Pi slash command catalog, Prompt, Skill, and Extension command suggestions.
-11. Authenticate locally with Provider API keys/OAuth; PiHost network calls honor explicit proxy environment variables, Pi's global `httpProxy`, and the cross-platform system proxy in that order.
+11. Authenticate locally with Provider API keys/OAuth; OpenAI Codex browser login uses Pi's loopback callback by default, exposes manual callback entry only as a fallback, and refocuses PiDeck after success. PiHost network calls honor explicit proxy environment variables, Pi's global `httpProxy`, and the cross-platform system proxy in that order.
 12. Switch Chinese/English and light/dark themes.
 13. Use Steering/Follow-up queues, batch mode, and the queue panel.
 14. Use a plain document-flow list with earlier-message folding for long sessions (only the most recent 200 messages stay mounted; older ones fold behind a "show earlier" button), caching message panes, scroll positions, and follow state per Session.

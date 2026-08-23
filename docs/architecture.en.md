@@ -43,14 +43,14 @@ Two runtime resolution entry points:
 Main is only responsible for:
 
 - Creating and destroying the BrowserWindow (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`).
-- Starting, listening to, and stopping PiHost.
+- Starting, listening to, and stopping PiHost. Lifecycle callbacks are bound to the process instance that emitted them, so a late `exit` from a replaced Host cannot tear down its replacement; restart resolves only after a real `runtime.status` IPC round trip.
 - Resolving the operating-system proxy through an internal Main/PiHost bridge for each request URL when neither explicit proxy environment variables nor Pi `httpProxy` are set.
 - Orchestrating between Renderer IPC and PiHost requests.
 - Setting timeouts for requests (default 60s; `providers.login`, `sessions.share` 15min; `packages.*` 10min; `agent.prompt` unbounded — its completion is signaled by `agent_settled`, not the RPC response) and handling Host disconnects.
 - Opening protocol-validated HTTP(S) URLs in the system browser and rejecting in-window navigation.
 - Recording project directory references, hidden references, and their display order in Electron `userData/projects.json`.
 - Building the application menu and switching menu language via `app:set-language`; copy comes from `@pideck/i18n`.
-- On Windows, using Electron Window Controls Overlay and hiding the native menu bar so the themed Renderer surface continues behind the system window controls; `app:set-window-theme` synchronizes the native background and control-symbol colors with the Renderer theme.
+- On Windows, using Electron Window Controls Overlay and hiding the native menu bar so the themed Renderer surface continues behind the system window controls; `app:set-window-theme` synchronizes the native background and control-symbol colors with the Renderer theme. Renderer title-bar colors match that native overlay exactly, while right-side settings/package drawers start below the 48px caption strip so their header controls never enter the minimize/maximize/close hit area.
 - Opening native dialogs for directory picking, session import, etc.
 - Setting the Dock icon on macOS and attempting to load `pideck-miniwindow.node` for the minimized-window icon; failures degrade to a warning.
 
@@ -74,6 +74,8 @@ PiHost is responsible for:
 - Executing Pi built-in tools, Bash, Provider login, Pi package management, permission-mode reads/writes, and session operations.
 - Initializing Pi's own proxy-aware HTTP dispatcher before reporting `runtime.status=connected`, so OAuth token exchange, model requests, and Provider HTTP calls share the same PiHost route. Package-manager subprocesses such as npm, pnpm, and git retain their own proxy configuration.
 - Converting cross-process data into JSON-serializable responses (`jsonSafe`) and saving queued image attachments out-of-band so `promoteQueue` does not drop them.
+- Scoping every in-memory SessionManager, AgentSession, queue, approval, and lifecycle resource by normalized `cwd` plus Pi session ID. Imported JSONL files may preserve the same ID in different projects, but deletion, abort, and queue operations remain project-isolated.
+- Running Git workspace inspection and `gh` sharing commands asynchronously with bounded timeouts so external processes do not block the PiHost IPC loop.
 
 Dynamic Pi SDK resolution, loading, and model/Session adaptation live in `packages/pi-adapter`. Pi permission configuration, Extension UI binding, approval waiting, and policy switching live in `packages/permission-engine`. Neither creates a second agent, Provider, or Session store; the authoritative sources remain the Pi SDK and `@gotgenes/pi-permission-system`.
 
@@ -153,6 +155,7 @@ PiDeck/
 │  └─ release.yml                         # Tagged native installers and draft GitHub Release
 ├─ scripts/verify-package-contents.mjs    # Packaged asar runtime/license/denylist verifier
 ├─ scripts/smoke-source-runtime.mjs       # Starts built PiHost and exercises a real runtime IPC call
+├─ scripts/smoke-session-isolation.mjs    # Verifies same-ID sessions remain isolated across projects
 ├─ scripts/smoke-packaged-runtime.mjs     # Starts packaged PiHost and verifies the bundled Pi SDK
 ├─ scripts/generate-packaged-sbom.mjs     # Inventories the final asar into a platform-specific CycloneDX SBOM
 ├─ scripts/generate-third-party-notices.mjs # Deterministic production dependency license inventory
@@ -192,7 +195,7 @@ Must be observed:
 
 The Renderer session timeline is composed of `app-conversation.tsx` and `ui/message-timeline.tsx` as a **plain document-flow list with earlier-message folding** — no virtual list. Because Mermaid, KaTeX, and syntax highlighting are asynchronously sized, the measure-position loop of virtual lists is fundamentally incompatible with them (jumping, overlap, rubber-banding); instead only the most recent `FOLD_WINDOW = 200` messages stay mounted, with older messages folded behind a "show earlier" button revealing `FOLD_STEP = 200` at a time. Anti-jump relies on native scroll anchoring: `.conversation-scroll` must keep `overflow-anchor: auto` (the virtual-list-era `none` disables that mechanism).
 
-Each visited Session keeps its own pane; inactive panes use `visibility: hidden` instead of `display: none`, so the browser naturally preserves each pane's `scrollTop` without manual restore logic; the `ConversationScrollSnapshot` is only `{ top, follow }`. Leaving follow is driven **only by real input gestures** (`wheel` with `deltaY < 0`, or an upward touch drag) — never by inferring direction from a shrinking `scrollTop`, because content legitimately shrinks (a live row replaced by the final message, the working indicator disappearing, an execution summary collapsing) and a delta-based guess misreads that as "user scrolled up", killing auto-follow mid-stream. During programmatic smooth scrolling, `pinningRef` (with a 1000ms timeout safety valve) latches follow so the "jump to latest" button does not flash back mid-animation.
+Each visited Session keeps its own pane; inactive panes use `visibility: hidden` instead of `display: none`, so the browser naturally preserves each pane's `scrollTop` without manual restore logic, while their scroll/resize/mutation observers are disconnected until the pane is active again. The `ConversationScrollSnapshot` is only `{ top, follow }`. Leaving follow is driven **only by real input gestures** (`wheel` with `deltaY < 0`, or an upward touch drag) — never by inferring direction from a shrinking `scrollTop`, because content legitimately shrinks (a live row replaced by the final message, the working indicator disappearing, an execution summary collapsing) and a delta-based guess misreads that as "user scrolled up", killing auto-follow mid-stream. During programmatic smooth scrolling, `pinningRef` (with a 1000ms timeout safety valve) latches follow so the "jump to latest" button does not flash back mid-animation. Modal overlays mark the application shell inert/hidden from assistive technology, and the shared focus primitive lets only the topmost nested dialog handle Escape.
 
 PiDeck's Renderer `activity`/`completedActivity` remains presentation state of the current process and is never written back into the Session. To restore "processed" durations reliably, PiHost records each execution group's `startedAt/endedAt/durationMs` at `agent_start`, non-Steering Follow-up boundaries, and `agent_settled`, writing them as a `pideck.execution-run` custom entry via Pi's official `SessionManager.appendCustomEntry()`; the entry never enters the LLM context. The Renderer reads exact durations through `sessions.runMetadata`; Pi's raw thinking/tool content is used only to rebuild step content. Old sessions without this metadata show "processed" but never infer durations from message timestamps.
 
@@ -243,7 +246,7 @@ Six message shapes are currently dispatched with a top-level `type`:
 
 `runtime.status` is published by Main: `connected` when PiHost reports it, `starting` during process startup, `disconnected` at process exit with all pending requests rejected.
 
-Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-response`) as text, options, or a cancel state; cancelling ends Pi's wait without leaving a pending login request.
+Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-response`) as text, options, or a cancel state; cancelling ends Pi's wait without leaving a pending login request, and PiHost also propagates Pi's per-prompt abort signal so SDK-cancelled fallback prompts do not leave stale waiters. For the version-guarded Pi 0.84.2 OpenAI Codex browser flow, PiHost probes the SDK's fixed loopback listener endpoint before resolving the browser-method prompt. A failed probe keeps that prompt active so the Renderer can show an actionable error and the user can choose Pi's device-code method. The SDK's concurrent manual-code prompt stays a secondary fallback while the loopback callback is pending, and Main restores/focuses the PiDeck window after `providers.login` succeeds.
 
 `agent.event` currently covers agent start/end, agent settled, turn start/end, message start/update/end/snapshot, tool execution start/update/end, and queue update events. The `messages` of `agent_end` come from the Pi SDK, so the Renderer can merge the round's messages before any automatic retry or queue continuation; `agent_settled` then reads the final Session snapshot. The Renderer only consumes serializable normalized objects, never `AgentSession` instances.
 

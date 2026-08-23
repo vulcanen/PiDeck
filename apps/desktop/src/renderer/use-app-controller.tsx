@@ -841,7 +841,7 @@ export function useAppController() {
 
   async function abortActive() {
     if (!activeTask) return;
-    try { await window.pideck.agent.abort(activeTask.id); discardStreamDeltas(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "" }); }
+    try { await window.pideck.agent.abort(activeTask.id, activeProject?.cwd); discardStreamDeltas(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "" }); }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 

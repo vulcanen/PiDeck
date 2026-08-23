@@ -254,6 +254,9 @@ function startHost(window: BrowserWindow) {
     if (process.env.PIDECK_DEBUG) console.error(`[PiHost] ${String(chunk).trimEnd()}`);
   });
   startedHost.on("message", (message: PiHostResponse | { type?: string; payload?: unknown; requestId?: string; url?: string }) => {
+    // A replaced Host can still flush buffered IPC while it exits. Ignore it:
+    // only the current instance may resolve requests or publish runtime state.
+    if (host !== startedHost) return;
     if ("type" in message && message.type === "proxy.resolve" && typeof message.requestId === "string" && typeof message.url === "string") {
       void resolveProxyForHost(startedHost, message.requestId, message.url);
       return;
@@ -275,23 +278,22 @@ function startHost(window: BrowserWindow) {
   });
   startedHost.on("error", (error) => {
     console.error("PiHost process error", error);
-    if (hostAlive) teardownHost("PiHost process error");
+    teardownHost("PiHost process error", startedHost);
   });
   startedHost.on("exit", () => {
-    teardownHost("PiHost exited");
+    teardownHost("PiHost exited", startedHost);
   });
 }
 
 // Reject every pending request and reset the Host so a later restart can
 // fork a fresh PiHost. `reason` is only logged here; the runtime status event
 // already tells the Renderer the Host is gone.
-function teardownHost(reason: string) {
-  if (!hostAlive && !host) return;
+function teardownHost(reason: string, sourceHost: ChildProcess | undefined = host) {
+  if (!sourceHost || host !== sourceHost) return;
   console.warn(`[PiHost] ${reason}`);
-  const previous = host;
   hostAlive = false;
   host = undefined;
-  previous?.kill();
+  sourceHost.kill();
   publishRuntimeStatus("disconnected");
   for (const request of pending.values()) {
     clearTimeout(request.timer);
@@ -326,6 +328,14 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
     pending.set(id, { resolve, reject, timer });
     host.send?.({ id, command, payload } satisfies PiHostRequest);
   });
+}
+
+function focusHostWindow(): void {
+  const window = hostWindow;
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 }
 
 function applyWindowTheme(theme: WindowTheme): void {
@@ -372,7 +382,10 @@ function registerIpcHandlers() {
     teardownHost("restart requested");
     if (!hostWindow) return;
     startHost(hostWindow);
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    // Resolve only after the replacement process completes a real IPC round
+    // trip; a fixed delay can report success before startup actually finishes.
+    await requestHost("runtime.status");
+    publishRuntimeStatus("connected");
   });
   registerTrustedIpcHandler("app:quit", () => { app.quit(); });
   registerTrustedIpcHandler("runtime:status", () => hostStatus);
@@ -438,7 +451,10 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("models:list", () => requestHost("models.list"));
   registerTrustedIpcHandler("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("providers:list", () => requestHost("providers.list"));
-  registerTrustedIpcHandler("providers:login", (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => requestHost("providers.login", { providerId, method, secret }));
+  registerTrustedIpcHandler("providers:login", async (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => {
+    await requestHost("providers.login", { providerId, method, secret });
+    if (method === "oauth") focusHostWindow();
+  });
   registerTrustedIpcHandler("providers:set-api-key", (_event, providerId: string, apiKey: string) => requestHost("providers.setApiKey", { providerId, apiKey }));
   registerTrustedIpcHandler("providers:logout", (_event, providerId: string) => requestHost("providers.logout", { providerId }));
   registerTrustedIpcHandler("providers:auth-response", (_event, requestId: string, value: string, cancelled?: boolean) => requestHost("providers.auth-response", { requestId, value, cancelled }));
@@ -448,7 +464,7 @@ function registerIpcHandlers() {
     await shell.openExternal(parsed.toString());
   });
   registerTrustedIpcHandler("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>, delivery?: "steer" | "followUp") => requestHost("agent.prompt", { taskId, text, cwd: requireKnownProjectCwd(cwd), images, delivery }));
-  registerTrustedIpcHandler("agent:abort", (_event, taskId: string) => requestHost("agent.abort", { taskId }));
+  registerTrustedIpcHandler("agent:abort", (_event, taskId: string, cwd?: string) => requestHost("agent.abort", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-scoped-models", (_event, taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => requestHost("agent.setScopedModels", { taskId, modelIds, persist, cwd: requireKnownProjectCwd(cwd) }));

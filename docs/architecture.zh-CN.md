@@ -43,7 +43,7 @@ Sandboxed React Renderer
 Main 只负责：
 
 - 创建和销毁 BrowserWindow（`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`）。
-- 启动、监听和停止 PiHost。
+- 启动、监听和停止 PiHost。生命周期回调绑定到触发它的进程实例，已替换 Host 的迟到 `exit` 不会拆掉新 Host；重启仅在真实 `runtime.status` IPC 往返成功后完成。
 - 当显式代理环境变量与 Pi `httpProxy` 都未设置时，通过 Main/PiHost 内部桥按每个请求 URL 调用 Electron 解析操作系统代理。
 - 在 Renderer IPC 与 PiHost 请求之间做编排。
 - 为请求设置超时（默认 60s；`providers.login`、`sessions.share` 15min，`packages.*` 10min；`agent.prompt` 不设超时——其完成由 `agent_settled` 事件标示，而非 RPC 响应），处理 Host 断开。
@@ -51,7 +51,7 @@ Main 只负责：
 - 在 Electron `userData/projects.json` 中记录项目目录引用、隐藏引用及其显示顺序。
 - 构建应用菜单并按 `app:set-language` 切换菜单语言，文案取自 `@pideck/i18n`。
 - 打开目录选择、会话导入等原生对话框。
-- Windows 使用 Electron Window Controls Overlay 并隐藏原生菜单栏，让主题化 Renderer 表面延伸到系统窗口按钮下方；`app:set-window-theme` 会把原生背景和控制按钮符号颜色同步到 Renderer 主题。
+- Windows 使用 Electron Window Controls Overlay 并隐藏原生菜单栏，让主题化 Renderer 表面延伸到系统窗口按钮下方；`app:set-window-theme` 会把原生背景和控制按钮符号颜色同步到 Renderer 主题。Renderer 标题栏颜色与原生覆盖区保持完全一致，Provider/包管理等右侧抽屉从 48px 系统标题栏下方开始，头部操作不会进入最小化、最大化和关闭按钮的命中区域。
 - macOS 上设置 Dock 图标，并尝试加载 `pideck-miniwindow.node` 定制最小化窗口图标；加载失败只降级告警。
 
 项目目录清单只保存 `cwd`，不保存 Session 或工作区内容。Renderer 单击项目时通过 `sessions.list(cwd)` 按需展开会话列表，并以独立展开状态保留其它项目，不改变当前中央会话；只有单击具体会话才切换工作区。项目右键“移除”只把 `cwd` 加入隐藏引用，不删除项目文件或 Pi Session。Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
@@ -74,6 +74,8 @@ PiHost 负责：
 - 执行 Pi built-in tools、Bash、Provider 登录、Pi package 管理、权限模式读写和会话操作。
 - 在报告 `runtime.status=connected` 前初始化 Pi 自带的代理感知 HTTP dispatcher，使 OAuth Token 交换、模型请求和 Provider HTTP 调用使用同一条 PiHost 网络路径。npm、pnpm、git 等 package manager 子进程仍使用各自的代理配置。
 - 将跨进程数据转换成可 JSON 序列化的响应（`jsonSafe`），并对队列中的图片附件做旁路保存，避免 `promoteQueue` 丢附件。
+- 以规范化 `cwd` + Pi 会话 ID 为每个内存 SessionManager、AgentSession、队列、审批和生命周期资源划分作用域。即使导入 JSONL 在不同项目保留同一 ID，删除、中止和队列操作仍保持项目隔离。
+- 以异步外部进程和有界超时执行 Git 工作区检查及 `gh` 分享，避免阻塞 PiHost IPC 循环。
 
 Pi SDK 的动态定位、加载和模型/Session 适配集中在 `packages/pi-adapter`。Pi 权限配置、Extension UI 绑定、审批等待和策略切换集中在 `packages/permission-engine`。两者都不创建第二套 Agent、Provider 或 Session 存储；权威来源仍是 Pi SDK 和 `@gotgenes/pi-permission-system`。
 
@@ -153,6 +155,7 @@ PiDeck/
 │  └─ release.yml                         # Tag 原生安装包与 GitHub Draft Release
 ├─ scripts/verify-package-contents.mjs    # 打包后 asar 运行入口/许可证/禁入项验证
 ├─ scripts/smoke-source-runtime.mjs       # 启动构建后的 PiHost 并执行真实运行时 IPC
+├─ scripts/smoke-session-isolation.mjs    # 验证跨项目同 ID 会话保持隔离
 ├─ scripts/smoke-packaged-runtime.mjs     # 启动打包后 PiHost 并校验内置 Pi SDK
 ├─ scripts/generate-packaged-sbom.mjs     # 从最终 asar 生成平台对应的 CycloneDX SBOM
 ├─ scripts/generate-third-party-notices.mjs # 确定性的生产依赖许可证清单
@@ -192,7 +195,7 @@ permission-engine → contracts + @gotgenes/pi-permission-system 配置
 
 Renderer 的会话时间线由 `app-conversation.tsx` 与 `ui/message-timeline.tsx` 组合，采用**普通文档流列表 + 早期消息折叠**，不使用虚拟列表。原因是 Mermaid、KaTeX、语法高亮都是异步定高，虚拟列表的测量-定位循环与之根本冲突（跳动、重叠、回弹）；改为只挂载最近 `FOLD_WINDOW = 200` 条消息，更早的消息折叠在"显示更早消息"按钮后，每次展开 `FOLD_STEP = 200` 条。防跳动依赖浏览器原生 scroll anchoring：`.conversation-scroll` 必须保持 `overflow-anchor: auto`（虚拟列表时代的 `none` 会关闭该机制）。
 
-每个访问过的 Session 保留独立 pane，非活动 pane 用 `visibility: hidden` 而非 `display: none`，浏览器因此天然保留各自的 `scrollTop`，无需手动恢复逻辑；快照 `ConversationScrollSnapshot` 只剩 `{ top, follow }`。follow 状态的退出**只认真实输入事件**（`wheel` 且 `deltaY < 0`、touch 上滑），不再从 `scrollTop` 变小推断——因为内容会真实收缩（流式行被最终消息替换、working 指示器消失、执行摘要折叠），按位移推断会误判成"用户上滚"从而杀死自动跟随。程序化平滑滚动期间用 `pinningRef`（含 1000ms 兜底超时）latch 住 follow，避免"跳到最新"按钮在动画中途闪回。
+每个访问过的 Session 保留独立 pane，非活动 pane 用 `visibility: hidden` 而非 `display: none`，浏览器因此天然保留各自的 `scrollTop`，无需手动恢复逻辑；其 scroll/resize/mutation observer 会断开，直到 pane 再次激活。快照 `ConversationScrollSnapshot` 只剩 `{ top, follow }`。follow 状态的退出**只认真实输入事件**（`wheel` 且 `deltaY < 0`、touch 上滑），不再从 `scrollTop` 变小推断——因为内容会真实收缩（流式行被最终消息替换、working 指示器消失、执行摘要折叠），按位移推断会误判成"用户上滚"从而杀死自动跟随。程序化平滑滚动期间用 `pinningRef`（含 1000ms 兜底超时）latch 住 follow，避免"跳到最新"按钮在动画中途闪回。Modal 浮层会把应用壳层标记为 inert 并从辅助技术树隐藏，共享焦点基元只允许最上层嵌套对话框处理 Escape。
 
 PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示状态，不会直接写回会话。为稳定恢复“已处理”耗时，PiHost 在 `agent_start`、非 Steering 的 Follow-up 边界和 `agent_settled` 记录每个 execution group 的 `startedAt/endedAt/durationMs`，并通过 Pi 官方 `SessionManager.appendCustomEntry()` 写入 `pideck.execution-run` 自定义 entry；该 entry 不进入 LLM context。Renderer 通过 `sessions.runMetadata` 读取精确耗时，Pi 原始 thinking/tool 仅用于重建步骤内容。没有该元数据的旧会话显示“已处理”但不再从消息时间戳推断耗时。
 
@@ -243,7 +246,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 `runtime.status` 由 Main 统一发布：PiHost 上报 `connected`，进程启动阶段为 `starting`，进程退出时为 `disconnected` 并拒绝所有挂起请求。
 
-认证提示通过 `providers.resolveAuth`（IPC `providers:auth-response`）回传文本、选择项或取消状态；取消会结束 Pi 的等待，不会遗留挂起的登录请求。
+认证提示通过 `providers.resolveAuth`（IPC `providers:auth-response`）回传文本、选择项或取消状态；取消会结束 Pi 的等待，不会遗留挂起的登录请求，PiHost 也会传播 Pi 的逐提示中止信号，避免 SDK 已取消的兜底提示残留 waiter。对于带版本保护的 Pi 0.84.2 OpenAI Codex 浏览器流程，PiHost 在确认浏览器登录方式前预检 SDK 的固定本地回调端点。预检失败时保留当前选择提示，由 Renderer 显示可操作错误，用户仍可选择 Pi 的设备码方式。SDK 并行给出的手动认证地址输入在本地回调等待期间仅作为次要兜底；`providers.login` 成功后 Main 会恢复并聚焦 PiDeck 窗口。
 
 `agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update 等事件。`agent_end` 的 `messages` 来自 Pi SDK，Renderer 在后续自动重试或队列续接前即可合并本轮消息；`agent_settled` 再读取最终 Session 快照。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
 

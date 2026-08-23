@@ -2,7 +2,7 @@
   "name": "pideck",
   "productName": "PiDeck",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "MIT",
   "author": {
     "name": "Vulcanen"
@@ -43,7 +43,7 @@
     "notices:check": "node scripts/generate-third-party-notices.mjs --check",
     "release:check": "node scripts/verify-release-version.mjs",
     "verify:package": "node scripts/verify-package-contents.mjs",
-    "smoke:runtime": "node scripts/smoke-source-runtime.mjs",
+    "smoke:runtime": "node scripts/smoke-source-runtime.mjs && node scripts/smoke-session-isolation.mjs",
     "smoke:package": "node scripts/smoke-packaged-runtime.mjs",
     "sbom:package": "node scripts/generate-packaged-sbom.mjs"
   },
@@ -56,11 +56,11 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
     "@gotgenes/pi-permission-system": "^25.2.2",
-    "@pideck/contracts": "0.1.1",
-    "@pideck/domain": "0.1.1",
-    "@pideck/i18n": "0.1.1",
-    "@pideck/permission-engine": "0.1.1",
-    "@pideck/pi-adapter": "0.1.1",
+    "@pideck/contracts": "0.1.2",
+    "@pideck/domain": "0.1.2",
+    "@pideck/i18n": "0.1.2",
+    "@pideck/permission-engine": "0.1.2",
+    "@pideck/pi-adapter": "0.1.2",
     "detect-libc": "^2.0.3"
   },
   "devDependencies": {
