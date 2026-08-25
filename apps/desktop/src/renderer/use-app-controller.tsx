@@ -748,6 +748,13 @@ export function useAppController() {
     const argument = match[2]?.trim() ?? "";
     if (command === "login" || command === "logout") { openProviderSettings(argument || undefined); return true; }
     if (command === "model") { setModelMenuOpen(true); setThinkingMenuOpen(false); return true; }
+    if (command === "thinking") {
+      if (!argument) { setThinkingMenuOpen(true); setModelMenuOpen(false); return true; }
+      const requestedLevel = thinkingLevels.find((level) => level.toLowerCase() === argument.toLowerCase());
+      if (!requestedLevel) { showNotice(`${t.chooseThinking}: ${thinkingLevels.join(", ")}`); setThinkingMenuOpen(true); setModelMenuOpen(false); return true; }
+      await chooseThinking(requestedLevel);
+      return true;
+    }
     if (command === "compact") { await compactSession(argument || undefined); return true; }
     if (command === "export") { await exportSession(argument.toLowerCase() === "jsonl" ? "jsonl" : "html"); return true; }
     if (command === "new") { await createTask(); return true; }

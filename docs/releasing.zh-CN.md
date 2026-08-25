@@ -66,7 +66,7 @@ Tag 会触发 `.github/workflows/release.yml`。工作流只接受真实 Tag 且
 - 三个安装包、三个对应平台的 CycloneDX SBOM 和 `SHA256SUMS.txt` 均存在，文件名和版本正确。
 - GitHub Artifact Attestation 验证通过，安装包内包含 PiDeck 的 `LICENSE`、`THIRD_PARTY_NOTICES.txt`，以及 Electron/Chromium 运行时许可证文件。
 - 在 Apple Silicon、Intel Mac 和 Windows x64 的真实或可信测试环境中完成安装与启动。
-- 原生 Job 的打包后 PiHost smoke 已通过：真实 `runtime.status` IPC 成功，且 `app.info` 报告内置 Pi SDK `0.84.2`。
+- 原生 Job 的打包后 PiHost smoke 已通过：真实 `runtime.status` IPC 成功，且 `app.info` 报告内置 Pi SDK `0.84.3`。
 - 能打开项目、创建或恢复 Session，并完成一次真实 Provider/模型调用。
 - 外部 Pi SDK 场景下原生 `.node` 模块没有被 macOS Library Validation 拒绝。
 - Release notes 明确标注签名、公证状态以及已知限制。

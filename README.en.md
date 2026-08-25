@@ -10,7 +10,7 @@ PiDeck is an open source desktop interface for [Pi](https://github.com/earendil-
 
 > **Notice**: PiDeck is an independent, unofficial project. It is not affiliated with or endorsed by the Pi project or its maintainers. PiDeck does not implement a second agent, model catalog, session store, or credential system; the Pi CLI / SDK remains authoritative for those capabilities.
 
-Current compatibility baseline: Pi CLI / SDK `0.84.2`, Electron `43.3.0`.
+Current compatibility baseline: Pi CLI / SDK `0.84.3`, Electron `43.3.0`.
 
 ![PiDeck dark workspace with the project sidebar, empty session state, and message composer](docs/assets/pideck-workspace.png)
 
@@ -39,7 +39,7 @@ Download the latest public version from [GitHub Releases](https://github.com/vul
 
 Replace `VERSION` in the filename with the version shown on the Release. If About This Mac shows a “Chip,” choose arm64; if it shows a “Processor,” choose Intel x64.
 
-PiDeck installers contain the project's locked Pi SDK and do not require a separate Pi CLI installation. Official installers always prefer the bundled `0.84.2`; only an explicit `PIDECK_PI_MODULE` override replaces it for development or compatibility testing.
+PiDeck installers contain the project's locked Pi SDK and do not require a separate Pi CLI installation. Official installers always prefer the bundled `0.84.3`; only an explicit `PIDECK_PI_MODULE` override replaces it for development or compatibility testing.
 
 ## Installation
 
@@ -98,7 +98,7 @@ Use `x64` instead of `arm64` in the macOS example for an Intel Mac.
 - The local terminal panel is not integrated; shell execution remains available through Pi Agent's real tools.
 - `/fork`, `/clone`, `/tree`, and complete Session Tree navigation are not yet mapped to the desktop UI.
 - Diff preview, task-baseline diff, and hunk-by-hunk review are not implemented.
-- An explicitly overridden external Pi SDK may change API behavior; versions other than `0.84.2` are outside the current compatibility guarantee.
+- An explicitly overridden external Pi SDK may change API behavior; versions other than `0.84.3` are outside the current compatibility guarantee.
 
 ## Run from source
 

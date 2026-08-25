@@ -2,7 +2,7 @@
 
 > 文档状态：与当前代码基线对齐；未实现项单独标记为计划。
 >
-> 更新日期：2026-08-15
+> 更新日期：2026-08-25
 >
 > 目标平台：Windows、macOS
 
@@ -19,7 +19,7 @@ Provider API Key、OAuth、Token 刷新和 Session 文件仍由 Pi Runtime 管�
 
 ## 2. 当前实现基线
 
-Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.2`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.2 会应用项目/全局 `defaultTools` 设置，同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。
+Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.3`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.3 会应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时不传入 Pi 的显式 `persist` 选项，所以模型和思考等级变更保持 Session 级；`/thinking [level]` 映射到桌面思考等级选择器。
 
 当前可运行结构：
 

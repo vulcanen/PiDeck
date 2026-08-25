@@ -66,7 +66,7 @@ Before publishing the draft, verify at least the following:
 - All three installers, their three platform-specific CycloneDX SBOMs, and `SHA256SUMS.txt` exist with the correct versioned names.
 - GitHub Artifact Attestations verify, and the application package contains PiDeck's `LICENSE`, `THIRD_PARTY_NOTICES.txt`, and the Electron/Chromium runtime license files.
 - Installation and startup succeed on Apple Silicon, Intel macOS, and Windows x64 hardware or trustworthy test environments.
-- Each native job's packaged PiHost smoke passes: a real `runtime.status` IPC succeeds and `app.info` reports bundled Pi SDK `0.84.2`.
+- Each native job's packaged PiHost smoke passes: a real `runtime.status` IPC succeeds and `app.info` reports bundled Pi SDK `0.84.3`.
 - A project can be opened, a session can be created or restored, and one real provider/model request completes.
 - macOS Library Validation does not reject external Pi SDK `.node` modules.
 - Release notes clearly state signing/notarization status and known limitations.

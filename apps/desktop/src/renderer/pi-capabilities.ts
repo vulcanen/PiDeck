@@ -9,6 +9,7 @@ export interface FallbackCommand {
  */
 export const fallbackSlashCommands: FallbackCommand[] = [
   { name: "model", description: "Select model" },
+  { name: "thinking", description: "Set thinking level" },
   { name: "scoped-models", description: "Configure model cycling" },
   { name: "export", description: "Export the current session" },
   { name: "import", description: "Import a JSONL session" },

@@ -239,6 +239,7 @@ test("OpenAI Codex OAuth prefers the loopback callback and restores the desktop 
   );
 
   assert.match(host, /OPENAI_CODEX_LOOPBACK_PORT = 1455/);
+  assert.match(host, /OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS = new Set\(\["0\.84\.2", "0\.84\.3"\]\)/);
   assert.match(host, /await waiter\.beforeResolve\?\.\(payload\.value as string\);\s+authWaiters\.delete/);
   assert.match(host, /PIDECK_OAUTH_CALLBACK_UNAVAILABLE/);
   assert.match(host, /signal\?\.addEventListener\("abort", onAbort, \{ once: true \}\)/);
@@ -246,6 +247,22 @@ test("OpenAI Codex OAuth prefers the loopback callback and restores the desktop 
   assert.match(main, /if \(method === "oauth"\) focusHostWindow\(\)/);
   assert.match(providerSettings, /authPrompt\.type !== "manual_code" \|\| manualAuthVisible/);
   assert.match(providerSettings, /setAuthPrompt\(null\); setManualAuthVisible\(false\); setAuthNotice\(null\)/);
+});
+
+test("Pi 0.84.3 thinking command is handled by the desktop thinking selector", () => {
+  const controller = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
+    "utf8",
+  );
+  const fallbacks = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/pi-capabilities.ts"),
+    "utf8",
+  );
+
+  assert.match(controller, /if \(command === "thinking"\)/);
+  assert.match(controller, /thinkingLevels\.find/);
+  assert.match(controller, /await chooseThinking\(requestedLevel\)/);
+  assert.match(fallbacks, /name: "thinking"/);
 });
 
 test("message identity remains stable when Pi omits message ids", () => {

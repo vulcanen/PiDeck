@@ -10,7 +10,7 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的开源桌面界面，�
 
 > **声明**：PiDeck 是独立的非官方项目，与 Pi 官方团队无隶属关系，也未获得其背书。PiDeck 不实现第二套 Agent、模型目录、会话存储或凭据系统；相关能力仍以 Pi CLI / Pi SDK 为权威来源。
 
-当前适配基线：Pi CLI / SDK `0.84.2`，Electron `43.3.0`。
+当前适配基线：Pi CLI / SDK `0.84.3`，Electron `43.3.0`。
 
 ![PiDeck 深色主题工作台，显示项目侧栏、空会话区域和消息输入区](docs/assets/pideck-workspace.png)
 
@@ -39,7 +39,7 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的开源桌面界面，�
 
 将文件名中的 `VERSION` 替换为 Release 显示的版本号。Mac 的“关于本机”中显示“芯片”时选择 arm64；显示“处理器”时选择 Intel x64。
 
-PiDeck 安装包包含项目锁定的 Pi SDK，不要求另行安装 Pi CLI。正式安装包始终优先使用内置的 `0.84.2`；只有显式设置 `PIDECK_PI_MODULE` 才会覆盖它，用于开发或兼容性测试。
+PiDeck 安装包包含项目锁定的 Pi SDK，不要求另行安装 Pi CLI。正式安装包始终优先使用内置的 `0.84.3`；只有显式设置 `PIDECK_PI_MODULE` 才会覆盖它，用于开发或兼容性测试。
 
 ## 安装
 
@@ -98,7 +98,7 @@ Select-String -Path .\SHA256SUMS.txt -Pattern 'PiDeck-VERSION-windows-x64-setup.
 - 本地终端面板未接入；Shell 仍由 Pi Agent 的真实工具能力执行。
 - `/fork`、`/clone`、`/tree` 和完整 Session Tree 导航尚未接入桌面 UI。
 - Diff 预览、任务基线 Diff 和逐块审阅尚未实现。
-- 显式覆盖的外部 Pi SDK 可能改变 API 行为；非 `0.84.2` 版本不在当前兼容保证内。
+- 显式覆盖的外部 Pi SDK 可能改变 API 行为；非 `0.84.3` 版本不在当前兼容保证内。
 
 ## 从源码运行
 

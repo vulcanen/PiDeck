@@ -168,17 +168,18 @@ function emitAuth(requestId: string, event: unknown) {
  * the value already entered in the settings form for the first prompt; any
  * additional provider-specific fields still use the normal interactive prompt.
  */
-const OPENAI_CODEX_LOOPBACK_SDK_VERSION = "0.84.2";
+const OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS = new Set(["0.84.2", "0.84.3"]);
 const OPENAI_CODEX_LOOPBACK_PORT = 1455;
 
 function isOpenAICodexBrowserMethodPrompt(providerId: string, prompt: any): boolean {
-  if (providerId !== "openai-codex" || sdkVersion() !== OPENAI_CODEX_LOOPBACK_SDK_VERSION || prompt?.type !== "select") return false;
+  const version = sdkVersion();
+  if (providerId !== "openai-codex" || !version || !OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS.has(version) || prompt?.type !== "select") return false;
   const optionIds = Array.isArray(prompt.options) ? prompt.options.map((option: any) => option?.id) : [];
   return optionIds.includes("browser") && optionIds.includes("device_code");
 }
 
 /**
- * Pi 0.84.2's OpenAI Codex browser flow silently falls back to manual URL
+ * Pi 0.84.2 and 0.84.3's OpenAI Codex browser flow silently falls back to manual URL
  * entry when its fixed loopback listener cannot bind. Probe the same endpoint
  * immediately before Pi starts it so the UI can keep the method picker open
  * and offer device-code login instead of presenting a mysterious stale form.

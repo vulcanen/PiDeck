@@ -502,7 +502,7 @@ test("Pi model summaries omit thinking levels explicitly disabled by the SDK", (
   assert.deepEqual(summary.thinkingLevels, ["off", "low", "medium", "high", "xhigh"]);
 });
 
-test("Pi 0.84.2 applies project defaultTools when creating an AgentSession", async () => {
+test("Pi 0.84.3 applies project defaultTools including PowerShell when creating an AgentSession", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-pi-settings-"));
   const projectDir = path.join(root, "project");
   const agentDir = path.join(root, "agent");
@@ -514,7 +514,7 @@ test("Pi 0.84.2 applies project defaultTools when creating an AgentSession", asy
   );
   fs.writeFileSync(
     path.join(projectDir, ".pi", "settings.json"),
-    JSON.stringify({ defaultTools: ["read", "grep"] }),
+    JSON.stringify({ defaultTools: ["read", "grep", "powershell"] }),
   );
 
   try {
@@ -524,7 +524,7 @@ test("Pi 0.84.2 applies project defaultTools when creating an AgentSession", asy
     )).href;
     const { ModelRuntime, SessionManager, SettingsManager, createAgentSession } = await import(sdkUrl);
     const settings = SettingsManager.create(projectDir, agentDir);
-    assert.deepEqual(settings.getDefaultTools(), ["read", "grep"]);
+    assert.deepEqual(settings.getDefaultTools(), ["read", "grep", "powershell"]);
     const modelRuntime = await ModelRuntime.create({
       allowModelNetwork: false,
       authPath: path.join(agentDir, "auth.json"),
@@ -537,7 +537,7 @@ test("Pi 0.84.2 applies project defaultTools when creating an AgentSession", asy
       modelRuntime,
       sessionManager: SessionManager.inMemory(projectDir),
     });
-    assert.deepEqual(session.getActiveToolNames(), ["read", "grep"]);
+    assert.deepEqual(session.getActiveToolNames(), ["read", "grep", "powershell"]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

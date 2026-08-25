@@ -591,6 +591,7 @@ export type AppMenuCopy = (typeof appMenuCopy)[Language];
 
 const commandDescriptions: Record<string, Record<Language, string>> = {
   model: { zh: "选择模型", en: "Select model" },
+  thinking: { zh: "设置思考等级", en: "Set thinking level" },
   "scoped-models": { zh: "配置模型轮换", en: "Configure model cycling" },
   export: { zh: "导出当前会话", en: "Export the current session" },
   import: { zh: "导入 JSONL 会话", en: "Import a JSONL session" },

@@ -10,6 +10,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Pi 0.84.3 `/thinking` command mapping and optional PowerShell `defaultTools`
+  compatibility on Windows.
 - Native GitHub Actions installers for macOS arm64, macOS x64, and Windows x64.
 - Signing, notarization, checksums, SBOM generation, provenance attestations,
   packaged PiHost smoke tests, and release-maintainer documentation.
@@ -17,7 +19,7 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Updated the Pi CLI / SDK compatibility baseline to 0.84.2.
+- Updated the Pi CLI / SDK compatibility baseline to 0.84.3.
 - Packaged builds now prefer the bundled, lockfile-pinned Pi SDK unless an
   explicit `PIDECK_PI_MODULE` override is supplied.
 

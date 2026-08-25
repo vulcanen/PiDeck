@@ -16,10 +16,10 @@
 | 会话删除 | 会话更多菜单 | `sessions.delete(taskId, cwd)`；PiHost 以规范化项目路径 + 会话 ID 标识运行时状态，不会影响其它项目导入的同 ID 会话 |
 | 会话位置与长会话 | 中央对话线程（普通文档流 + 早期消息折叠） | 不使用虚拟列表；只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后。防跳动依赖 `overflow-anchor: auto` 原生 scroll anchoring；非活动 pane 用 `visibility: hidden` 天然保留 `scrollTop` 并暂停 DOM observer；follow 仅由真实 wheel/touch 上滑事件退出，程序化滚动期间 latch 住 |
 | Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
-| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；OpenAI Codex 浏览器登录会预检 Pi 0.84.2 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
+| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；OpenAI Codex 浏览器登录会预检 Pi 0.84.2–0.84.3 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
-| 思考等级 | Composer Thinking 菜单 | `AgentSession.getAvailableThinkingLevels()` |
-| 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 0.84.2 应用 `defaultTools`；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
+| 思考等级 | Composer Thinking 菜单；`/thinking [level]` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel()`；除非显式使用 Pi 的持久化选项，否则变更只作用于当前 Session |
+| 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 0.84.3 应用 `defaultTools`，包括配置后可用的 Windows `powershell` 工具；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
 | Pi slash command catalog | 行首已知 `/` 前缀建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
 | `@file` 提示 | Composer `@` | `workspace.snapshot` 返回的当前工作区文件快照 |
 | Agent 流式事件 | 中央线程 | `agent_start`、`agent_end.messages`、`agent_settled`、`message_update`、`tool_execution_*` 等 |
