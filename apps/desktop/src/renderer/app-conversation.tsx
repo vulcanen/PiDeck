@@ -1,11 +1,12 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { PermissionStatus, SessionChangeReview } from "@pideck/contracts";
+import type { PermissionStatus, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewUnavailableReason } from "@pideck/contracts";
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon } from "@pideck/ui-system";
 import type { MessageLoad, TaskUiState, WorkingPhase } from "./types";
 import type { ComposerProps } from "./ui";
 import type { ConversationScrollHandle, ConversationScrollSnapshot } from "./use-conversation-scroll";
+import type { ChangeReviewDiffMode, ChangeReviewScrollPosition } from "./use-change-review";
 import { ApprovalCard, ChangeReviewLauncher, ChangeReviewPanel, ConversationSkeleton, MemoComposer, MemoMessageTimeline, PaneResizeHandle, PermissionLevelControl } from "./ui";
 
 type AppCopy = (typeof copy)[Language];
@@ -129,6 +130,10 @@ function ConversationPaneSlot({
       streamText={streamText}
       workingPhase={workingPhase}
       toolName={taskUi?.toolName}
+      workingMessage={taskUi?.extensionWorkingMessage ?? (workingPhase === "thinking" ? taskUi?.extensionHiddenThinkingLabel : undefined)}
+      workingVisible={taskUi?.extensionWorkingVisible}
+      workingFrames={taskUi?.extensionWorkingFrames}
+      workingInterval={taskUi?.extensionWorkingInterval}
       completedActivity={taskUi?.completedActivity ?? []}
       steeringMessageKeys={steeringMessageKeys}
       taskId={task.id}
@@ -228,9 +233,22 @@ export interface AppConversationProps {
   latestChangeReview: SessionChangeReview | null;
   selectedChangeReview: SessionChangeReview | null;
   changeReviewOpen: boolean;
+  changeReviewDrawer: boolean;
   changeReviewLoading: boolean;
+  changeReviewAvailability: SessionChangeReviewAvailability;
+  changeReviewUnavailableReason?: SessionChangeReviewUnavailableReason;
+  changeReviewError?: string;
+  selectedChangeReviewLoading: boolean;
+  selectedChangeReviewError?: string;
   changeReviewWidth: number;
   changeReviewFileListWidth: number;
+  changeReviewSelectedPath: string | null;
+  changeReviewExpandedPaths: string[];
+  changeReviewFileFilter: string;
+  changeReviewDiffMode: ChangeReviewDiffMode;
+  changeReviewWrapLines: boolean;
+  changeReviewIgnoreWhitespace: boolean;
+  changeReviewScrollPosition: ChangeReviewScrollPosition;
   composerProps: ComposerProps;
   onTimelineAtEnd: (atEnd: boolean) => void;
   onRetryInitialLoad: () => void | Promise<unknown>;
@@ -243,6 +261,15 @@ export interface AppConversationProps {
   onOpenChangeReview: () => void;
   onCloseChangeReview: () => void;
   onSelectChangeReview: (reviewId: string) => void;
+  onSelectChangeReviewPath: (path: string) => void;
+  onChangeReviewExpandedPaths: (paths: string[]) => void;
+  onChangeReviewFileFilter: (query: string) => void;
+  onChangeReviewDiffMode: (mode: ChangeReviewDiffMode) => void;
+  onChangeReviewWrapLines: (wrap: boolean) => void;
+  onChangeReviewIgnoreWhitespace: (ignore: boolean) => void;
+  onChangeReviewScrollPosition: (position: ChangeReviewScrollPosition) => void;
+  onRetryChangeReviews: () => void;
+  onRetrySelectedChangeReview: () => void;
   onChangeReviewWidth: (width: number) => void;
   onChangeReviewFileListWidth: (width: number) => void;
   backgroundInert?: boolean;
@@ -253,13 +280,22 @@ export function AppConversation({
   scrollPositionsRef, scrollHandleRef,
   loadError, messageLoad, messages, isWorking, streamText, workingPhase, activeTaskUi,
   steeringMessageKeys, showJumpToLatest, permissionStatus, changeReviews, latestChangeReview,
-  selectedChangeReview, changeReviewOpen, changeReviewLoading, changeReviewWidth,
-  changeReviewFileListWidth, composerProps, onTimelineAtEnd,
+  selectedChangeReview, changeReviewOpen, changeReviewDrawer, changeReviewLoading, changeReviewAvailability,
+  changeReviewUnavailableReason, changeReviewError, selectedChangeReviewLoading,
+  selectedChangeReviewError, changeReviewWidth, changeReviewFileListWidth,
+  changeReviewSelectedPath, changeReviewExpandedPaths, changeReviewFileFilter,
+  changeReviewDiffMode, changeReviewWrapLines, changeReviewIgnoreWhitespace,
+  changeReviewScrollPosition, composerProps, onTimelineAtEnd,
   onRetryInitialLoad, onChooseProject, onCreateTask, onRetryMessages, onJumpToLatest,
   onResolveApproval, onPermissionStatus, onOpenChangeReview, onCloseChangeReview,
-  onSelectChangeReview, onChangeReviewWidth, onChangeReviewFileListWidth, backgroundInert = false,
+  onSelectChangeReview, onSelectChangeReviewPath, onChangeReviewExpandedPaths,
+  onChangeReviewFileFilter, onChangeReviewDiffMode, onChangeReviewWrapLines,
+  onChangeReviewIgnoreWhitespace, onChangeReviewScrollPosition, onRetryChangeReviews,
+  onRetrySelectedChangeReview, onChangeReviewWidth, onChangeReviewFileListWidth,
+  backgroundInert = false,
 }: AppConversationProps) {
   const layoutRef = useRef<HTMLDivElement>(null);
+  const reviewLauncherRef = useRef<HTMLButtonElement>(null);
   const [layoutWidth, setLayoutWidth] = useState(0);
   useLayoutEffect(() => {
     const layout = layoutRef.current;
@@ -288,7 +324,7 @@ export function AppConversation({
   return <>
     <main className="main-column" id="main-content" tabIndex={-1} inert={backgroundInert} aria-hidden={backgroundInert || undefined}>
       <div ref={layoutRef} className={`conversation-layout ${changeReviewOpen ? "review-open" : ""}`} style={{ "--change-review-width": `${effectiveReviewWidth}px` } as CSSProperties}>
-        <section className="conversation-primary">
+        <section className="conversation-primary" inert={changeReviewOpen && changeReviewDrawer} aria-hidden={changeReviewOpen && changeReviewDrawer || undefined}>
       {activeTask && <div className="conversation-header"><div className="conversation-title"><div className="breadcrumb"><span>{activeProject?.name ?? "PiDeck"}</span><span>/</span><span>{activeTask.title ?? t.conversation}</span></div><h1>{activeTask.title ?? t.conversation}</h1></div></div>}
       <ConversationPaneDeck
         activeData={activeData}
@@ -312,8 +348,10 @@ export function AppConversation({
       />
       <div className="composer-dock">
         {showJumpToLatest && <button className="jump-latest" onClick={onJumpToLatest}><Icon name="down" size={13} />{t.jumpToLatest}</button>}
-        {latestChangeReview && latestChangeReview.files.length > 0 && <ChangeReviewLauncher review={latestChangeReview} language={language} onOpen={onOpenChangeReview} />}
+        {(latestChangeReview || changeReviewAvailability !== "available") && <ChangeReviewLauncher buttonRef={reviewLauncherRef} review={latestChangeReview} availability={changeReviewAvailability} language={language} onOpen={onOpenChangeReview} />}
+        {(activeTaskUi?.extensionStatuses && Object.keys(activeTaskUi.extensionStatuses).length > 0 || activeTaskUi?.extensionWidgets?.some((widget) => widget.placement === "aboveEditor")) && <div className="extension-ui-surface">{Object.entries(activeTaskUi?.extensionStatuses ?? {}).map(([key, value]) => <span className="extension-status" key={key}>{value}</span>)}{activeTaskUi?.extensionWidgets?.filter((widget) => widget.placement === "aboveEditor").map((widget) => <pre className="extension-widget" key={widget.key}>{widget.lines.join("\n")}</pre>)}</div>}
         <MemoComposer {...composerProps} />
+        {activeTaskUi?.extensionWidgets?.some((widget) => widget.placement === "belowEditor") && <div className="extension-ui-surface">{activeTaskUi.extensionWidgets.filter((widget) => widget.placement === "belowEditor").map((widget) => <pre className="extension-widget" key={widget.key}>{widget.lines.join("\n")}</pre>)}</div>}
         <PermissionLevelControl language={language} status={permissionStatus} onStatus={onPermissionStatus} />
       </div>
         </section>
@@ -328,13 +366,37 @@ export function AppConversation({
             onChange={onChangeReviewWidth}
           />
           <ChangeReviewPanel
+            key={`${projectCwd}\u0000${activeTask?.id ?? ""}`}
             reviews={changeReviews}
             selectedReview={selectedChangeReview}
             language={language}
             loading={changeReviewLoading}
+            availability={changeReviewAvailability}
+            unavailableReason={changeReviewUnavailableReason}
+            loadError={changeReviewError}
+            detailLoading={selectedChangeReviewLoading}
+            detailError={selectedChangeReviewError}
             fileListWidth={changeReviewFileListWidth}
+            selectedPath={changeReviewSelectedPath}
+            expandedPaths={changeReviewExpandedPaths}
+            fileFilter={changeReviewFileFilter}
+            diffMode={changeReviewDiffMode}
+            wrapLines={changeReviewWrapLines}
+            ignoreWhitespace={changeReviewIgnoreWhitespace}
+            scrollPosition={changeReviewScrollPosition}
+            drawer={changeReviewDrawer}
+            returnFocusRef={reviewLauncherRef}
             onFileListWidth={onChangeReviewFileListWidth}
             onSelectReview={onSelectChangeReview}
+            onSelectPath={onSelectChangeReviewPath}
+            onExpandedPaths={onChangeReviewExpandedPaths}
+            onFileFilter={onChangeReviewFileFilter}
+            onDiffMode={onChangeReviewDiffMode}
+            onWrapLines={onChangeReviewWrapLines}
+            onIgnoreWhitespace={onChangeReviewIgnoreWhitespace}
+            onScrollPosition={onChangeReviewScrollPosition}
+            onRetry={onRetryChangeReviews}
+            onRetryDetail={onRetrySelectedChangeReview}
             onClose={onCloseChangeReview}
           />
         </>}

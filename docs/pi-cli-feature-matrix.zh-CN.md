@@ -18,17 +18,18 @@
 | Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
 | API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；关闭设置会通过 `AuthInteraction.signal` 中止未完成的登录，新尝试会先替换同一 Provider 的遗留认证再重新打开浏览器；OpenAI Codex 浏览器登录会预检 Pi 0.84.2–0.84.3 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
-| 思考等级 | Composer Thinking 菜单；`/thinking [level]` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel()`；除非显式使用 Pi 的持久化选项，否则变更只作用于当前 Session |
+| 思考等级 | Composer Thinking 菜单；`/thinking [level]`；`/settings` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel(..., { persist: true })`；模型选择同样使用 `setModel(..., { persist: true })`，Pi 设置面板写入同一份用户级 SettingsManager 默认值 |
 | 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 0.84.3 应用 `defaultTools`，包括配置后可用的 Windows `powershell` 工具；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
 | Pi slash command catalog | 行首已知 `/` 前缀建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
 | `@file` 提示 | Composer `@` | `workspace.snapshot` 返回的当前工作区文件快照 |
 | Agent 流式事件 | 中央线程 | `agent_start`、`agent_end.messages`、`agent_settled`、`message_update`、`tool_execution_*` 等 |
-| Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`、`editQueue`、`deleteQueue`；批处理模式单选项展示 Pi 已确认的当前模式与请求中反馈，变更审查分栏挤压时队列入口保持单行，带稳定 ID 的条目展示图片缩略图，并支持原位重新编辑或删除任意待处理 Steering/Follow-up 项。由于 Pi 没有任意单项删除 API，PiHost 会校验 sidecar 稳定 ID，再用 Pi 官方清空及按序重新入队 API 原子重建剩余队列，失败时恢复原队列；队列新增、编辑、删除、插入和处理在 follow 状态下自动跟随 |
+| Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`、`editQueue`、`deleteQueue`；正在运行的 prompt 触发自动上下文压缩时，期间提交的普通消息进入 Pi 官方 `steer()` / `followUp()` 队列，不会启动竞争的 `Agent.prompt`，Extension 命令则保持 Pi CLI 的立即执行行为；Host 侧预检门闩同时覆盖 Pi 尚未报告 `isStreaming` 的短暂窗口。批处理模式单选项展示 Pi 已确认的当前模式与请求中反馈，变更审查分栏挤压时队列入口保持单行，带稳定 ID 的条目展示图片缩略图，并支持原位重新编辑或删除任意待处理 Steering/Follow-up 项。由于 Pi 没有任意单项删除 API，PiHost 会校验 sidecar 稳定 ID，再用 Pi 官方清空及按序重新入队 API 原子重建剩余队列，失败时恢复原队列；队列新增、编辑、删除、插入和处理在 follow 状态下自动跟随 |
 | 工具审批 | 中央审批卡 | 当前 PiHost `beforeToolCall` 适配 |
 | 工具过程 | 运行中不可展开的耗时提示 + 按时间排序的 Activity feed；完成后可折叠过程块 | 执行期间摘要只显示耗时，下方以低强调度的行内信息流和统一会话间距，按 Pi 事件顺序交错显示思考块与工具调用；结束后完整过程进入可展开摘要。实时/完成态详情使用同一高度上限并在溢出时内部滚动；实时区域会跟随刷新及延迟尺寸变化，直到用户有意向上滚动，且不会改变外层对话的 follow 状态；完成后保留 Tool Result、工具名称及成功/失败状态 |
-| 单轮文件变更审查 | Composer 上方的变更摘要可打开分栏审查面板，支持圆角无障碍轮次选择、可折叠变更目录树、统一行级 diff、增删统计、指针/键盘调整分栏及按 Session 恢复视图；排队空轮次会保留最近非空摘要 | PiHost 在每次 `agent_start`/Follow-up 边界记录 Git 工作区基线，在已知变更工具结束后刷新运行中预览，并在整轮结束时执行权威比较，使用 Pi 公开的 `generateUnifiedPatch()` 生成文本 patch，持久化 `pideck.change-review` custom entry。运行前已有的脏文件只有在本轮再次变化时才会计入；任务基线可覆盖 edit/write/bash/PowerShell 的最终结果，二进制和超大内容只报告状态，避免 IPC 负载无界增长 |
-| 本地终端 | 未接入：终端面板与 `Ctrl/Cmd + J` 已移除，`terminal.execute` 桥已删除 | `AgentSession.executeBash()` |
-| 上下文压缩 | Command Palette | `AgentSession.compact()` 缩减后续模型上下文；桌面时间线继续显示完整持久化当前 Session 分支 |
+| 单轮文件变更审查 | Composer 摘要可打开可调宽面板或焦点受控抽屉；支持带日期/耗时/结果的无障碍轮次选择、筛选与目录聚合、完整方向键树导航、统一/Codex 风格拆分 diff、换行、仅空白过滤、轻量语法高亮、变更块导航、增量行折叠、重命名/模式/二进制/截断状态、复制路径、可重试错误，以及跨重启按 Session 恢复轮次/文件/目录/尺寸/选项/滚动；空排队轮次保留最近非空摘要 | PiHost 在 `agent_start`/Follow-up 边界捕获 Git 工作树，变更工具后对预览去抖并取消过期扫描，settlement 时权威比较（包括本轮提交后的 HEAD 变化），并使用 Pi 公开的 `generateUnifiedPatch()`。运行前脏文件仅在本轮再次变化时计入；候选、文件、内容、patch、历史及 IPC 均有硬上限，导入数据严格清洗。一个最小 `pideck.change-review-store` custom-entry 锚点关联原子替换 sidecar，最多保留 20 轮/12 MB；`sessions.changeReviews` 只传摘要与可用性，`sessions.changeReview` 延迟加载所选详情；Host 优雅退出会等待最终写入。同一时段的外部工作树修改可能被包含，UI 会明确说明 |
+| 用户 Shell 命令 | Composer `!command` / `!!command`；不恢复独立终端面板 | `AgentSession.executeBash()`；`!!` 排除输出进入模型上下文，停止操作调用 `abortBash()` |
+| 上下文压缩 | Command Palette；`/compact [instructions]` | `AgentSession.compact()` 缩减后续模型上下文；手动压缩期间提交的输入继续在队列中可见、可编辑，并在压缩后按序恢复；桌面时间线继续显示完整持久化当前 Session 分支 |
+| 重新加载资源 | `/reload` | 调用 `AgentSession.reload()` 重新加载 SettingsManager、Package、Extension、Prompt、Skill、Theme 与模型注册表；先清理已卸载扩展留下的展示状态，再让保留扩展接收新的 `session_start`，最后刷新桌面能力 |
 | Session 导出 | Command Palette | `AgentSession.exportToJsonl()` / `exportToHtml()` |
 | Runtime 状态 | Sidebar | Main/PiHost runtime status event，以及脱敏的 `runtime.error` 启动失败信息 |
 | 中英文 | 顶部语言按钮 | Renderer i18n |
@@ -43,7 +44,7 @@
 - `/skill:name` 由 Pi `AgentSession.prompt()` 负责展开；PiDeck 按 Pi TUI 的 `parseSkillBlock()` 规则仅显示紧凑 Skill 引用和用户实际输入，不把注入的 Skill 正文重复显示为用户消息。
 - Extension command 的权威来源是当前 Pi `ResourceLoader`，不是静态 fallback。
 
-当前已接入的桌面命令包括 `/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。这些命令分别通过 PiHost、Electron 系统能力或已有会话列表完成桌面映射。`/import` 会打开 Electron 原生 JSONL 选择器，不接受 Renderer 提供的路径；`/share` 仍要求本机安装并登录 `gh` CLI。
+当前已接入的桌面命令包括 `/settings`、`/reload`、`/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。`/settings` 写入 Pi 自己的用户级设置，`/reload` 调用当前 AgentSession 的真实 reload API；`/import` 会打开 Electron 原生 JSONL 选择器，不接受 Renderer 提供的路径；`/share` 仍要求本机安装并登录 `gh` CLI。
 
 `/fork`、`/clone` 与 `/tree` 暂不在 Composer 建议和命令面板中显示，并列入待支持列表。它们需要把 Pi 的 Session Tree 分支导航、会话替换和消息时间线恢复完整映射到 PiDeck，当前手动输入会提示待支持，不会伪装成已执行。
 
@@ -64,7 +65,7 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 
 以下能力已经完成基础桌面映射：
 
-- Extension UI request 的 select、confirm、input、editor、notify 请求；请求会在桌面窗口中显示并回传结果。
+- Extension UI 的 select、confirm、input、editor、notify，以及可序列化的状态、工作文案/可见性/动画、隐藏思考标签、文本 Widget、标题与编辑器文本；TUI 组件工厂无法映射时会明确提示，不再静默失效。
 - Pi Package install/remove/update/config 管理器；入口位于命令面板中的 Pi packages。
 当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 完成。
 

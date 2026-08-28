@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PromptImage, QueueDelivery, QueueMode, WindowTheme } from "@pideck/contracts";
+import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PiSettingsUpdate, PromptImage, QueueDelivery, QueueMode, WindowTheme } from "@pideck/contracts";
 
 const confirmCloseListeners = new Map<(enabled: boolean) => void, (event: Electron.IpcRendererEvent, enabled: boolean) => void>();
 
@@ -39,8 +39,10 @@ const bridge: PideckBridge = {
     messages: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:messages", taskId, cwd),
     runMetadata: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:run-metadata", taskId, cwd),
     changeReviews: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:change-reviews", taskId, cwd),
+    changeReview: (taskId: string, reviewId: string, cwd?: string) => ipcRenderer.invoke("sessions:change-review", taskId, reviewId, cwd),
     capabilities: (taskId?: string, cwd?: string) => ipcRenderer.invoke("sessions:capabilities", taskId, cwd),
     compact: (taskId: string, instructions?: string, cwd?: string) => ipcRenderer.invoke("sessions:compact", taskId, instructions, cwd),
+    reload: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:reload", taskId, cwd),
     export: (taskId: string, format: "jsonl" | "html", cwd?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd),
     import: (taskId: string | undefined, cwd?: string) => ipcRenderer.invoke("sessions:import", taskId, cwd),
     rename: (taskId: string, name: string, cwd?: string) => ipcRenderer.invoke("sessions:rename", taskId, name, cwd),
@@ -66,6 +68,7 @@ const bridge: PideckBridge = {
   },
   agent: {
     prompt: (taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery) => ipcRenderer.invoke("agent:prompt", taskId, text, cwd, images, delivery),
+    executeBash: (taskId: string, command: string, excludeFromContext?: boolean, cwd?: string) => ipcRenderer.invoke("agent:execute-bash", taskId, command, excludeFromContext, cwd),
     abort: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:abort", taskId, cwd),
     setThinkingLevel: (taskId: string, level: string, cwd?: string) => ipcRenderer.invoke("agent:set-thinking-level", taskId, level, cwd),
     setModel: (taskId: string, providerId: string, modelId: string, cwd?: string) => ipcRenderer.invoke("agent:set-model", taskId, providerId, modelId, cwd),
@@ -76,6 +79,10 @@ const bridge: PideckBridge = {
     promoteQueue: (taskId: string, followUpIndex: number, cwd?: string) => ipcRenderer.invoke("agent:promote-queue", taskId, followUpIndex, cwd),
     editQueue: (taskId: string, messageId: string, text: string, images?: PromptImage[], cwd?: string) => ipcRenderer.invoke("agent:edit-queue", taskId, messageId, text, images, cwd),
     deleteQueue: (taskId: string, messageId: string, cwd?: string) => ipcRenderer.invoke("agent:delete-queue", taskId, messageId, cwd),
+  },
+  settings: {
+    get: (cwd?: string) => ipcRenderer.invoke("settings:get", cwd),
+    update: (settings: PiSettingsUpdate, cwd?: string) => ipcRenderer.invoke("settings:update", settings, cwd),
   },
   extensions: {
     resolveUi: (requestId: string, value: string | boolean | undefined) => ipcRenderer.invoke("extension-ui:resolve", requestId, value),

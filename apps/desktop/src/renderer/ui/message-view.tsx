@@ -1,15 +1,63 @@
-import { memo } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import { parseSkillInvocation } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
-import { Icon } from "@pideck/ui-system";
+import { copyText, Icon } from "@pideck/ui-system";
 import type { PreviewImage } from "../types";
-import { formatMessageTime, messageErrorText, textFromMessage } from "../message-utils";
+import { bashExecutionDetails, formatMessageTime, messageErrorText, textFromMessage } from "../message-utils";
 import { MarkdownContent } from "./markdown";
+
+const LONG_SHELL_OUTPUT_LINES = 8;
+const LONG_SHELL_OUTPUT_CHARS = 1_200;
+
+function BashExecutionMessage({ message, language }: { message: any; language: Language }) {
+  const execution = bashExecutionDetails(message)!;
+  const t = copy[language];
+  const outputId = useId();
+  const lineCount = execution.output ? execution.output.split("\n").length : 0;
+  const longOutput = lineCount > LONG_SHELL_OUTPUT_LINES || execution.output.length > LONG_SHELL_OUTPUT_CHARS;
+  const [expanded, setExpanded] = useState(!longOutput);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const prefix = execution.excludeFromContext ? "!!" : "!";
+
+  useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1_800);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  async function copyOutput() {
+    setCopyState(await copyText(execution.output) ? "copied" : "failed");
+  }
+
+  const copyLabel = copyState === "copied" ? t.copiedShellOutput : copyState === "failed" ? t.copyShellOutputFailed : t.copyShellOutput;
+  return <section className={`shell-command-message ${execution.failed ? "failed" : ""}`} aria-label={`${prefix}${execution.command}`}>
+    <header className="shell-command-header">
+      <span className="shell-command-icon"><Icon name={execution.failed ? "alert" : "terminal"} size={14} /></span>
+      <div className="shell-command-title">
+        <code title={`${prefix}${execution.command}`}><span>{prefix}</span>{execution.command}</code>
+        <div className="shell-command-meta">
+          <span>{t.shellExitCode} <strong>{execution.exitCode ?? "—"}</strong></span>
+          {execution.excludeFromContext && <span className="shell-command-context-badge">{t.shellExcludedFromContext}</span>}
+        </div>
+      </div>
+      <span className={`shell-command-status ${execution.failed ? "failed" : "completed"}`}><Icon name={execution.failed ? "alert" : "check"} size={12} />{execution.failed ? t.sessionState.failed : t.sessionState.completed}</span>
+      <button type="button" className="shell-command-copy" disabled={!execution.output} onClick={() => void copyOutput()} aria-label={copyLabel} title={copyLabel}><Icon name={copyState === "copied" ? "check" : "copy"} size={13} /><span aria-live="polite">{copyLabel}</span></button>
+    </header>
+    <div className={`shell-command-output-wrap ${longOutput && !expanded ? "collapsed" : ""}`}>
+      {execution.output
+        ? <pre id={outputId} className="shell-command-output" tabIndex={longOutput ? 0 : undefined} aria-label={t.shellOutput}>{execution.output}</pre>
+        : <div id={outputId} className="shell-command-empty">{t.shellNoOutput}</div>}
+    </div>
+    {longOutput && <footer className="shell-command-footer"><button type="button" aria-expanded={expanded} aria-controls={outputId} onClick={() => setExpanded((current) => !current)}><span>{expanded ? t.collapseShellOutput : t.expandShellOutput}</span><Icon name="chevron" size={12} /></button></footer>}
+  </section>;
+}
 
 function MessageView({ message, language, onPreviewImage, onContextMenuImage }: { message: any; language: Language; onPreviewImage: (image: PreviewImage) => void; onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void }) {
   const text = textFromMessage(message);
   const images = Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === "image" && part.data && part.mimeType) : [];
   const t = copy[language];
+  const bashExecution = bashExecutionDetails(message);
+  if (bashExecution) return <BashExecutionMessage message={message} language={language} />;
   const role = message?.role === "user" ? "user" : message?.role === "toolResult" ? "tool" : "assistant";
   const skillInvocation = role === "user" ? parseSkillInvocation(text) : null;
   const visibleText = skillInvocation ? skillInvocation.userMessage ?? "" : text;

@@ -10,9 +10,13 @@ const { assertKnownProjectCwd, assertTrustedIpcSender } = require("../dist/main/
 const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
+const { PermissionEngine } = require("../../../packages/permission-engine/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
-const { buildSessionChangeReview, captureWorkspaceChangeState } = require("../../../packages/pi-host/dist/session-change-review.js");
+const { buildSessionChangeReview, captureWorkspaceChangeState, inspectGitWorkspaceAvailability, MAX_REVIEW_CAPTURE_PATHS } = require("../../../packages/pi-host/dist/session-change-review.js");
+const { createAgentRunReservation, isExtensionCommand, ManualCompactionPromptQueue, queuePromptDuringCompaction, waitForReservedAgentRun } = require("../../../packages/pi-host/dist/agent-prompt-coordination.js");
+const { copySessionChangeReviewStore, deleteSessionChangeReviewStore, flushSessionChangeReviewStore, loadSessionChangeReviews, persistSessionChangeReview, sanitizeSessionChangeReview, sessionChangeReviewStorePath, summarizeSessionChangeReview } = require("../../../packages/pi-host/dist/session-change-review-store.js");
 const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/session-transcript.js");
+const { buildChangeFileTree, parseUnifiedPatch, reviewTreeKeyboardAction, sideBySideRows } = require("../dist/renderer/change-review-model.js");
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
@@ -45,6 +49,105 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("agent prompt coordination queues messages during automatic compaction and closes the preflight race", async () => {
+  const runningReservation = createAgentRunReservation();
+  let streaming = false;
+  let runningGateResolved = false;
+  const runningGate = waitForReservedAgentRun(runningReservation, () => streaming).then(() => {
+    runningGateResolved = true;
+  });
+  await Promise.resolve();
+  assert.equal(runningGateResolved, false);
+  streaming = true;
+  runningReservation.markStarted();
+  await runningGate;
+  assert.equal(runningGateResolved, true);
+
+  const failedPreflight = createAgentRunReservation();
+  let failedGateResolved = false;
+  const failedGate = waitForReservedAgentRun(failedPreflight, () => false).then(() => {
+    failedGateResolved = true;
+  });
+  failedPreflight.markStarted();
+  await Promise.resolve();
+  assert.equal(failedGateResolved, false);
+  failedPreflight.markFinished();
+  await failedGate;
+
+  const calls = [];
+  const session = {
+    isCompacting: true,
+    isStreaming: false,
+    extensionRunner: { getRegisteredCommands: () => [{ invocationName: "permission-system" }] },
+    steer: async (text, images) => calls.push(["steer", text, images]),
+    followUp: async (text, images) => calls.push(["followUp", text, images]),
+  };
+  const images = [{ type: "image", data: "base64", mimeType: "image/png" }];
+  assert.equal(await queuePromptDuringCompaction(session, "second message", images, "followUp"), true);
+  assert.deepEqual(calls, [["followUp", "second message", images]]);
+  assert.equal(isExtensionCommand(session, "/permission-system strict"), true);
+  assert.equal(await queuePromptDuringCompaction(session, "/permission-system strict", undefined, "steer"), false);
+  assert.equal(calls.length, 1);
+
+  const root = path.join(__dirname, "../../..");
+  const hostSource = readText(path.join(root, "packages/pi-host/src/index.ts"));
+  const controllerSource = readText(path.join(root, "apps/desktop/src/renderer/use-app-controller.tsx"));
+  assert.match(hostSource, /preflightResult:\s*\(started:\s*boolean\)\s*=>\s*directReservation\.markStarted\(started\)/);
+  assert.match(hostSource, /queuePromptDuringCompaction\(session/);
+  assert.match(hostSource, /try \{ await session\.abort\(\); \} catch/);
+  assert.match(controllerSource, /isCompacting:\s*continuingExecution\s*\?\s*Boolean\(activeTaskUi\?\.isCompacting\)\s*:\s*false/);
+});
+
+test("manual compaction queue preserves ordering and supports queue mutations", () => {
+  const queue = new ManualCompactionPromptQueue();
+  const key = "task\0cwd";
+  queue.begin(key);
+  queue.enqueue(key, { id: "follow-1", text: "later", images: [], delivery: "followUp" });
+  queue.enqueue(key, { id: "steer-1", text: "now", images: [{ type: "image", data: "x", mimeType: "image/png" }], delivery: "steer" });
+  assert.deepEqual(queue.list(key).map((entry) => entry.id), ["follow-1", "steer-1"]);
+  assert.equal(queue.edit(key, "follow-1", "edited", []), true);
+  assert.equal(queue.promote(key, 0), true);
+  assert.equal(queue.delete(key, "steer-1"), true);
+  assert.deepEqual(queue.drain(key).map((entry) => [entry.id, entry.text, entry.delivery]), [["follow-1", "edited", "steer"]]);
+  assert.equal(queue.isActive(key), false);
+
+  const root = path.join(__dirname, "../../..");
+  const hostSource = readText(path.join(root, "packages/pi-host/src/index.ts"));
+  assert.match(hostSource, /case "sessions\.compact"[\s\S]*?manualCompactionQueues\.begin/);
+  assert.match(hostSource, /resumeManualCompactionQueue/);
+  assert.match(hostSource, /case "sessions\.reload"[\s\S]*?await session\.reload\(\{[\s\S]*?beforeSessionStart:[\s\S]*?permissionEngine\.resetUi/);
+  assert.match(hostSource, /case "agent\.executeBash"[\s\S]*?session\.executeBash/);
+  assert.match(hostSource, /case "settings\.update"[\s\S]*?setDefaultModelAndProvider/);
+});
+
+test("Extension UI maps serializable presentation APIs and reports TUI-only capabilities", () => {
+  const events = [];
+  const engine = new PermissionEngine({ emitApproval: () => undefined, emitEvent: (_taskId, event) => events.push(event) });
+  const ui = engine.createUi("task");
+  ui.setStatus("sync", "Ready");
+  ui.setWorkingMessage("Indexing");
+  ui.setWorkingVisible(false);
+  ui.setWorkingIndicator({ frames: ["a", "b"], interval: 80 });
+  ui.setWidget("files", ["one", "two"], { placement: "aboveEditor" });
+  ui.setTitle("Extension title");
+  ui.setEditorText("draft");
+  ui.setFooter(() => undefined);
+  ui.setFooter(() => undefined);
+
+  engine.resetUi("task");
+  assert.deepEqual(events.filter((event) => event.type === "extension.ui.presentation").map((event) => event.action), ["status", "working-message", "working-visible", "working-indicator", "widget", "title", "editor-text", "reset"]);
+  assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "setFooter").length, 1);
+});
+
+test("Extension commands report completion without clearing an existing model run", () => {
+  const root = path.join(__dirname, "../../..");
+  const hostSource = readText(path.join(root, "packages/pi-host/src/index.ts"));
+  const rendererSource = readText(path.join(root, "apps/desktop/src/renderer/use-app-controller.tsx"));
+  assert.match(hostSource, /return "extension-command"/);
+  assert.match(hostSource, /result: \{ disposition \}/);
+  assert.match(rendererSource, /promptResult\?\.disposition === "extension-command" && !continuingExecution/);
+});
 
 test("session reload keeps persisted messages from before context compaction", async () => {
   const root = path.join(__dirname, "../../..");
@@ -98,6 +201,226 @@ test("per-run change review excludes dirty files that predate the agent turn", a
   const unchanged = await buildSessionChangeReview("task-review", 200, 300, after, await captureWorkspaceChangeState(workspace), sdk.generateUnifiedPatch);
   assert.ok(unchanged);
   assert.deepEqual(unchanged.files, []);
+});
+
+test("change review reports rename, delete, binary, oversized, and mode-only changes", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-change-types-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "rename-me.txt"), "rename and edit\n", "utf8");
+  fs.writeFileSync(path.join(workspace, "delete-me.txt"), "delete\n", "utf8");
+  fs.writeFileSync(path.join(workspace, "binary.bin"), Buffer.from([0, 1, 2, 3]));
+  fs.writeFileSync(path.join(workspace, "mode.sh"), "#!/bin/sh\necho ok\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["-c", "user.name=PiDeck Test", "-c", "user.email=pideck@example.invalid", "commit", "--quiet", "-m", "baseline"], { cwd: workspace });
+
+  const before = await captureWorkspaceChangeState(workspace);
+  execFileSync("git", ["mv", "rename-me.txt", "renamed.txt"], { cwd: workspace });
+  fs.appendFileSync(path.join(workspace, "renamed.txt"), "changed\n");
+  fs.rmSync(path.join(workspace, "delete-me.txt"));
+  fs.writeFileSync(path.join(workspace, "binary.bin"), Buffer.from([0, 9, 8, 7]));
+  fs.writeFileSync(path.join(workspace, "oversized.txt"), Buffer.alloc(760_000, 65));
+  if (process.platform === "win32") execFileSync("git", ["update-index", "--chmod=+x", "mode.sh"], { cwd: workspace });
+  else fs.chmodSync(path.join(workspace, "mode.sh"), 0o755);
+  const after = await captureWorkspaceChangeState(workspace);
+  assert.match(after?.dirtyFiles.get("oversized.txt")?.digest ?? "", /^sample:/);
+  assert.equal(after?.dirtyFiles.get("oversized.txt")?.content, undefined);
+  const sdk = await import(pathToFileURL(path.join(__dirname, "../../../node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
+  const review = await buildSessionChangeReview("change-types", 1, 2, before, after, sdk.generateUnifiedPatch);
+
+  assert.ok(review);
+  const renamed = review.files.find((file) => file.path === "renamed.txt");
+  assert.equal(renamed?.status, "renamed");
+  assert.equal(renamed?.previousPath, "rename-me.txt");
+  assert.equal(review.files.find((file) => file.path === "delete-me.txt")?.status, "deleted");
+  assert.equal(review.files.find((file) => file.path === "binary.bin")?.binary, true);
+  assert.equal(review.files.find((file) => file.path === "oversized.txt")?.truncated, true);
+  const mode = review.files.find((file) => file.path === "mode.sh");
+  assert.equal(mode?.oldMode, "100644");
+  assert.equal(mode?.newMode, "100755");
+});
+
+test("change review follows a run that commits its changes", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-change-commit-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "committed.txt"), "before\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["-c", "user.name=PiDeck Test", "-c", "user.email=pideck@example.invalid", "commit", "--quiet", "-m", "baseline"], { cwd: workspace });
+  const before = await captureWorkspaceChangeState(workspace);
+  fs.writeFileSync(path.join(workspace, "committed.txt"), "after\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["-c", "user.name=PiDeck Test", "-c", "user.email=pideck@example.invalid", "commit", "--quiet", "-m", "agent change"], { cwd: workspace });
+  const after = await captureWorkspaceChangeState(workspace);
+  const sdk = await import(pathToFileURL(path.join(__dirname, "../../../node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
+  const review = await buildSessionChangeReview("commit-review", 1, 2, before, after, sdk.generateUnifiedPatch);
+  assert.equal(review?.files[0]?.path, "committed.txt");
+  assert.match(review?.files[0]?.patch ?? "", /^\+after$/m);
+});
+
+test("change review candidate work and output stay bounded", async () => {
+  const beforeFiles = new Map();
+  const afterFiles = new Map();
+  for (let index = 0; index < 250; index += 1) {
+    const filePath = `file-${String(index).padStart(3, "0")}.txt`;
+    beforeFiles.set(filePath, { exists: true, content: Buffer.from("before\n"), digest: "before", binary: false, truncated: false, mode: "100644" });
+    afterFiles.set(filePath, { exists: true, content: Buffer.from("after\n"), digest: "after", binary: false, truncated: false, mode: "100644" });
+  }
+  const state = (dirtyFiles, captureTruncated) => ({ cwd: "C:/bounded", repoRoot: "C:/bounded", scopePrefix: "", dirtyFiles, renames: new Map(), captureTruncated });
+  const review = await buildSessionChangeReview("bounded", 1, 2, state(beforeFiles, true), state(afterFiles, true), (filePath, oldText, newText) => `--- ${filePath}\n+++ ${filePath}\n@@ -1 +1 @@\n-${oldText.trim()}\n+${newText.trim()}\n`);
+  assert.ok(review);
+  assert.equal(review.files.length, 200);
+  assert.equal(review.fileCountTruncated, true);
+  assert.equal(review.omittedFiles, undefined);
+  assert.equal(review.files.every((file) => Buffer.byteLength(file.patch ?? "", "utf8") <= 250_000), true);
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-change-capture-bound-"));
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+    for (let index = 0; index < MAX_REVIEW_CAPTURE_PATHS + 5; index += 1) fs.writeFileSync(path.join(workspace, `untracked-${index}.txt`), "x\n");
+    const captured = await captureWorkspaceChangeState(workspace);
+    assert.equal(captured?.dirtyFiles.size <= MAX_REVIEW_CAPTURE_PATHS, true);
+    assert.equal(captured?.captureTruncated, true);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("review persistence is schema-validated and bounded across reloads", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-review-store-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const sessionFile = path.join(directory, "session.jsonl");
+  fs.writeFileSync(sessionFile, "{}\n");
+  const entries = [];
+  const manager = {
+    getSessionFile: () => sessionFile,
+    getEntries: () => entries,
+    appendCustomEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
+  };
+  const session = { sessionManager: manager };
+  const makeReview = (index) => ({
+    schemaVersion: 2,
+    id: `review-${index}`,
+    state: "completed",
+    outcome: "succeeded",
+    startedAt: index,
+    endedAt: index + 1,
+    files: [{ path: `file-${index}.txt`, status: "modified", additions: 1, deletions: 1, patch: `--- file-${index}.txt\n+++ file-${index}.txt\n@@ -1 +1 @@\n-a\n+b\n`, patchAvailable: true, binary: false, truncated: false }],
+    additions: 1,
+    deletions: 1,
+    truncated: false,
+    fileCountTruncated: false,
+  });
+  for (let index = 0; index < 25; index += 1) await persistSessionChangeReview(session, makeReview(index));
+  await Promise.all(Array.from({ length: 10 }, (_, index) => persistSessionChangeReview(session, makeReview(index + 25))));
+  const loaded = await loadSessionChangeReviews(session);
+  assert.equal(loaded.invalid, false);
+  assert.equal(loaded.reviews.length, 20);
+  assert.equal(loaded.reviews[0].id, "review-15");
+  assert.equal(loaded.reviews.at(-1).id, "review-34");
+  assert.equal(loaded.reviews.at(-1).files[0].patchAvailable, true);
+  assert.equal(loaded.reviews.at(-1).outcome, "succeeded");
+  const summary = summarizeSessionChangeReview(loaded.reviews.at(-1));
+  assert.equal(summary.files[0].patch, undefined);
+  assert.equal(summary.files[0].patchAvailable, true);
+  assert.equal(entries.filter((entry) => entry.customType === "pideck.change-review-store").length, 1);
+  assert.equal(fs.statSync(sessionChangeReviewStorePath(session)).size < 12_512_000, true);
+  const exportedSession = path.join(directory, "export.jsonl");
+  fs.writeFileSync(exportedSession, "{}\n");
+  assert.equal(await copySessionChangeReviewStore(session, exportedSession), true);
+  const exportedManager = { getSessionFile: () => exportedSession, getEntries: () => [] };
+  assert.equal((await loadSessionChangeReviews(exportedManager)).reviews.at(-1).id, "review-34");
+  await deleteSessionChangeReviewStore(exportedSession);
+  assert.equal(fs.existsSync(sessionChangeReviewStorePath(exportedManager)), false);
+
+  const malicious = sanitizeSessionChangeReview({
+    ...makeReview(99),
+    files: [{ ...makeReview(99).files[0], path: "../outside", patch: "x".repeat(300_000) }],
+    additions: 999999,
+  });
+  assert.ok(malicious);
+  assert.deepEqual(malicious.files, []);
+  assert.equal(malicious.additions, 0);
+  assert.equal(malicious.fileCountTruncated, true);
+  assert.equal(sanitizeSessionChangeReview({ ...makeReview(101), startedAt: 1e30, endedAt: 1e30 }), null);
+  const oversizedPatch = sanitizeSessionChangeReview({
+    ...makeReview(100),
+    files: [{ ...makeReview(100).files[0], patch: "x".repeat(300_000) }],
+  });
+  assert.equal(oversizedPatch.files[0].patch, undefined);
+  assert.equal(oversizedPatch.files[0].patchAvailable, true);
+  assert.equal(oversizedPatch.files[0].truncated, true);
+
+  const delayedDirectory = path.join(directory, "delayed");
+  const delayedEntries = [];
+  const delayedManager = {
+    getSessionFile: () => path.join(delayedDirectory, "session.jsonl"),
+    getEntries: () => delayedEntries,
+    appendCustomEntry(customType, data) { delayedEntries.push({ type: "custom", customType, data }); },
+  };
+  await assert.rejects(() => persistSessionChangeReview(delayedManager, makeReview(200)));
+  assert.equal((await loadSessionChangeReviews(delayedManager)).reviews.at(-1).id, "review-200");
+  fs.mkdirSync(delayedDirectory, { recursive: true });
+  assert.equal(await flushSessionChangeReviewStore(delayedManager), true);
+  assert.equal(fs.existsSync(sessionChangeReviewStorePath(delayedManager)), true);
+
+  fs.writeFileSync(sessionChangeReviewStorePath(session), "{bad json", "utf8");
+  const invalid = await loadSessionChangeReviews(session);
+  assert.equal(invalid.invalid, true);
+  assert.equal(fs.existsSync(sessionChangeReviewStorePath(session)), false);
+});
+
+test("malformed imported legacy review metadata is reported without crossing the payload boundary", async () => {
+  const manager = {
+    getEntries: () => [{
+      type: "custom",
+      customType: "pideck.change-review",
+      data: {
+        schemaVersion: 1,
+        id: "legacy-malformed",
+        state: "completed",
+        startedAt: 1,
+        endedAt: 2,
+        files: [{ path: "../../outside", status: "modified", additions: 5, deletions: 0, patch: "x".repeat(400_000), binary: false, truncated: false }],
+        additions: 5,
+        deletions: 0,
+        truncated: false,
+      },
+    }],
+  };
+  const loaded = await loadSessionChangeReviews(manager);
+  assert.equal(loaded.invalid, true);
+  assert.equal(loaded.reviews[0].files.length, 0);
+  assert.equal(loaded.reviews[0].fileCountTruncated, true);
+});
+
+test("review diff and tree interaction models handle whitespace, split rows, filtering, and keyboard navigation", () => {
+  const patch = "--- src/a.ts\n+++ src/a.ts\n@@ -1,2 +1,2 @@\n-const value = 1;\n+const  value = 1;\n return value;\n";
+  const lines = parseUnifiedPatch(patch);
+  assert.equal(lines.filter((line) => line.whitespaceOnly).length, 2);
+  assert.equal(sideBySideRows(lines).some((row) => row.oldLine?.kind === "deletion" && row.newLine?.kind === "addition"), true);
+  const splitGap = sideBySideRows(parseUnifiedPatch("@@ -1,1 +1,1 @@\n first\n@@ -10,1 +10,1 @@\n second\n"))
+    .find((row) => row.kind === "hunk" && row.hunkIndex === 1);
+  assert.equal(splitGap?.oldOmittedLines, 8);
+  assert.equal(splitGap?.newOmittedLines, 8);
+  const files = [
+    { path: "src/a.ts", status: "modified", additions: 1, deletions: 1, patchAvailable: true, binary: false, truncated: false },
+    { path: "src/deep/b.ts", status: "added", additions: 4, deletions: 0, patchAvailable: true, binary: false, truncated: false },
+  ];
+  const tree = buildChangeFileTree(files);
+  assert.equal(tree[0].fileCount, 2);
+  assert.equal(tree[0].additions, 5);
+  assert.equal(buildChangeFileTree(files, "deep")[0].fileCount, 1);
+  assert.deepEqual(reviewTreeKeyboardAction(["directory:src", "file:src/a.ts"], "directory:src", "ArrowRight", "directory", false), { expandKey: "directory:src" });
+  assert.deepEqual(reviewTreeKeyboardAction(["directory:src", "file:src/a.ts"], "file:src/a.ts", "ArrowUp", "file", false), { focusKey: "directory:src" });
+});
+
+test("review availability distinguishes non-Git workspaces", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-not-git-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  assert.deepEqual(await inspectGitWorkspaceAvailability(workspace), { status: "not-git" });
 });
 
 test("system proxy rules preserve per-URL HTTP, SOCKS, and direct fallback order", () => {

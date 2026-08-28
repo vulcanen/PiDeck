@@ -12,6 +12,7 @@ export interface AppSidebarProps {
   sidebarRef: RefObject<HTMLElement | null>;
   searchInputRef: RefObject<HTMLInputElement | null>;
   mobileSidebarOpen: boolean;
+  backgroundInert?: boolean;
   projectCwd: string;
   projects: ProjectSummary[];
   projectTasksByCwd: Record<string, TaskSummary[]>;
@@ -38,7 +39,7 @@ export interface AppSidebarProps {
 }
 
 export function AppSidebar({
-  language, t, sidebarRef, searchInputRef, mobileSidebarOpen, projectCwd, projects,
+  language, t, sidebarRef, searchInputRef, mobileSidebarOpen, backgroundInert = false, projectCwd, projects,
   projectTasksByCwd, projectTaskLoads, expandedProjectCwds, searchQuery, activeTask,
   initialLoading, runtimeStatus, shortcut, onCloseMobile, onOpenCommandPalette, onCreateTask, onCreateTaskForProject,
   onChooseProject, onSearchQuery, onSelectProject, onOpenProjectContext, onSelectTask,
@@ -46,7 +47,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const normalizedQuery = searchQuery.toLocaleLowerCase();
   return <>
-    <aside ref={sidebarRef} id="workspace-sidebar" className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`} aria-label={t.openNavigation}>
+    <aside ref={sidebarRef} id="workspace-sidebar" className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`} aria-label={t.openNavigation} inert={backgroundInert} aria-hidden={backgroundInert || undefined}>
       <div className="sidebar-mobile-header"><strong>{t.projects}</strong><button className="icon-button" type="button" title={t.closeNavigation} aria-label={t.closeNavigation} onClick={onCloseMobile}><Icon name="x" /></button></div>
       <button className="new-task" disabled={!projectCwd || initialLoading} onClick={() => { onCloseMobile(); void onCreateTask(); }}><span className="new-task-icon"><Icon name="plus" /></span><span>{t.newTask}</span><kbd>{shortcut("N")}</kbd></button>
       <label className="search-box"><Icon name="search" size={15} /><input ref={searchInputRef} value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder={t.search} aria-label={t.search} /><kbd>/</kbd></label>

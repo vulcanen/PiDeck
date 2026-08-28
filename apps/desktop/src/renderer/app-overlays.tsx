@@ -1,4 +1,4 @@
-import { CommandPalette, CommandPaletteBoundary, CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, ProjectRemoveDialog, ProviderSettings, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
+import { CommandPalette, CommandPaletteBoundary, CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, PiSettings, ProjectRemoveDialog, ProviderSettings, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
 import { Icon } from "@pideck/ui-system";
 import type { AppController } from "./use-app-controller";
 
@@ -13,7 +13,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     pendingDelete, setPendingDelete, deletingTaskId, deleteTask,
     pendingProjectRemove, setPendingProjectRemove, removingProjectCwd, removeProject,
     extensionUiRequest, setExtensionUiRequest, showNotice, dismissNotice,
-    packagesOpen, setMessageReload, settingsOpen, setSettingsOpen, providerFocus, setProviderFocus, refreshModels,
+    packagesOpen, setMessageReload, settingsOpen, setSettingsOpen, piSettingsOpen, setPiSettingsOpen, providerFocus, setProviderFocus, refreshModels,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, renameSession,
     resumeOpen, setResumeOpen, selectTask, trustOpen, setTrustOpen, resolveTrust,
     scopedModelsOpen, setScopedModelsOpen, modelOptions, capabilities, saveScopedModels,
@@ -31,6 +31,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     {extensionUiRequest && <ExtensionUiDialog request={extensionUiRequest} language={language} onResolve={(value) => { void window.pideck.extensions.resolveUi(extensionUiRequest.requestId, value).then(() => setExtensionUiRequest(null)).catch((error) => showNotice(error instanceof Error ? error.message : String(error))); }} />}
     {packagesOpen && <PackageSettings language={language} cwd={activeProject?.cwd ?? projectCwd} onClose={() => setPackagesOpen(false)} onNotice={showNotice} onPackagesChanged={() => setMessageReload((current) => current + 1)} />}
     {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
+    {piSettingsOpen && <PiSettings language={language} cwd={activeProject?.cwd ?? projectCwd} models={modelOptions} onClose={() => setPiSettingsOpen(false)} onNotice={showNotice} />}
     {commandDialog && <CommandResultDialog language={language} title={commandDialog.title} body={commandDialog.body} onClose={() => setCommandDialog(null)} />}
     {renameOpen && activeTask && <RenameSessionDialog language={language} currentName={activeTask.title} onSave={(name) => void renameSession(name)} onClose={() => setRenameOpen(false)} />}
     {resumeOpen && <ResumeSessionDialog language={language} project={activeProject} tasks={tasks} activeTaskId={activeTask?.id} onSelect={(task) => { if (activeProject) void selectTask(activeProject, task); setResumeOpen(false); }} onClose={() => setResumeOpen(false)} />}

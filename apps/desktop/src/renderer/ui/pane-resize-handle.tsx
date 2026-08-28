@@ -11,6 +11,7 @@ export function PaneResizeHandle({
   maximum,
   direction = 1,
   className = "",
+  disabled = false,
   onChange,
 }: {
   label: string;
@@ -19,6 +20,7 @@ export function PaneResizeHandle({
   maximum: number;
   direction?: 1 | -1;
   className?: string;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
   const dragRef = useRef<{ pointerId: number; startX: number; startValue: number } | null>(null);
@@ -40,9 +42,11 @@ export function PaneResizeHandle({
     aria-valuemin={Math.round(minimum)}
     aria-valuemax={Math.round(maximum)}
     aria-valuenow={Math.round(value)}
-    tabIndex={0}
+    aria-disabled={disabled || undefined}
+    aria-hidden={disabled || undefined}
+    tabIndex={disabled ? -1 : 0}
     onPointerDown={(event) => {
-      if (event.button !== 0) return;
+      if (disabled || event.button !== 0) return;
       event.preventDefault();
       dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startValue: value };
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -50,6 +54,7 @@ export function PaneResizeHandle({
       document.body.classList.add("is-resizing-pane");
     }}
     onPointerMove={(event) => {
+      if (disabled) return;
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       onChange(clamp(drag.startValue + (event.clientX - drag.startX) * direction, minimum, maximum));
@@ -62,6 +67,7 @@ export function PaneResizeHandle({
       document.body.classList.remove("is-resizing-pane");
     }}
     onKeyDown={(event) => {
+      if (disabled) return;
       let next: number | null = null;
       if (event.key === "ArrowLeft") next = value - 16 * direction;
       else if (event.key === "ArrowRight") next = value + 16 * direction;

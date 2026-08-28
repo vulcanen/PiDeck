@@ -80,27 +80,50 @@ export interface SessionRunRecord {
   durationMs: number;
 }
 
-export type SessionChangeFileStatus = "added" | "modified" | "deleted";
+export type SessionChangeFileStatus = "added" | "modified" | "deleted" | "renamed";
 
 export interface SessionChangeFile {
   path: string;
+  previousPath?: string;
   status: SessionChangeFileStatus;
   additions: number;
   deletions: number;
   patch?: string;
+  patchAvailable: boolean;
   binary: boolean;
   truncated: boolean;
+  oldMode?: string;
+  newMode?: string;
 }
 
 export interface SessionChangeReview {
+  schemaVersion: 2;
   id: string;
   state: "running" | "completed";
+  outcome?: "succeeded" | "failed" | "aborted";
   startedAt: number;
   endedAt: number;
   files: SessionChangeFile[];
   additions: number;
   deletions: number;
   truncated: boolean;
+  fileCountTruncated: boolean;
+  omittedFiles?: number;
+}
+
+export type SessionChangeReviewAvailability = "available" | "not-git" | "error";
+export type SessionChangeReviewUnavailableReason =
+  | "git-not-found"
+  | "git-timeout"
+  | "git-inspection-failed"
+  | "diff-api-unavailable"
+  | "review-data-invalid"
+  | "review-storage-failed";
+
+export interface SessionChangeReviewCollection {
+  availability: SessionChangeReviewAvailability;
+  reason?: SessionChangeReviewUnavailableReason;
+  reviews: SessionChangeReview[];
 }
 
 export interface ImportedSessionSummary {
@@ -113,6 +136,10 @@ export interface ImportedSessionSummary {
 }
 
 export type QueueDelivery = "steer" | "followUp";
+
+export interface AgentPromptResult {
+  disposition: "completed" | "queued" | "extension-command";
+}
 export type QueueMode = "all" | "one-at-a-time";
 
 export interface AgentQueuedMessage {
@@ -127,6 +154,18 @@ export interface AgentQueueState {
   steeringMode: QueueMode;
   followUpMode: QueueMode;
 }
+
+export interface PiSettingsSummary {
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultThinkingLevel: string;
+  transport: "auto" | "sse" | "websocket";
+  compactionEnabled: boolean;
+  steeringMode: QueueMode;
+  followUpMode: QueueMode;
+}
+
+export type PiSettingsUpdate = Partial<PiSettingsSummary>;
 
 export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
 
@@ -196,10 +235,12 @@ export interface PideckBridge {
     remove(taskId: string, cwd?: string): Promise<void>;
     messages(taskId: string, cwd?: string): Promise<unknown[]>;
     runMetadata(taskId: string, cwd?: string): Promise<SessionRunRecord[]>;
-    changeReviews(taskId: string, cwd?: string): Promise<SessionChangeReview[]>;
+    changeReviews(taskId: string, cwd?: string): Promise<SessionChangeReviewCollection>;
+    changeReview(taskId: string, reviewId: string, cwd?: string): Promise<SessionChangeReview | null>;
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
-    export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string }>;
+    reload(taskId: string, cwd?: string): Promise<SessionCapabilities>;
+    export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string; reviewPath?: string }>;
     import(taskId: string | undefined, cwd?: string): Promise<ImportedSessionSummary | null>;
     rename(taskId: string, name: string, cwd?: string): Promise<string>;
     generateTitle(taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }): Promise<string | null>;
@@ -223,7 +264,8 @@ export interface PideckBridge {
     openAuthUrl(url: string): Promise<void>;
   };
   agent: {
-    prompt(taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery): Promise<void>;
+    prompt(taskId: string, text: string, cwd?: string, images?: PromptImage[], delivery?: QueueDelivery): Promise<AgentPromptResult>;
+    executeBash(taskId: string, command: string, excludeFromContext?: boolean, cwd?: string): Promise<{ output: string; exitCode: number | null; cancelled: boolean }>;
     abort(taskId: string, cwd?: string): Promise<void>;
     setThinkingLevel(taskId: string, level: string, cwd?: string): Promise<void>;
     setModel(taskId: string, providerId: string, modelId: string, cwd?: string): Promise<void>;
@@ -234,6 +276,10 @@ export interface PideckBridge {
     promoteQueue(taskId: string, followUpIndex: number, cwd?: string): Promise<AgentQueueState>;
     editQueue(taskId: string, messageId: string, text: string, images?: PromptImage[], cwd?: string): Promise<AgentQueueState>;
     deleteQueue(taskId: string, messageId: string, cwd?: string): Promise<AgentQueueState>;
+  };
+  settings: {
+    get(cwd?: string): Promise<PiSettingsSummary>;
+    update(settings: PiSettingsUpdate, cwd?: string): Promise<PiSettingsSummary>;
   };
   extensions: {
     resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
@@ -267,6 +313,7 @@ export interface PiDeckRuntimeEvent {
 
 export type PiHostCommand =
   | "runtime.status"
+  | "runtime.shutdown"
   | "app.changelog"
   | "app.info"
   | "projects.list"
@@ -277,8 +324,10 @@ export type PiHostCommand =
   | "sessions.messages"
   | "sessions.runMetadata"
   | "sessions.changeReviews"
+  | "sessions.changeReview"
   | "sessions.capabilities"
   | "sessions.compact"
+  | "sessions.reload"
   | "sessions.export"
   | "sessions.import"
   | "sessions.rename"
@@ -294,6 +343,7 @@ export type PiHostCommand =
   | "providers.logout"
   | "providers.auth-response"
   | "agent.prompt"
+  | "agent.executeBash"
   | "agent.abort"
   | "agent.setThinkingLevel"
   | "agent.setModel"
@@ -304,6 +354,8 @@ export type PiHostCommand =
   | "agent.promoteQueue"
   | "agent.editQueue"
   | "agent.deleteQueue"
+  | "settings.get"
+  | "settings.update"
   | "extension.ui.resolve"
   | "packages.list"
   | "packages.install"

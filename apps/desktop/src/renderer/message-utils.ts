@@ -3,7 +3,20 @@ import type { Language } from "@pideck/i18n";
 import type { TaskUiState } from "./types";
 
 export function createDefaultTaskUiState(): TaskUiState {
-  return { isSending: false, isCompacting: false, streamText: "", workingPhase: null, activity: [], completedActivity: [] };
+  return { isSending: false, isCompacting: false, streamText: "", workingPhase: null, activity: [], completedActivity: [], extensionStatuses: {}, extensionWidgets: [], extensionWorkingVisible: true };
+}
+
+export function resetExtensionPresentation(state: TaskUiState): TaskUiState {
+  return {
+    ...state,
+    extensionStatuses: {},
+    extensionWidgets: [],
+    extensionWorkingMessage: undefined,
+    extensionWorkingVisible: true,
+    extensionWorkingFrames: undefined,
+    extensionWorkingInterval: undefined,
+    extensionHiddenThinkingLabel: undefined,
+  };
 }
 
 export function sortTasksByUpdatedAt(tasks: TaskSummary[]): TaskSummary[] {
@@ -18,6 +31,25 @@ export function textFromMessage(message: any): string {
   if (typeof message?.content === "string") return message.content;
   if (!Array.isArray(message?.content)) return "";
   return message.content.map((part: any) => part?.type === "text" ? part.text : "").filter(Boolean).join("\n");
+}
+
+export function bashExecutionDetails(message: any): {
+  command: string;
+  output: string;
+  excludeFromContext: boolean;
+  exitCode: number | null;
+  cancelled: boolean;
+  failed: boolean;
+} | null {
+  if (message?.role !== "bashExecution" || typeof message.command !== "string") return null;
+  return {
+    command: message.command,
+    output: typeof message.output === "string" ? message.output : "",
+    excludeFromContext: Boolean(message.excludeFromContext),
+    exitCode: typeof message.exitCode === "number" ? message.exitCode : null,
+    cancelled: Boolean(message.cancelled),
+    failed: Boolean(message.cancelled || (typeof message.exitCode === "number" && message.exitCode !== 0)),
+  };
 }
 
 // A failed model call (usage limits, provider/auth errors) surfaces as an
@@ -99,4 +131,3 @@ export function formatMessageTime(value: string | number | undefined, language: 
     minute: "2-digit",
   }).format(date);
 }
-

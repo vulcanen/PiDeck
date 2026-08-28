@@ -17,3 +17,4 @@ export { CommandPaletteBoundary, CommandPalette } from "./command-palette";
 export { ImagePreview, CommandResultDialog, RenameSessionDialog, ResumeSessionDialog, TrustDialog, ScopedModelsDialog, ExtensionUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog } from "./dialogs";
 export { PackageSettings } from "./package-settings";
 export { ProviderSettings } from "./provider-settings";
+export { PiSettings } from "./pi-settings";

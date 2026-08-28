@@ -24,6 +24,13 @@ export type TaskUiState = {
   activity: ActivityStep[];
   completedActivity: ActivityStep[][];
   toolName?: string;
+  extensionStatuses?: Record<string, string>;
+  extensionWidgets?: Array<{ key: string; lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
+  extensionWorkingMessage?: string;
+  extensionWorkingVisible?: boolean;
+  extensionWorkingFrames?: string[];
+  extensionWorkingInterval?: number;
+  extensionHiddenThinkingLabel?: string;
   approval?: { requestId: string; toolName: string; args?: unknown };
 };
 export type AuthPromptOption = { id: string; label: string; description?: string };

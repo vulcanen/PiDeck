@@ -1,9 +1,9 @@
 import { useEffect, useEffectEvent } from "react";
-import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionChangeReview, SessionRunRecord } from "@pideck/contracts";
+import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewUnavailableReason, SessionRunRecord } from "@pideck/contracts";
 import type { TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import type { ActivityStep, TaskUiState } from "./types";
-import { createDefaultTaskUiState, mergeMessageSnapshot, messageIdentity, sortTasksByUpdatedAt } from "./message-utils";
+import { createDefaultTaskUiState, mergeMessageSnapshot, messageIdentity, resetExtensionPresentation, sortTasksByUpdatedAt } from "./message-utils";
 
 function applyPersistedRunDurations(groups: ActivityStep[][], records: SessionRunRecord[]): ActivityStep[][] {
   const groupOffset = Math.max(0, groups.length - records.length);
@@ -41,6 +41,8 @@ export interface RuntimeEventsOptions {
   refreshWorkspace: () => Promise<void>;
   onQueueActivity: () => void;
   onChangeReviewUpdated: (taskId: string, review: SessionChangeReview) => void;
+  onChangeReviewStatus: (taskId: string, availability: SessionChangeReviewAvailability, reason?: SessionChangeReviewUnavailableReason) => void;
+  onExtensionEditorText: (text: string) => void;
 }
 
 export function useRuntimeEvents({
@@ -48,7 +50,7 @@ export function useRuntimeEvents({
   patchTaskUi, updateTaskLists, discardStreamDeltas, queueStreamDelta, updateActivity,
   setQueueState, setExtensionUiRequest, setSteeringMessageKeysByTask, setMessagesByTask,
   setTaskUi, setMessageLoads, setContextUsage, setActiveTask, refreshWorkspace,
-  onQueueActivity, onChangeReviewUpdated,
+  onQueueActivity, onChangeReviewUpdated, onChangeReviewStatus, onExtensionEditorText,
 }: RuntimeEventsOptions) {
   // Context usage only belongs to the conversation currently on screen; a
   // background task in another project must not overwrite it. Fetching per
@@ -98,8 +100,44 @@ export function useRuntimeEvents({
     }
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
+    if (event?.type === "extension.ui.presentation") {
+      if (event.action === "reset" && taskId === activeTaskId) document.title = "PiDeck";
+      if (event.action === "editor-text" && taskId === activeTaskId && typeof event.text === "string") onExtensionEditorText(event.text);
+      if (event.action === "title" && taskId === activeTaskId && typeof event.title === "string" && event.title.trim()) document.title = event.title.trim();
+      setTaskUi((current) => {
+        const previous = current[taskId] ?? createDefaultTaskUiState();
+        if (event.action === "reset") return { ...current, [taskId]: resetExtensionPresentation(previous) };
+        if (event.action === "status" && typeof event.key === "string") {
+          const statuses = { ...(previous.extensionStatuses ?? {}) };
+          if (typeof event.text === "string" && event.text) statuses[event.key] = event.text;
+          else delete statuses[event.key];
+          return { ...current, [taskId]: { ...previous, extensionStatuses: statuses } };
+        }
+        if (event.action === "widget" && typeof event.key === "string") {
+          const widgets = (previous.extensionWidgets ?? []).filter((widget) => widget.key !== event.key);
+          if (Array.isArray(event.lines)) widgets.push({ key: event.key, lines: event.lines.filter((line: unknown): line is string => typeof line === "string"), placement: event.placement === "belowEditor" ? "belowEditor" : "aboveEditor" });
+          return { ...current, [taskId]: { ...previous, extensionWidgets: widgets } };
+        }
+        if (event.action === "working-message") return { ...current, [taskId]: { ...previous, extensionWorkingMessage: typeof event.message === "string" ? event.message : undefined } };
+        if (event.action === "working-visible") return { ...current, [taskId]: { ...previous, extensionWorkingVisible: event.visible !== false } };
+        if (event.action === "working-indicator") {
+          const frames = Array.isArray(event.indicator?.frames) ? event.indicator.frames.filter((frame: unknown): frame is string => typeof frame === "string") : undefined;
+          const interval = typeof event.indicator?.interval === "number" ? Math.max(50, event.indicator.interval) : undefined;
+          return { ...current, [taskId]: { ...previous, extensionWorkingFrames: frames, extensionWorkingInterval: interval } };
+        }
+        if (event.action === "hidden-thinking-label") return { ...current, [taskId]: { ...previous, extensionHiddenThinkingLabel: typeof event.label === "string" ? event.label : undefined } };
+        return current;
+      });
+      return;
+    }
+    if (event?.type === "extension.ui.unsupported" && typeof event.capability === "string") { showNotice(copy[language].extensionUiUnsupported(event.capability)); return; }
+    if (event?.type === "prompt_error" && typeof event.message === "string") { showNotice(event.message); return; }
     if (event?.type === "change-review.updated" && event.review && typeof event.review === "object") {
       onChangeReviewUpdated(taskId, event.review as SessionChangeReview);
+      return;
+    }
+    if (event?.type === "change-review.status" && (event.availability === "available" || event.availability === "not-git" || event.availability === "error")) {
+      onChangeReviewStatus(taskId, event.availability, event.reason);
       return;
     }
     if (event?.type === "queue_update") {
@@ -154,6 +192,14 @@ export function useRuntimeEvents({
     } else if (event?.type === "message_update" && event.stream?.type === "text_delta" && event.stream.delta) {
       updateActivity(taskId, (steps) => steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: Date.now() } : step));
       queueStreamDelta(taskId, event.stream.delta);
+    } else if (event?.type === "bash_execution_start") {
+      const startedAt = Date.now();
+      updateActivity(taskId, (steps) => [...steps, { id: event.id ?? `${taskId}:bash:${startedAt}`, kind: "tool", label: event.excludeFromContext ? "!! shell" : "! shell", args: { command: event.command }, startedAt }]);
+      patchTaskUi(taskId, { isSending: true, workingPhase: "tool", toolName: "shell" });
+    } else if (event?.type === "bash_execution_update") {
+      updateActivity(taskId, (steps) => steps.map((step) => step.id === event.id ? { ...step, result: `${typeof step.result === "string" ? step.result : ""}${event.delta ?? ""}` } : step));
+    } else if (event?.type === "bash_execution_end") {
+      updateActivity(taskId, (steps) => steps.map((step) => step.id === event.id ? { ...step, endedAt: Date.now(), result: event.result?.output ?? step.result, isError: Boolean(event.error || (typeof event.result?.exitCode === "number" && event.result.exitCode !== 0)) } : step));
     } else if (event?.type === "tool_execution_start") {
       const startedAt = Date.now();
       updateActivity(taskId, (steps) => [...steps.map((step) => step.kind === "thinking" && !step.endedAt ? { ...step, endedAt: startedAt } : step), { id: event.toolCallId ?? `${taskId}:tool:${startedAt}`, kind: "tool", label: event.toolName ?? copy[language].toolResult, args: event.args, startedAt }]);

@@ -26,7 +26,7 @@ const FOLLOW_THRESHOLD = 80;
 
 function isAssistantTimelineItem(item: { type: string; message?: any } | undefined): boolean {
   if (item?.type === "live") return true;
-  return item?.type === "message" && item.message?.role !== "user" && item.message?.role !== "toolResult";
+  return item?.type === "message" && item.message?.role !== "user" && item.message?.role !== "toolResult" && item.message?.role !== "bashExecution";
 }
 
 function isNestedScrollIsland(target: EventTarget | null): boolean {
@@ -41,6 +41,10 @@ interface MessageTimelineProps {
   streamText: string;
   workingPhase: WorkingPhase;
   toolName?: string;
+  workingMessage?: string;
+  workingVisible?: boolean;
+  workingFrames?: string[];
+  workingInterval?: number;
   completedActivity: ActivityStep[][];
   steeringMessageKeys: string[];
   taskId: string;
@@ -61,7 +65,7 @@ interface MessageTimelineProps {
 // switches (inactive panes are `visibility: hidden`, never unmounted), and the
 // container enables native scroll anchoring so a diagram resolving above the
 // viewport does not move what the reader is looking at.
-function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, completedActivity, steeringMessageKeys, taskId, scrollKey, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage }: MessageTimelineProps) {
+function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, workingMessage, workingVisible = true, workingFrames, workingInterval, completedActivity, steeringMessageKeys, taskId, scrollKey, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage }: MessageTimelineProps) {
   const items = useMemo(() => buildMessageTimelineItems({ messages, language, running, completedActivity, steeringMessageKeys, taskId, liveText: streamText, activeActivity, workingPhase, toolName }), [activeActivity, completedActivity, language, messages, running, steeringMessageKeys, streamText, taskId, toolName, workingPhase]);
   const initialSnapshotRef = useRef<ConversationScrollSnapshot | undefined>(scrollPositionsRef.current[scrollKey]);
   const initializedRef = useRef(false);
@@ -268,10 +272,10 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
             <LiveActivity steps={item.activitySteps} language={language} />
             {item.text
               ? <div className={`message-content live-response-content ${item.activitySteps.length ? "after-activity" : ""}`}><MarkdownContent text={item.text} language={language} /></div>
-              : <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} />}
+              : workingVisible ? <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} message={workingMessage} frames={workingFrames} interval={workingInterval} /> : null}
           </article>
         : <MemoMessageView message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />;
-  }, [items, language, onContextMenuImage, onPreviewImage]);
+  }, [items, language, onContextMenuImage, onPreviewImage, workingFrames, workingInterval, workingMessage, workingVisible]);
 
   const visibleIndexes = useMemo(() => {
     const list: number[] = [];

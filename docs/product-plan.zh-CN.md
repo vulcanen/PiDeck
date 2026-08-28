@@ -95,10 +95,11 @@ packages/
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
 11. 使用 Provider API Key/OAuth 本地认证；OpenAI Codex 浏览器登录默认使用 Pi 的本地回调，手动输入回调地址仅作为兜底，成功后自动聚焦 PiDeck。PiHost 网络请求依次遵循显式代理环境变量、Pi 全局 `httpProxy` 和跨平台系统代理。
 12. 切换中文/英文和浅色/深色主题。
-13. 使用 Steering / Follow-up 队列、批处理模式和队列消息面板。
+13. 使用 Steering / Follow-up 队列（包括运行中 prompt 自动压缩期间提交消息时进入 Pi 原生队列）、批处理模式和队列消息面板。
 14. 对长会话使用"普通文档流 + 早期消息折叠"（只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后），并按 Session 缓存消息 pane、滚动位置和 follow 状态。
 15. 使用 `/copy`、`/share`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models` 的桌面映射；`/share` 依赖本机 `gh` CLI。
 16. 在 Pi Session 自定义 entry 中持久化每次 Agent 运行的精确起止时间，关闭并重启后保持“已处理”耗时一致。
+17. 从 Composer 摘要打开有界的 Git 单轮变更审查：响应式无障碍面板、详情延迟加载、轮次/文件/目录恢复、筛选、统一/Codex 风格拆分 diff、变更块导航，以及明确的可用性、错误与截断状态。
 
 ## 4. 消息与对话行为
 
@@ -108,6 +109,7 @@ packages/
 - 会话标题已经避免直接使用完整 Skill 文本；首条用户消息后，标题在重新加载安全的截断回退基础上，会异步升级为 LLM 对首条消息的 3–8 词摘要（新增 `sessions.generateTitle` 桥：PiHost 用 `ModelRuntime.complete` 摘要首条消息，成功后再经 `sessions.rename` 持久化），手动改名优先于 LLM 升级。Skill 展开后的 `<skill>` 内容仍需补充独立的折叠引用卡片，当前不应宣称已经完成。
 - 工具调用和思考过程应作为可折叠 Activity 展示，并显示工具数量、思考块数量和耗时。
 - Pi 原始 thinking/tool 内容用于重建“已处理”摘要里的步骤内容；精确耗时来自 PiHost 在 `agent_start`、Follow-up 分组边界和 `agent_settled` 通过 `SessionManager.appendCustomEntry()` 写入的 `pideck.execution-run` 元数据，Steering 消息继续共享同一 execution group。运行时 `completedActivity` 仍不是持久化字段；没有元数据的旧会话只显示“已处理”，不根据消息时间戳推断耗时。
+- 单轮审查在 `agent_start` 与 Follow-up 边界捕获 Git 工作树，Steering 继续归入同组；变更工具后的预览会去抖并取消过期扫描，settlement 时连同 HEAD 变化执行权威比较，再用 Pi 公开的 `generateUnifiedPatch()` 生成 patch。运行前脏文件只有字节、模式或路径在本轮改变时才计入；同一时段的外部修改也可能包含，UI 会明确提示。候选扫描、基线字节、文件、patch、历史、挂载行、视图缓存与 IPC 均有界。严格校验的记录保存在原子替换、最多 20 轮/12 MB 的 sidecar 中，由一个最小 Pi custom-entry 锚点关联；列表 IPC 只返回摘要，所选详情延迟加载。面板/焦点受控抽屉支持筛选、目录聚合与键盘树导航、统一/Codex 风格拆分及换行/空白选项、语法高亮、变更块导航、行折叠、重命名/模式/二进制/截断/重试状态，并跨重启按 Session 恢复轮次、文件、目录、尺寸、选项和滚动。
 - 思考摘要、流式回复和最终 Assistant 消息复用稳定时间线项，避免回复完成时卸载/重建整段消息列表。
 - 切换 Session 时立即定位到该会话的最新位置或保存的位置，不播放跨会话滚动动画。
 - 用户手动离开底部时显示“回到最新消息”，不强制抢夺滚动位置。
@@ -121,7 +123,7 @@ packages/
 app.setLanguage/setWindowTheme/quit
 runtime.status
 projects.list/chooseDirectory/remove/setTrust
-sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
+sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
 models.list
 workspace.snapshot
 providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl

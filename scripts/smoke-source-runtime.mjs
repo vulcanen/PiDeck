@@ -98,6 +98,23 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Could not create smoke session: ${JSON.stringify(message)}`));
         return;
       }
+      child.send({ id: "agent-execute-bash", command: "agent.executeBash", payload: { taskId, cwd: root, command: "printf pideck-shell-smoke", excludeFromContext: false } });
+      return;
+    }
+    if (message?.id === "agent-execute-bash") {
+      if (!message.ok || message.result?.output !== "pideck-shell-smoke" || message.result?.exitCode !== 0) {
+        finish(new Error(`Unexpected agent.executeBash response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "session-shell-messages", command: "sessions.messages", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "session-shell-messages") {
+      const bashMessage = Array.isArray(message.result) ? message.result.find((entry) => entry?.role === "bashExecution") : undefined;
+      if (!message.ok || bashMessage?.command !== "printf pideck-shell-smoke" || bashMessage?.output !== "pideck-shell-smoke") {
+        finish(new Error(`User shell result was not persisted in the session transcript: ${JSON.stringify(message)}`));
+        return;
+      }
       child.send({ id: "session-run-metadata", command: "sessions.runMetadata", payload: { taskId, cwd: root } });
       return;
     }
@@ -110,8 +127,16 @@ await new Promise((resolve, reject) => {
       return;
     }
     if (message?.id === "session-change-reviews") {
-      if (!message.ok || !Array.isArray(message.result)) {
+      if (!message.ok || message.result?.availability !== "available" || !Array.isArray(message.result?.reviews)) {
         finish(new Error(`Unexpected sessions.changeReviews response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "session-change-review", command: "sessions.changeReview", payload: { taskId, reviewId: "missing-review", cwd: root } });
+      return;
+    }
+    if (message?.id === "session-change-review") {
+      if (!message.ok || message.result !== null) {
+        finish(new Error(`Unexpected sessions.changeReview response: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "session-capabilities", command: "sessions.capabilities", payload: { taskId, cwd: root } });
@@ -140,6 +165,22 @@ await new Promise((resolve, reject) => {
     if (message?.id === "agent-delete-queue") {
       if (message.ok || !String(message.error ?? "").includes("Queued message is no longer available")) {
         finish(new Error(`Unexpected agent.deleteQueue response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "settings-get", command: "settings.get", payload: { cwd: root } });
+      return;
+    }
+    if (message?.id === "settings-get") {
+      if (!message.ok || !message.result || typeof message.result.compactionEnabled !== "boolean") {
+        finish(new Error(`Unexpected settings.get response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "session-reload", command: "sessions.reload", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "session-reload") {
+      if (!message.ok || !Array.isArray(message.result?.slashCommands)) {
+        finish(new Error(`Unexpected sessions.reload response: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "workspace-snapshot", command: "workspace.snapshot", payload: { cwd: root } });

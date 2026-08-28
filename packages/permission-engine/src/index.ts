@@ -142,6 +142,10 @@ export class PermissionEngine {
     resolve(value);
   }
 
+  resetUi(taskId: string): void {
+    this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action: "reset" });
+  }
+
   createUi(taskId: string, scopeId = taskId) {
     const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>) => new Promise<T | undefined>((resolve) => {
       const requestId = `${encodeURIComponent(scopeId)}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
@@ -152,28 +156,43 @@ export class PermissionEngine {
         resolve(undefined);
       }
     });
+    let editorText = "";
+    const unsupported = new Set<string>();
+    const present = (action: string, payload: Record<string, unknown> = {}) => this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action, ...payload });
+    const warnUnsupported = (capability: string) => {
+      if (unsupported.has(capability)) return;
+      unsupported.add(capability);
+      this.callbacks.emitEvent(taskId, { type: "extension.ui.unsupported", capability });
+    };
     return {
       select: (title: string, options: string[]) => request<string>("select", { title, options }),
       confirm: (title: string, message: string) => request<boolean>("confirm", { title, message }),
       input: (title: string, placeholder?: string) => request<string>("input", { title, placeholder }),
       notify: (message: string, type?: string) => this.callbacks.emitEvent(taskId, { type: "extension.ui.notify", message, level: type ?? "info" }),
-      onTerminalInput: () => () => undefined,
-      setStatus: () => undefined,
-      setWorkingMessage: () => undefined,
-      setWorkingVisible: () => undefined,
-      setWorkingIndicator: () => undefined,
-      setHiddenThinkingLabel: () => undefined,
-      setWidget: () => undefined,
-      setFooter: () => undefined,
-      setHeader: () => undefined,
-      setTitle: () => undefined,
-      custom: async () => undefined,
-      pasteToEditor: () => undefined,
-      setEditorText: () => undefined,
-      getEditorText: () => "",
-      getEditorComponent: () => undefined,
-      editor: (title: string, prefill?: string) => request<string>("editor", { title, prefill }),
-      addAutocompleteProvider: () => undefined,
+      onTerminalInput: () => { warnUnsupported("onTerminalInput"); return () => undefined; },
+      setStatus: (key: string, text?: string) => present("status", { key, text }),
+      setWorkingMessage: (message?: string) => present("working-message", { message }),
+      setWorkingVisible: (visible: boolean) => present("working-visible", { visible }),
+      setWorkingIndicator: (indicator?: { frames?: string[]; interval?: number }) => present("working-indicator", { indicator }),
+      setHiddenThinkingLabel: (label?: string) => present("hidden-thinking-label", { label }),
+      setWidget: (key: string, content?: string[] | (() => unknown), options?: Record<string, unknown>) => {
+        if (content !== undefined && !Array.isArray(content)) { warnUnsupported("setWidget(component)"); return; }
+        present("widget", { key, lines: content, placement: options?.placement });
+      },
+      setFooter: () => warnUnsupported("setFooter"),
+      setHeader: () => warnUnsupported("setHeader"),
+      setTitle: (title: string) => present("title", { title }),
+      custom: async () => { warnUnsupported("custom"); return undefined; },
+      pasteToEditor: (text: string) => { editorText += text; present("editor-text", { text: editorText }); },
+      setEditorText: (text: string) => { editorText = text; present("editor-text", { text }); },
+      getEditorText: () => { warnUnsupported("getEditorText(live desktop composer)"); return editorText; },
+      getEditorComponent: () => { warnUnsupported("getEditorComponent"); return undefined; },
+      editor: async (title: string, prefill?: string) => {
+        const value = await request<string>("editor", { title, prefill });
+        if (typeof value === "string") editorText = value;
+        return value;
+      },
+      addAutocompleteProvider: () => { warnUnsupported("addAutocompleteProvider"); return () => undefined; },
       theme: undefined,
       getAllThemes: () => [],
       getTheme: () => undefined,

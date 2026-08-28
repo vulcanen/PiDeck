@@ -109,6 +109,8 @@ PiDeck/
 │        ├─ use-app-controller.tsx        # 页面状态与动作编排
 │        ├─ use-session-data.ts           # Session/能力/消息加载
 │        ├─ use-runtime-events.ts         # PiHost 运行时事件状态归一化
+│        ├─ use-change-review.ts          # 有界、可持久恢复的 Session 审查视图/详情状态
+│        ├─ change-review-model.ts        # 纯 diff/目录树/筛选/键盘投影
 │        ├─ use-conversation-scroll.ts    # Session 滚动快照与最新位置
 │        ├─ use-stream-deltas.ts          # 流式增量的有界批处理
 │        ├─ use-global-shortcuts.ts       # 全局快捷键与焦点边界
@@ -127,6 +129,9 @@ PiDeck/
 │           ├─ message-timeline.tsx       # 会话时间线（文档流 + 早期消息折叠）
 │           ├─ message-view.tsx           # 单条消息渲染
 │           ├─ execution-summary.tsx      # “已处理”执行摘要
+│           ├─ live-activity.tsx          # 实时思考与工具调用流
+│           ├─ change-review.tsx          # 单轮文件变更审查面板/抽屉
+│           ├─ pane-resize-handle.tsx     # 指针/键盘无障碍分栏手柄
 │           ├─ composer.tsx               # 输入区、建议与队列投递
 │           ├─ command-palette.tsx        # 命令面板
 │           ├─ dialogs.tsx                # 重命名/信任/恢复/扩展 UI 等对话框
@@ -195,6 +200,12 @@ permission-engine → contracts + @gotgenes/pi-permission-system 配置
 
 Renderer 的会话时间线由 `app-conversation.tsx` 与 `ui/message-timeline.tsx` 组合，采用**普通文档流列表 + 早期消息折叠**，不使用虚拟列表。原因是 Mermaid、KaTeX、语法高亮都是异步定高，虚拟列表的测量-定位循环与之根本冲突（跳动、重叠、回弹）；改为只挂载最近 `FOLD_WINDOW = 200` 条消息，更早的消息折叠在"显示更早消息"按钮后，每次展开 `FOLD_STEP = 200` 条。防跳动依赖浏览器原生 scroll anchoring：`.conversation-scroll` 必须保持 `overflow-anchor: auto`（虚拟列表时代的 `none` 会关闭该机制）。
 
+单轮文件审查由 PiHost 的 `session-change-review.ts` 与 `session-change-review-store.ts` 负责。`agent_start` 捕获 Git 工作树基线，非 Steering 的 Follow-up 复用一个边界检查拆分轮次，Steering 保持同组；edit/write/Bash/PowerShell 后的运行中预览会去抖，过期扫描通过 `AbortController` 取消。settlement 执行权威比较并覆盖本轮提交后的 HEAD 变化。候选路径、基线内容、文件、单/总 patch、Git 超时均有硬上限，重命名、可执行模式、二进制、超大与截断状态显式建模；同一执行时段的外部修改无法与 Pi 修改可靠区分，UI 因此明确标注为“执行期间工作树变化”。
+
+完整 patch 不再每轮无界追加到 Session JSONL。PiHost 只写一个小型版本化 `pideck.change-review-store` custom-entry 锚点，并原子替换 Session 文件旁的 sidecar；该文件最多 20 轮/12 MB，随 JSONL 导出/导入复制，删除 Session 时一并移除。最近的有效旧 `pideck.change-review` 记录会在后续写入时复制进 sidecar；原有 append-only JSONL entry 为兼容性保留，但不再新增完整 patch entry；所有旧 entry、导入内容和 sidecar 都先经过 schema、相对路径、数量与字节上限校验，损坏 sidecar 会隔离。`sessions.changeReviews` 只返回摘要与 Git 可用性，`sessions.changeReview` 延迟加载所选轮次详情。sidecar 写入串行化，Main 退出前通过内部 `runtime.shutdown` 短暂等待最终写入。
+
+审查 UI 可作为宽分栏或焦点受控抽屉打开；抽屉会把标题栏、项目侧栏、分界线和被覆盖的对话设为 inert，并在关闭后把焦点恢复到审查入口。它支持带日期/耗时/结果的圆角轮次选择、筛选与目录聚合、完整方向键树导航、统一/Codex 风格拆分 diff、自动换行、仅空白过滤、轻量语法高亮、变更块导航、增量行折叠、复制路径，以及非 Git/Git/存储/详情失败重试。打开状态、轮次、文件、目录展开、尺寸、diff 选项与滚动位置均有界并按 Session 跨重启恢复，patch 仍只由 Host 持有。暂不提供 staging、回滚、提交或可编辑合并操作。
+
 每个访问过的 Session 保留独立 pane，非活动 pane 用 `visibility: hidden` 而非 `display: none`，浏览器因此天然保留各自的 `scrollTop`，无需手动恢复逻辑；其 scroll/resize/mutation observer 会断开，直到 pane 再次激活。快照 `ConversationScrollSnapshot` 只剩 `{ top, follow }`。follow 状态的退出**只认真实输入事件**（`wheel` 且 `deltaY < 0`、touch 上滑），不再从 `scrollTop` 变小推断——因为内容会真实收缩（流式行被最终消息替换、working 指示器消失、执行摘要折叠），按位移推断会误判成"用户上滚"从而杀死自动跟随。程序化平滑滚动期间用 `pinningRef`（含 1000ms 兜底超时）latch 住 follow，避免"跳到最新"按钮在动画中途闪回。Modal 浮层会把应用壳层标记为 inert 并从辅助技术树隐藏，共享焦点基元只允许最上层嵌套对话框处理 Escape。
 
 PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示状态，不会直接写回会话。为稳定恢复“已处理”耗时，PiHost 在 `agent_start`、非 Steering 的 Follow-up 边界和 `agent_settled` 记录每个 execution group 的 `startedAt/endedAt/durationMs`，并通过 Pi 官方 `SessionManager.appendCustomEntry()` 写入 `pideck.execution-run` 自定义 entry；该 entry 不进入 LLM context。Renderer 通过 `sessions.runMetadata` 读取精确耗时，Pi 原始 thinking/tool 仅用于重建步骤内容。没有该元数据的旧会话显示“已处理”但不再从消息时间戳推断耗时。
@@ -206,12 +217,12 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
 - `projects.list/chooseDirectory/remove/setTrust`
-- `sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
+- `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
 - `models.list`
 - `workspace.snapshot`
 - `providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl`
-- `agent.prompt/abort/setThinkingLevel/setModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue`
-- `extensions.resolveUi`
+- `agent.prompt/executeBash/abort/setThinkingLevel/setModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
+- `sessions.compact/reload`、`settings.get/update`、`extensions.resolveUi`
 - `packages.list/install/remove/update/configure`
 - `approvals.resolve`
 - `permissions.status/setMode`
@@ -257,7 +268,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - Pi slash command / Prompt / Skill catalog → Composer 建议和命令面板。
 - Pi Agent event → 流式回复、工具过程、审批和运行状态。
 - Pi Session export/compact → 会话操作和命令面板入口；Session Tree 的 `/fork`、`/clone`、`/tree` 仍列入待支持。
-- Pi Agent steering/follow-up queue → Composer 队列面板、投递方式和批处理模式。
+- Pi Agent steering/follow-up queue → Composer 队列面板、投递方式、图片、提升、编辑、删除和批处理模式。自动压缩期间输入进入 Pi 原生队列；手动压缩结束时没有活跃 Agent run，因此 PiHost 使用按 Session 隔离的暂存队列，压缩后启动第一条并将其余消息按序交回 Pi。两条路径共用稳定 ID 的队列操作，预检门闩继续阻止并发直接 prompt。
 - Pi Package 管理 → 命令面板中的 Pi packages 设置面板。
 - Pi 权限系统模式 → 输入框下方的权限等级控件。
 - Pi workspace 文件列表 → Composer 的 `@file` 引用候选。`workspace.snapshot` 同时返回 git `changes`，但当前 UI 没有独立的 Files / Changes 面板，该字段暂未消费。
@@ -283,6 +294,8 @@ models.list
 providers.list
 sessions.create
 sessions.runMetadata
+sessions.changeReviews
+sessions.changeReview（不存在的 ID 返回 null）
 sessions.capabilities
 workspace.snapshot
 ```

@@ -4,8 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  bashExecutionDetails,
   mergeMessageSnapshot,
   messageIdentity,
+  resetExtensionPresentation,
 } = require("../dist/renderer/message-utils.js");
 const {
   buildMessageTimelineItems,
@@ -37,6 +39,96 @@ function message(id, role, text, timestamp) {
 function activity(id) {
   return [{ id, kind: "thinking", label: id, startedAt: 1, endedAt: 2 }];
 }
+
+test("Extension presentation reset removes stale UI without clearing the active run", () => {
+  const running = {
+    isSending: true,
+    isCompacting: false,
+    streamText: "working",
+    workingPhase: "thinking",
+    activity: activity("live"),
+    completedActivity: [],
+    extensionStatuses: { demo: "Turns: 0" },
+    extensionWidgets: [{ key: "demo", lines: ["Loaded"], placement: "aboveEditor" }],
+    extensionWorkingMessage: "Demo work",
+    extensionWorkingVisible: false,
+    extensionWorkingFrames: ["a", "b"],
+    extensionWorkingInterval: 80,
+    extensionHiddenThinkingLabel: "Demo thinking",
+  };
+  const reset = resetExtensionPresentation(running);
+  assert.equal(reset.isSending, true);
+  assert.equal(reset.streamText, "working");
+  assert.deepEqual(reset.activity, running.activity);
+  assert.deepEqual(reset.extensionStatuses, {});
+  assert.deepEqual(reset.extensionWidgets, []);
+  assert.equal(reset.extensionWorkingMessage, undefined);
+  assert.equal(reset.extensionWorkingVisible, true);
+  assert.equal(reset.extensionWorkingFrames, undefined);
+  assert.equal(reset.extensionHiddenThinkingLabel, undefined);
+});
+
+test("persisted user shell commands remain visible with their command and output", () => {
+  const bashMessage = {
+    role: "bashExecution",
+    command: "dir",
+    output: "file.txt\n",
+    exitCode: 0,
+    cancelled: false,
+    timestamp: 10,
+    excludeFromContext: false,
+  };
+  const items = buildMessageTimelineItems({
+    messages: [bashMessage],
+    language: "en",
+    running: false,
+    completedActivity: [],
+    steeringMessageKeys: [],
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].type, "message");
+  assert.equal(items[0].message, bashMessage);
+  assert.deepEqual(bashExecutionDetails(bashMessage), {
+    command: "dir",
+    output: "file.txt\n",
+    excludeFromContext: false,
+    exitCode: 0,
+    cancelled: false,
+    failed: false,
+  });
+});
+
+test("shell result UI stays compact, accessible, and actionable", () => {
+  const source = rendererSource("ui/message-view.tsx");
+  const styles = rendererSource("styles.css");
+  assert.match(source, /LONG_SHELL_OUTPUT_LINES/);
+  assert.match(source, /copyText\(execution\.output\)/);
+  assert.match(source, /aria-expanded=\{expanded\}/);
+  assert.match(source, /aria-controls=\{outputId\}/);
+  assert.match(source, /shellExitCode/);
+  assert.match(source, /shellExcludedFromContext/);
+  assert.match(styles, /\.shell-command-output-wrap\.collapsed/);
+  assert.match(styles, /\.shell-command-copy:focus-visible/);
+});
+
+test("a running user shell command owns an independent live timeline row", () => {
+  const shellActivity = [{ id: "shell-1", kind: "tool", label: "! shell", args: { command: "dir" }, result: "file.txt\n", startedAt: 10 }];
+  const items = buildMessageTimelineItems({
+    messages: [message("u1", "user", "hello", 1), message("a1", "assistant", "hi", 2)],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: [],
+    taskId: "task-1",
+    activeActivity: shellActivity,
+    workingPhase: "tool",
+    toolName: "shell",
+  });
+  const liveItems = items.filter((item) => item.type === "live");
+  assert.equal(liveItems.length, 1);
+  assert.equal(liveItems[0].stableKey, "bash-live-task-1-shell-1");
+  assert.equal(liveItems[0].activitySteps[0].result, "file.txt\n");
+});
 
 function describeTimeline(items) {
   return items.map((item) => item.type === "execution"
@@ -192,7 +284,7 @@ test("slash suggestion symbols keep their fixed visual width", () => {
   assert.match(styles, /\.suggestion-symbol\s*\{[^}]*flex:\s*0 0 22px/);
 });
 
-test("/settings is not exposed as a desktop command", () => {
+test("/settings opens the Pi settings surface backed by SettingsManager", () => {
   const controller = fs.readFileSync(
     path.join(__dirname, "../src/renderer/use-app-controller.tsx"),
     "utf8",
@@ -201,16 +293,15 @@ test("/settings is not exposed as a desktop command", () => {
     path.join(__dirname, "../src/renderer/pi-capabilities.ts"),
     "utf8",
   );
-  const i18n = fs.readFileSync(
-    path.join(__dirname, "../../../packages/i18n/src/index.ts"),
+  const settingsUi = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui/pi-settings.tsx"),
     "utf8",
   );
 
-  assert.match(controller, /new Set\(\["fork", "clone", "tree", "settings"\]\)/);
-  assert.doesNotMatch(controller, /command === "settings"/);
-  assert.match(controller, /const removedUiCommands = new Set\(\["settings"\]\)/);
-  assert.doesNotMatch(capabilities, /name: "settings"/);
-  assert.doesNotMatch(i18n, /^\s*settings:\s*\{/m);
+  assert.match(controller, /command === "settings"[\s\S]*?setPiSettingsOpen\(true\)/);
+  assert.match(capabilities, /name: "settings"/);
+  assert.match(settingsUi, /window\.pideck\.settings\.get/);
+  assert.match(settingsUi, /window\.pideck\.settings\.update/);
 });
 
 test("Pi model metadata follows the current SDK shape", () => {
@@ -538,42 +629,85 @@ test("Assistant continuations keep unique identities and compact spacing into li
   assert.match(styles, /\.live-response-content\.after-activity/);
 });
 
-test("per-run file changes open a persisted split-pane review", () => {
+test("per-run file changes open a bounded and accessible split-pane review", () => {
   const contracts = fs.readFileSync(path.join(__dirname, "../../../packages/contracts/src/index.ts"), "utf8");
   const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  const reviewStore = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/session-change-review-store.ts"), "utf8");
+  const i18n = fs.readFileSync(path.join(__dirname, "../../../packages/i18n/src/index.ts"), "utf8");
   const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
   const preload = fs.readFileSync(path.join(__dirname, "../src/preload/index.ts"), "utf8");
   const conversation = rendererSource("app-conversation.tsx");
   const review = rendererSource("ui/change-review.tsx");
+  const reviewModel = rendererSource("change-review-model.ts");
   const reviewState = rendererSource("use-change-review.ts");
   const resizeHandle = rendererSource("ui/pane-resize-handle.tsx");
   const styles = rendererSource("styles.css");
 
   assert.match(contracts, /export interface SessionChangeReview/);
   assert.match(contracts, /changeReviews\(taskId: string/);
-  assert.match(host, /pideck\.change-review/);
+  assert.match(contracts, /changeReview\(taskId: string, reviewId: string/);
+  assert.match(reviewStore, /pideck\.change-review-store/);
+  assert.match(reviewStore, /MAX_REVIEW_HISTORY_BYTES/);
+  assert.match(reviewStore, /sanitizeSessionChangeReview/);
   assert.match(host, /event\.type === "tool_execution_end"[\s\S]*?previewChangeReview/);
+  assert.match(host, /cancelChangeReviewPreview[\s\S]*?previewController\?\.abort/);
+  assert.match(host, /pendingChangeReviewWrites/);
+  assert.match(host, /case "runtime\.shutdown"/);
   assert.match(host, /case "sessions\.changeReviews"/);
+  assert.match(host, /case "sessions\.changeReview"/);
   assert.match(preload, /sessions:change-reviews/);
+  assert.match(preload, /sessions:change-review/);
   assert.match(main, /sessions:change-reviews/);
+  assert.match(main, /sessions:change-review/);
+  assert.match(main, /before-quit[\s\S]*?runtime\.shutdown/);
   assert.match(conversation, /ChangeReviewLauncher/);
   assert.match(conversation, /ChangeReviewPanel/);
+  assert.match(conversation, /inert=\{changeReviewOpen && changeReviewDrawer\}/);
+  assert.match(rendererSource("app-view.tsx"), /reviewDrawerOpen[\s\S]*?change-review-backdrop/);
+  assert.match(rendererSource("app-sidebar.tsx"), /inert=\{backgroundInert\}/);
+  assert.match(rendererSource("app-view.tsx"), /disabled=\{reviewDrawerOpen\}/);
   assert.match(review, /parseUnifiedPatch/);
   assert.match(review, /change-review-line-number/);
-  assert.match(review, /buildChangeFileTree/);
+  assert.match(review, /changeReviewUnchangedLines/);
+  assert.match(i18n, /changeReviewSplit: "拆分差异"/);
+  assert.match(i18n, /changeReviewSplit: "Split diff"/);
+  assert.doesNotMatch(i18n, /并排差异|Side-by-side diff/);
+  assert.match(reviewModel, /buildChangeFileTree/);
+  assert.match(reviewModel, /sideBySideRows/);
+  assert.match(reviewModel, /reviewTreeKeyboardAction/);
   assert.match(review, /change-review-tree-directory/);
   assert.match(review, /aria-expanded=\{isExpanded\}/);
+  assert.match(review, /className="change-review-tree-toggle"/);
+  assert.match(review, /aria-pressed=\{allExpanded\}/);
+  assert.match(review, /onClick=\{toggleAllDirectories\}/);
+  assert.match(review, /toggleAllDirectories[\s\S]*?onExpandedPaths\(allDirectories\)[\s\S]*?onExpandedPaths\(\[\]\)/);
+  assert.match(review, /expandedPathsRef/);
+  assert.match(review, /event\.key\.length === 1[\s\S]*?typeaheadRef/);
   assert.match(review, /change-review-run-menu/);
+  assert.match(review, /data-dialog-escape-boundary/);
   assert.doesNotMatch(review, /<select/);
   assert.match(review, /change-review-files-resize-handle/);
+  assert.match(review, /useDialogFocus\(panelRef, onClose, drawer, returnFocusRef\)/);
   assert.match(conversation, /change-review-panel-resize-handle/);
   assert.match(resizeHandle, /role="separator"/);
   assert.match(resizeHandle, /setPointerCapture/);
   assert.match(reviewState, /viewStatesRef/);
+  assert.match(reviewState, /REVIEW_VIEW_STORAGE_KEY/);
   assert.match(reviewState, /launcherReview/);
+  assert.match(reviewState, /sessions\.changeReview/);
   assert.doesNotMatch(reviewState, /setOpen\(false\)/);
   assert.match(styles, /\.conversation-layout\.review-open/);
   assert.match(styles, /\.change-review-panel/);
+  assert.match(styles, /\.change-review-backdrop/);
+  assert.match(styles, /\.change-review-split-row/);
+  assert.match(styles, /\.change-review-split-cell\.empty[\s\S]*?repeating-linear-gradient/);
+  assert.match(styles, /\.change-review-split-marker[\s\S]*?width:\s*3px/);
+  assert.match(styles, /\.change-review-split-gap-cell/);
+  assert.match(styles, /\.app-shell\.dark \.change-review-code\.split/);
+  assert.match(styles, /\.change-review-tree-toggle\[aria-pressed="true"\]/);
+  assert.match(styles, /@media \(max-width: 1280px\)[\s\S]*?\.change-review-panel/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.change-review-tree-row/);
+  assert.match(styles, /@media \(max-width: 560px\)[\s\S]*?\.change-review-body/);
   assert.match(styles, /\.pane-resize-handle/);
 });
 
@@ -959,4 +1093,3 @@ test("ended thinking retracts once a later reply formalizes it", () => {
   assert.ok(live, "live item still exists while the run continues");
   assert.equal(live.activitySteps.some((step) => step.kind === "thinking"), false, "ended thinking with a reply present does not linger in the live panel");
 });
-

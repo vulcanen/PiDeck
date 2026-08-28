@@ -53,6 +53,7 @@ export function useAppController() {
   const [searchQuery, setSearchQuery] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [piSettingsOpen, setPiSettingsOpen] = useState(false);
   const [providerFocus, setProviderFocus] = useState<string | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
@@ -561,7 +562,9 @@ export function useAppController() {
     setActiveTask,
     refreshWorkspace,
     onQueueActivity: followLatest,
+    onExtensionEditorText: (text: string) => { setComposer(text); setSuggestionMode(null); },
     onChangeReviewUpdated: changeReview.applyUpdatedReview,
+    onChangeReviewStatus: changeReview.applyReviewStatus,
   });
 
   useEffect(() => { void window.pideck.runtime.status().then(setRuntimeStatus).catch(() => setRuntimeStatus("disconnected")); void window.pideck.permissions.status().then(setPermissionStatus).catch(() => undefined); }, []);
@@ -780,7 +783,16 @@ export function useAppController() {
     if (command === "compact") { await compactSession(argument || undefined); return true; }
     if (command === "export") { await exportSession(argument.toLowerCase() === "jsonl" ? "jsonl" : "html"); return true; }
     if (command === "new") { await createTask(); return true; }
-    if (command === "reload") { await loadInitialData(); return true; }
+    if (command === "reload") {
+      if (!activeTask) { showNotice(t.noSessions); return true; }
+      try {
+        const next = await window.pideck.sessions.reload(activeTask.id, projectCwd);
+        setCapabilities(next);
+        await loadInitialData();
+        showNotice(t.sessionReloaded);
+      } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+      return true;
+    }
     if (command === "import") { await importSession(); return true; }
     if (command === "share") { await shareSession(); return true; }
     if (command === "copy") { await copyLastAssistant(); return true; }
@@ -792,8 +804,7 @@ export function useAppController() {
     if (command === "resume") { setResumeOpen(true); return true; }
     if (command === "quit") { await window.pideck.app.quit(); return true; }
     if (command === "scoped-models") { if (!activeTask) showNotice(t.noSessions); else setScopedModelsOpen(true); return true; }
-    const removedUiCommands = new Set(["settings"]);
-    if (removedUiCommands.has(command)) { showNotice(t.commandUnavailable(`/${command}`)); return true; }
+    if (command === "settings") { setPiSettingsOpen(true); return true; }
     const knownUiCommands = new Set(["fork", "clone", "tree"]);
     if (knownUiCommands.has(command)) { showNotice(t.pendingPiCommands); return true; }
     return false;
@@ -864,6 +875,23 @@ export function useAppController() {
       return;
     }
     if (await handleBuiltinCommand(text)) { setComposer(""); setSuggestionMode(null); return; }
+    const bashMatch = /^(!!|!)([\s\S]*)$/.exec(text);
+    if (bashMatch) {
+      const command = bashMatch[2].trim();
+      if (!command) return;
+      const task = activeTask ?? await createTask();
+      if (!task) return;
+      setComposer(""); setComposerImages([]); setSuggestionMode(null);
+      patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "tool", toolName: "shell", streamText: "" });
+      try {
+        await window.pideck.agent.executeBash(task.id, command, bashMatch[1] === "!!", projectCwd);
+        const next = await window.pideck.sessions.messages(task.id, projectCwd);
+        setMessagesByTask((current) => ({ ...current, [task.id]: next as any[] }));
+        setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
+      } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+      finally { patchTaskUi(task.id, { isSending: false, workingPhase: null, toolName: undefined }); }
+      return;
+    }
     if (!activeModel?.authConfigured && !modelOptions.some((model) => model.authConfigured)) { showNotice(t.noModelAvailable); return; }
     const creating = !activeTask;
     const desiredModel = activeModel;
@@ -874,12 +902,12 @@ export function useAppController() {
     const task = activeTask ?? await createTask();
     if (!task) return;
     const optimisticId = `local-${Date.now()}`;
-    const continuingExecution = Boolean(activeTaskUi?.isSending);
+    const continuingExecution = Boolean(activeTaskUi?.isSending || activeTaskUi?.isCompacting);
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
     if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { text, images }] }));
     if (!continuingExecution) setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
-    patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", activity: continuingExecution ? activeTaskUi?.activity ?? [] : [], completedActivity: activeTaskUi?.completedActivity ?? [] });
+    patchTaskUi(task.id, { isSending: true, isCompacting: continuingExecution ? Boolean(activeTaskUi?.isCompacting) : false, workingPhase: "thinking", streamText: "", activity: continuingExecution ? activeTaskUi?.activity ?? [] : [], completedActivity: activeTaskUi?.completedActivity ?? [] });
     const taskTitle = deriveSessionTitle(text);
     const shouldNameTask = isDefaultSessionTitle(task.title);
     const updatedAt = new Date().toISOString();
@@ -912,7 +940,16 @@ export function useAppController() {
     try {
       if (creating && desiredModel) await window.pideck.agent.setModel(task.id, desiredModel.providerId, desiredModel.id, projectCwd);
       if (creating && desiredThinking !== "off") await window.pideck.agent.setThinkingLevel(task.id, desiredThinking, projectCwd);
-      await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })), queueDelivery);
+      const promptResult = await window.pideck.agent.prompt(task.id, text, projectCwd, images.map(({ data, mimeType }) => ({ data, mimeType })), queueDelivery);
+      // Extension commands run outside Pi's model loop, so AgentSession does
+      // not emit agent_settled. Clear only this command's optimistic running
+      // state; an extension command invoked during an existing run must leave
+      // that run visible.
+      if (promptResult?.disposition === "extension-command" && !continuingExecution) {
+        patchTaskUi(task.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "", activity: [] });
+        updateTaskLists((current) => current.map((item) => item.id === task.id ? { ...item, state: "idle", updatedAt: new Date().toISOString() } : item));
+        setActiveTask((current) => current?.id === task.id ? { ...current, state: "idle", updatedAt: new Date().toISOString() } : current);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // A timed-out agent.prompt is not a real failure: removal of the RPC
@@ -1087,8 +1124,10 @@ export function useAppController() {
 
   async function exportSession(format: "jsonl" | "html") {
     if (!activeTask) return showNotice(t.noSessions);
-    try { const result = await window.pideck.sessions.export(activeTask.id, format, projectCwd); showNotice(`${t.exportedTo} ${result.path}`); }
-    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+    try {
+      const result = await window.pideck.sessions.export(activeTask.id, format, projectCwd);
+      showNotice(`${t.exportedTo} ${result.path}${result.reviewPath ? ` · ${t.exportedReviewCompanion}: ${result.reviewPath}` : ""}`);
+    } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
   function openContextMenu(task: TaskSummary, x: number, y: number) {
@@ -1170,9 +1209,9 @@ export function useAppController() {
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,
     importSession, renameSession, resolveTrust, saveScopedModels,
     notices, dismissNotice, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,
-    removingProjectCwd, extensionUiRequest, packagesOpen, settingsOpen, providerFocus, previewImage,
+    removingProjectCwd, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen, providerFocus, previewImage,
     imageContextMenu, setPendingDelete, setPendingProjectRemove, setContextMenu, setProjectContextMenu,
-    setPackagesOpen, setSettingsOpen, setProviderFocus, setPreviewImage, setImageContextMenu, setPaletteOpen,
+    setPackagesOpen, setSettingsOpen, setPiSettingsOpen, setProviderFocus, setPreviewImage, setImageContextMenu, setPaletteOpen,
     setExtensionUiRequest,
     deleteTask, removeProject, refreshModels, showNotice, resolveExtensionUi, handlePermissionStatus, patchTaskUi,
     updateTaskLists, setMessageReload, openImageContextMenu,

@@ -311,6 +311,8 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
     const id = randomUUID();
     const timeoutMs = command === "providers.login" || command === "sessions.share"
       ? 15 * 60_000
+      : command === "runtime.shutdown"
+        ? 5_000
       // agent.prompt is event-driven: an interactive turn can run for many
       // minutes and streams progress via agent events. Its completion is
       // signaled by agent_settled, not by the RPC response, so a fixed timeout
@@ -379,6 +381,7 @@ function registerIpcHandlers() {
     confirmCloseBeforeQuit = Boolean(enabled);
   });
   registerTrustedIpcHandler("app:restart-host", async () => {
+    try { await requestHost("runtime.shutdown"); } catch { /* A crashed Host can still be replaced. */ }
     teardownHost("restart requested");
     if (!hostWindow) return;
     startHost(hostWindow);
@@ -430,8 +433,10 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("sessions:messages", (_event, taskId: string, cwd?: string) => requestHost("sessions.messages", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:run-metadata", (_event, taskId: string, cwd?: string) => requestHost("sessions.runMetadata", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:change-reviews", (_event, taskId: string, cwd?: string) => requestHost("sessions.changeReviews", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:change-review", (_event, taskId: string, reviewId: string, cwd?: string) => requestHost("sessions.changeReview", { taskId, reviewId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:reload", (_event, taskId: string, cwd?: string) => requestHost("sessions.reload", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:import", async (_event, taskId?: string, cwd?: string) => {
     const trustedCwd = requireKnownProjectCwd(cwd);
@@ -466,6 +471,7 @@ function registerIpcHandlers() {
     await shell.openExternal(parsed.toString());
   });
   registerTrustedIpcHandler("agent:prompt", (_event, taskId: string, text: string, cwd?: string, images?: Array<{ data: string; mimeType: string }>, delivery?: "steer" | "followUp") => requestHost("agent.prompt", { taskId, text, cwd: requireKnownProjectCwd(cwd), images, delivery }));
+  registerTrustedIpcHandler("agent:execute-bash", (_event, taskId: string, command: string, excludeFromContext?: boolean, cwd?: string) => requestHost("agent.executeBash", { taskId, command, excludeFromContext, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:abort", (_event, taskId: string, cwd?: string) => requestHost("agent.abort", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: requireKnownProjectCwd(cwd) }));
@@ -476,6 +482,8 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("agent:promote-queue", (_event, taskId: string, followUpIndex: number, cwd?: string) => requestHost("agent.promoteQueue", { taskId, followUpIndex, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:edit-queue", (_event, taskId: string, messageId: string, text: string, images?: Array<{ data: string; mimeType: string }>, cwd?: string) => requestHost("agent.editQueue", { taskId, messageId, text, images, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:delete-queue", (_event, taskId: string, messageId: string, cwd?: string) => requestHost("agent.deleteQueue", { taskId, messageId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("settings:get", (_event, cwd?: string) => requestHost("settings.get", { cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("settings:update", (_event, settings: Record<string, unknown>, cwd?: string) => requestHost("settings.update", { ...settings, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
   registerTrustedIpcHandler("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
   registerTrustedIpcHandler("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
@@ -633,7 +641,25 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+let hostQuitDrainInProgress = false;
+let hostDrainedForQuit = false;
+app.on("before-quit", (event) => {
+  if (hostQuitDrainInProgress) {
+    event.preventDefault();
+    return;
+  }
+  if (!hostDrainedForQuit && host && hostAlive) {
+    event.preventDefault();
+    hostQuitDrainInProgress = true;
+    void requestHost("runtime.shutdown")
+      .catch(() => undefined)
+      .finally(() => {
+        hostQuitDrainInProgress = false;
+        hostDrainedForQuit = true;
+        app.quit();
+      });
+    return;
+  }
   hostAlive = false;
   host?.kill();
   host = undefined;

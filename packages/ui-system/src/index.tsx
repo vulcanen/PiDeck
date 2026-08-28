@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 export const icons: Record<string, string> = {
   plus: "M8 3v10M3 8h10",
@@ -40,20 +40,26 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
 
 const dialogFocusStack: symbol[] = [];
 
-export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () => void, enabled = true) {
+export function useDialogFocus(
+  ref: RefObject<HTMLElement | null>,
+  onEscape: () => void,
+  enabled = true,
+  returnFocusRef?: RefObject<HTMLElement | null>,
+) {
   const escapeRef = useRef(onEscape);
   useEffect(() => { escapeRef.current = onEscape; }, [onEscape]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enabled) return;
     const layer = Symbol("dialog-focus-layer");
     dialogFocusStack.push(layer);
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous = returnFocusRef?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const root = ref.current;
     const focusable = () => Array.from(root?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex='-1'])") ?? []);
-    window.requestAnimationFrame(() => focusable()[0]?.focus());
+    focusable()[0]?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (dialogFocusStack.at(-1) !== layer) return;
       if (event.key === "Escape") {
+        if (event.target instanceof Element && event.target.closest("[data-dialog-escape-boundary]")) return;
         event.preventDefault();
         event.stopPropagation();
         escapeRef.current();
@@ -72,9 +78,9 @@ export function useDialogFocus(ref: RefObject<HTMLElement | null>, onEscape: () 
       document.removeEventListener("keydown", onKeyDown, true);
       const layerIndex = dialogFocusStack.lastIndexOf(layer);
       if (layerIndex >= 0) dialogFocusStack.splice(layerIndex, 1);
-      window.requestAnimationFrame(() => previous?.focus());
+      queueMicrotask(() => (returnFocusRef?.current ?? previous)?.focus());
     };
-  }, [enabled, ref]);
+  }, [enabled, ref, returnFocusRef]);
 }
 
 export async function copyText(value: string): Promise<boolean> {

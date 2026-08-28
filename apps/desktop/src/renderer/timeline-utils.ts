@@ -175,6 +175,7 @@ export function buildMessageTimelineItems({
   toolName?: string;
 }): MessageTimelineItem[] {
   const items: MessageTimelineItem[] = [];
+  const shellRun = running && toolName === "shell";
   let turn: any[] = [];
   let turnIndex = 0;
   let hasAssistantInTurn = false;
@@ -207,11 +208,11 @@ export function buildMessageTimelineItems({
   // completedActivity only covers turns observed during the current app
   // lifetime. Align it to the newest persisted turns when the session already
   // contains older history.
-  const observedTurnCount = completedActivity.length + (running ? 1 : 0);
+  const observedTurnCount = completedActivity.length + (running && !shellRun ? 1 : 0);
   const activityOffset = Math.max(0, userTurnCount - observedTurnCount);
   const flushTurn = (isFinal = false) => {
     if (!turn.length) return;
-    const activeTurn = isFinal && running;
+    const activeTurn = isFinal && running && !shellRun;
     // Runtime activity has the real start/end times. Persisted messages only
     // retain a result timestamp, which would make every historical summary
     // appear as 0s and can associate a queued turn with the previous one.
@@ -277,6 +278,13 @@ export function buildMessageTimelineItems({
     // open or extend a turn; the summary itself is rendered by PiDeck as part
     // of the execution activity, not as a timeline message.
     if (message?.role === "compactionSummary") continue;
+    // Pi persists user `!` / `!!` commands as standalone bashExecution
+    // messages. They are not part of the surrounding model turn.
+    if (message?.role === "bashExecution") {
+      flushTurn();
+      items.push({ type: "message", message, index: items.length });
+      continue;
+    }
     // Steering messages are delivered inside the current agent run. Keep
     // them in the same timeline turn so the run has one shared summary.
     const isSteeringMessage = message?.role === "user" && steeringKeys.has(messageIdentity(message) ?? "");
@@ -285,5 +293,20 @@ export function buildMessageTimelineItems({
     if (message?.role === "assistant") hasAssistantInTurn = true;
   }
   flushTurn(true);
+  // Shell commands have no optimistic user message, so their Pi streaming
+  // events need an independent live row instead of borrowing the preceding
+  // conversation turn. The persisted bashExecution message replaces it when
+  // the command completes.
+  if (shellRun) {
+    items.push({
+      type: "live",
+      text: "",
+      index: items.length,
+      stableKey: `bash-live-${taskId}-${activeActivity.at(-1)?.id ?? "shell"}`,
+      phase: "tool",
+      toolName: "shell",
+      activitySteps: extractLiveActivitySteps(activeActivity, Date.now(), false),
+    });
+  }
   return items;
 }

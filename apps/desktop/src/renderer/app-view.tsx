@@ -11,14 +11,27 @@ const MAXIMUM_SIDEBAR_WIDTH = 420;
 
 export function AppView({ controller }: { controller: AppController }) {
   const [sidebarMaximumWidth, setSidebarMaximumWidth] = useState(() => Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
+  const [reviewDrawer, setReviewDrawer] = useState(() => window.matchMedia("(max-width: 1280px)").matches);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem("pideck.sidebar-width"));
     return Number.isFinite(stored) ? Math.min(MAXIMUM_SIDEBAR_WIDTH, Math.max(MINIMUM_SIDEBAR_WIDTH, stored)) : 270;
   });
   useEffect(() => {
     const updateMaximum = () => setSidebarMaximumWidth(Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
-    window.addEventListener("resize", updateMaximum);
-    return () => window.removeEventListener("resize", updateMaximum);
+    const drawerMedia = window.matchMedia("(max-width: 1280px)");
+    const updateDrawer = () => setReviewDrawer(window.innerWidth <= 1280);
+    const updateWindowLayout = () => { updateMaximum(); updateDrawer(); };
+    window.addEventListener("resize", updateWindowLayout);
+    window.visualViewport?.addEventListener("resize", updateDrawer);
+    drawerMedia.addEventListener("change", updateDrawer);
+    const rootObserver = new ResizeObserver(updateDrawer);
+    rootObserver.observe(document.documentElement);
+    return () => {
+      window.removeEventListener("resize", updateWindowLayout);
+      window.visualViewport?.removeEventListener("resize", updateDrawer);
+      drawerMedia.removeEventListener("change", updateDrawer);
+      rootObserver.disconnect();
+    };
   }, []);
   const effectiveSidebarWidth = Math.min(sidebarMaximumWidth, Math.max(MINIMUM_SIDEBAR_WIDTH, sidebarWidth));
   const {
@@ -35,6 +48,7 @@ export function AppView({ controller }: { controller: AppController }) {
     paletteOpen, pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen,
     commandDialog, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, previewImage,
   } = controller;
+  const reviewDrawerOpen = changeReview.reviewOpen && reviewDrawer;
   const modalOverlayOpen = Boolean(
     paletteOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen
     || commandDialog || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || previewImage,
@@ -45,8 +59,8 @@ export function AppView({ controller }: { controller: AppController }) {
     inert={modalOverlayOpen}
     aria-hidden={modalOverlayOpen || undefined}
   >
-    <a className="skip-link" href="#main-content">{t.skipToContent}</a>
-    <header className="titlebar" inert={mobileSidebarOpen} aria-hidden={mobileSidebarOpen || undefined}>
+    <a className="skip-link" href="#main-content" tabIndex={reviewDrawerOpen ? -1 : undefined} aria-hidden={reviewDrawerOpen || undefined}>{t.skipToContent}</a>
+    <header className="titlebar" inert={mobileSidebarOpen || reviewDrawerOpen} aria-hidden={mobileSidebarOpen || reviewDrawerOpen || undefined}>
       <div className="brand-lockup"><img className="brand-mark" src="./pideck-icon.png" alt="" aria-hidden="true" draggable={false} /><span className="brand-name">PiDeck</span><span className="brand-divider" /><span className="eyebrow">{t.workspace}</span></div>
       <div className="window-drag" />
       <div className="titlebar-actions">
@@ -58,13 +72,15 @@ export function AppView({ controller }: { controller: AppController }) {
       </div>
     </header>
 
-    <div className="workspace-grid" style={{ "--sidebar-width": `${effectiveSidebarWidth}px` } as CSSProperties}>
+    <div className={`workspace-grid ${reviewDrawerOpen ? "review-drawer-open" : ""}`} style={{ "--sidebar-width": `${effectiveSidebarWidth}px` } as CSSProperties}>
+      {reviewDrawerOpen && <button type="button" className="change-review-backdrop" tabIndex={-1} aria-hidden="true" onClick={() => changeReview.setReviewOpen(false)} />}
       <AppSidebar
         language={language}
         t={t}
         sidebarRef={sidebarRef}
         searchInputRef={searchInputRef}
         mobileSidebarOpen={mobileSidebarOpen}
+        backgroundInert={reviewDrawerOpen}
         projectCwd={projectCwd}
         projects={projects}
         projectTasksByCwd={projectTasksByCwd}
@@ -95,6 +111,7 @@ export function AppView({ controller }: { controller: AppController }) {
         value={effectiveSidebarWidth}
         minimum={MINIMUM_SIDEBAR_WIDTH}
         maximum={sidebarMaximumWidth}
+        disabled={reviewDrawerOpen}
         onChange={(width) => {
           setSidebarWidth(width);
           localStorage.setItem("pideck.sidebar-width", String(Math.round(width)));
@@ -126,9 +143,22 @@ export function AppView({ controller }: { controller: AppController }) {
         latestChangeReview={changeReview.launcherReview}
         selectedChangeReview={changeReview.selectedReview}
         changeReviewOpen={changeReview.reviewOpen}
+        changeReviewDrawer={reviewDrawer}
         changeReviewLoading={changeReview.reviewLoading}
+        changeReviewAvailability={changeReview.reviewAvailability}
+        changeReviewUnavailableReason={changeReview.reviewUnavailableReason}
+        changeReviewError={changeReview.reviewError}
+        selectedChangeReviewLoading={changeReview.selectedReviewLoading}
+        selectedChangeReviewError={changeReview.selectedReviewError}
         changeReviewWidth={changeReview.reviewWidth}
         changeReviewFileListWidth={changeReview.fileListWidth}
+        changeReviewSelectedPath={changeReview.selectedFilePath}
+        changeReviewExpandedPaths={changeReview.expandedDirectories}
+        changeReviewFileFilter={changeReview.fileFilter}
+        changeReviewDiffMode={changeReview.diffMode}
+        changeReviewWrapLines={changeReview.wrapLines}
+        changeReviewIgnoreWhitespace={changeReview.ignoreWhitespace}
+        changeReviewScrollPosition={changeReview.diffScrollPosition}
         composerProps={composerProps}
         onTimelineAtEnd={handleTimelineAtEnd}
         onRetryInitialLoad={runtimeStatus === "disconnected" ? restartHost : loadInitialData}
@@ -145,6 +175,15 @@ export function AppView({ controller }: { controller: AppController }) {
         onOpenChangeReview={changeReview.openLatestReview}
         onCloseChangeReview={() => changeReview.setReviewOpen(false)}
         onSelectChangeReview={changeReview.setSelectedReviewId}
+        onSelectChangeReviewPath={changeReview.setSelectedFilePath}
+        onChangeReviewExpandedPaths={changeReview.setExpandedDirectories}
+        onChangeReviewFileFilter={changeReview.setFileFilter}
+        onChangeReviewDiffMode={changeReview.setDiffMode}
+        onChangeReviewWrapLines={changeReview.setWrapLines}
+        onChangeReviewIgnoreWhitespace={changeReview.setIgnoreWhitespace}
+        onChangeReviewScrollPosition={changeReview.setDiffScrollPosition}
+        onRetryChangeReviews={changeReview.reloadReviews}
+        onRetrySelectedChangeReview={changeReview.retrySelectedReview}
         onChangeReviewWidth={changeReview.setReviewWidth}
         onChangeReviewFileListWidth={changeReview.setFileListWidth}
         backgroundInert={mobileSidebarOpen}

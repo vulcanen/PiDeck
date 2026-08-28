@@ -1,4 +1,4 @@
-import type { PermissionMode, PiHostRequest, PiHostResponse, SessionChangeReview, SessionRunRecord } from "@pideck/contracts";
+import type { PermissionMode, PiHostRequest, PiHostResponse, SessionChangeReview, SessionChangeReviewCollection, SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
@@ -11,7 +11,24 @@ import { createServer } from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { pathToFileURL } from "node:url";
-import { buildSessionChangeReview, captureWorkspaceChangeState, type WorkspaceChangeState } from "./session-change-review.js";
+import {
+  createAgentRunReservation,
+  isExtensionCommand,
+  ManualCompactionPromptQueue,
+  queuePromptDuringCompaction,
+  waitForReservedAgentRun,
+  type AgentRunReservation,
+} from "./agent-prompt-coordination.js";
+import { buildSessionChangeReview, inspectGitWorkspaceAvailability, inspectWorkspaceChangeState, type WorkspaceChangeInspection } from "./session-change-review.js";
+import {
+  copySessionChangeReviewStore,
+  deleteSessionChangeReviewStore,
+  flushSessionChangeReviewStore,
+  loadSessionChangeReviews,
+  persistSessionChangeReview,
+  sessionChangeReviewStorePath,
+  summarizeSessionChangeReview,
+} from "./session-change-review-store.js";
 import { sessionTranscriptMessages } from "./session-transcript.js";
 
 function execFileText(file: string, args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<string> {
@@ -77,15 +94,29 @@ const agentSessionPromises = new Map<string, Promise<any>>();
 const agentSessionPackageRevisions = new Map<string, number>();
 const executionGroupStarts = new Map<string, number>();
 const SESSION_RUN_METADATA_TYPE = "pideck.execution-run";
-const SESSION_CHANGE_REVIEW_METADATA_TYPE = "pideck.change-review";
-const MAX_SESSION_CHANGE_REVIEW_HISTORY = 20;
-type ActiveChangeReviewSegment = { startedAt: number; baseline: Promise<WorkspaceChangeState | null> };
-type ActiveChangeReviewTracker = { current: ActiveChangeReviewSegment; persistence: Promise<void>; previewRevision: number };
+type ActiveChangeReviewSegment = { startedAt: number; baseline: Promise<WorkspaceChangeInspection>; outcome?: SessionChangeReview["outcome"] };
+type ActiveChangeReviewTracker = {
+  current: ActiveChangeReviewSegment;
+  persistence: Promise<void>;
+  previewRevision: number;
+  previewTimer?: ReturnType<typeof setTimeout>;
+  previewController?: AbortController;
+};
 const activeChangeReviews = new Map<string, ActiveChangeReviewTracker>();
-// `session.isStreaming` is updated by Pi asynchronously. Reserve a task as
-// soon as a direct prompt is accepted so a second prompt arriving in that
-// small window is queued instead of starting a competing run.
-const agentRunReservations = new Set<string>();
+const pendingChangeReviewWrites = new Set<Promise<void>>();
+const pendingChangeReviewWritesBySession = new Map<string, Set<Promise<void>>>();
+// AgentSession can enter automatic-compaction preflight before Pi reports
+// `isStreaming`. Track both the start and finish boundary so another renderer
+// request cannot mistake that preflight window for an idle Agent.
+const agentRunReservations = new Map<string, AgentRunReservation>();
+const manualCompactionQueues = new ManualCompactionPromptQueue();
+
+function clearAgentRunReservation(stateKey: string): void {
+  const reservation = agentRunReservations.get(stateKey);
+  reservation?.markStarted(false);
+  reservation?.markFinished();
+  agentRunReservations.delete(stateKey);
+}
 // System prompt for LLM session-title generation. Matches the user's language,
 // asks for a 3–8 word summary of intent (not a copy of the text), and demands
 // the title alone with no quoting or markdown so extraction is trivial.
@@ -324,49 +355,115 @@ function sessionRunMetadata(session: any): SessionRunRecord[] {
     ));
 }
 
-function sessionChangeReviews(session: any): SessionChangeReview[] {
-  const entries = session.sessionManager?.getBranch?.() ?? session.sessionManager?.getEntries?.() ?? [];
-  if (!Array.isArray(entries)) return [];
-  return entries
-    .filter((entry: any) => entry?.type === "custom" && entry.customType === SESSION_CHANGE_REVIEW_METADATA_TYPE)
-    .map((entry: any) => entry.data)
-    .filter((record: any): record is SessionChangeReview => Boolean(
-      record
-      && typeof record.id === "string"
-      && record.state === "completed"
-      && Number.isFinite(record.startedAt)
-      && Number.isFinite(record.endedAt)
-      && Array.isArray(record.files)
-      && Number.isFinite(record.additions)
-      && Number.isFinite(record.deletions),
-    ))
-    .slice(-MAX_SESSION_CHANGE_REVIEW_HISTORY);
-}
-
-function persistSessionChangeReview(session: any, review: SessionChangeReview): void {
-  const appendEntry = session.sessionManager?.appendCustomEntry;
-  if (typeof appendEntry !== "function") return;
-  try {
-    appendEntry.call(session.sessionManager, SESSION_CHANGE_REVIEW_METADATA_TYPE, review);
-  } catch {
-    // Review metadata is auxiliary. An in-memory/read-only Session must still
-    // be allowed to complete and deliver its canonical Pi messages.
+async function sessionChangeReviewCollection(session: any, cwd: string, diffApiAvailable: boolean): Promise<SessionChangeReviewCollection> {
+  let storageRetryFailed = false;
+  try { await flushSessionChangeReviewStore(session); }
+  catch { storageRetryFailed = true; }
+  const loaded = await loadSessionChangeReviews(session);
+  if (storageRetryFailed) {
+    return { availability: "error", reason: "review-storage-failed", reviews: loaded.reviews.map(summarizeSessionChangeReview) };
   }
+  if (loaded.invalid) {
+    return { availability: "error", reason: "review-data-invalid", reviews: loaded.reviews.map(summarizeSessionChangeReview) };
+  }
+  if (!diffApiAvailable) {
+    return { availability: "error", reason: "diff-api-unavailable", reviews: loaded.reviews.map(summarizeSessionChangeReview) };
+  }
+  const inspection = await inspectGitWorkspaceAvailability(cwd, AbortSignal.timeout(15_000));
+  return {
+    availability: inspection.status,
+    ...(inspection.status === "error" ? { reason: inspection.reason } : {}),
+    reviews: loaded.reviews.map(summarizeSessionChangeReview),
+  };
 }
 
 function emptyRunningChangeReview(taskId: string, startedAt: number): SessionChangeReview {
-  return { id: `${taskId}:${startedAt}`, state: "running", startedAt, endedAt: startedAt, files: [], additions: 0, deletions: 0, truncated: false };
+  return {
+    schemaVersion: 2,
+    id: `${taskId}:${startedAt}`,
+    state: "running",
+    startedAt,
+    endedAt: startedAt,
+    files: [],
+    additions: 0,
+    deletions: 0,
+    truncated: false,
+    fileCountTruncated: false,
+  };
 }
 
-function startChangeReview(stateKey: string, taskId: string, cwd: string, startedAt: number): void {
-  const segment = { startedAt, baseline: captureWorkspaceChangeState(cwd) };
+function emitChangeReviewStatus(taskId: string, inspection: WorkspaceChangeInspection): void {
+  emit(taskId, {
+    type: "change-review.status",
+    availability: inspection.status,
+    ...(inspection.status === "error" ? { reason: inspection.reason } : {}),
+  });
+}
+
+function inspectionState(inspection: WorkspaceChangeInspection) {
+  return inspection.status === "available" ? inspection.state : null;
+}
+
+function updateChangeReviewOutcome(stateKey: string, message: any): void {
+  if (message?.role !== "assistant") return;
+  const tracker = activeChangeReviews.get(stateKey);
+  if (!tracker) return;
+  if (message.stopReason === "stop") tracker.current.outcome = "succeeded";
+  else if (message.stopReason === "aborted") tracker.current.outcome = "aborted";
+  else if (message.stopReason === "error" || message.stopReason === "length") tracker.current.outcome = "failed";
+}
+
+function trackChangeReviewWrite(stateKey: string, promise: Promise<void>): void {
+  pendingChangeReviewWrites.add(promise);
+  const sessionWrites = pendingChangeReviewWritesBySession.get(stateKey) ?? new Set<Promise<void>>();
+  sessionWrites.add(promise);
+  pendingChangeReviewWritesBySession.set(stateKey, sessionWrites);
+  void promise.finally(() => {
+    pendingChangeReviewWrites.delete(promise);
+    sessionWrites.delete(promise);
+    if (!sessionWrites.size) pendingChangeReviewWritesBySession.delete(stateKey);
+  });
+}
+
+function cancelChangeReviewPreview(tracker: ActiveChangeReviewTracker): void {
+  if (tracker.previewTimer) clearTimeout(tracker.previewTimer);
+  tracker.previewTimer = undefined;
+  tracker.previewController?.abort(new Error("Change review preview superseded"));
+  tracker.previewController = undefined;
+  tracker.previewRevision += 1;
+}
+
+function announceChangeReviewBaseline(
+  stateKey: string,
+  tracker: ActiveChangeReviewTracker,
+  segment: ActiveChangeReviewSegment,
+  taskId: string,
+): void {
+  void segment.baseline.then((inspection) => {
+    if (activeChangeReviews.get(stateKey) !== tracker) return;
+    if (tracker.current !== segment) return;
+    emitChangeReviewStatus(taskId, inspection);
+    if (inspection.status === "available") {
+      emit(taskId, { type: "change-review.updated", review: emptyRunningChangeReview(taskId, segment.startedAt) });
+    }
+  }).catch((error) => console.error(`PiHost change review baseline failed for ${taskId}`, error));
+}
+
+function startChangeReview(
+  stateKey: string,
+  taskId: string,
+  cwd: string,
+  startedAt: number,
+  generateUnifiedPatch: NonNullable<Awaited<ReturnType<typeof loadPiSdk>>["generateUnifiedPatch"]> | undefined,
+): void {
+  if (!generateUnifiedPatch) {
+    emit(taskId, { type: "change-review.status", availability: "error", reason: "diff-api-unavailable" });
+    return;
+  }
+  const segment = { startedAt, baseline: inspectWorkspaceChangeState(cwd) };
   const tracker: ActiveChangeReviewTracker = { current: segment, persistence: Promise.resolve(), previewRevision: 0 };
   activeChangeReviews.set(stateKey, tracker);
-  void segment.baseline.then((baseline) => {
-    if (baseline && activeChangeReviews.get(stateKey) === tracker && tracker.current === segment) {
-      emit(taskId, { type: "change-review.updated", review: emptyRunningChangeReview(taskId, startedAt) });
-    }
-  });
+  announceChangeReviewBaseline(stateKey, tracker, segment, taskId);
 }
 
 function finalizeChangeReviewSegment(
@@ -374,17 +471,40 @@ function finalizeChangeReviewSegment(
   stateKey: string,
   taskId: string,
   segment: ActiveChangeReviewSegment,
-  finalState: Promise<WorkspaceChangeState | null>,
+  finalInspection: Promise<WorkspaceChangeInspection>,
   endedAt: number,
   generateUnifiedPatch: NonNullable<Awaited<ReturnType<typeof loadPiSdk>>["generateUnifiedPatch"]> | undefined,
 ): Promise<void> {
   if (!generateUnifiedPatch) return Promise.resolve();
-  return Promise.all([segment.baseline, finalState])
-    .then(async ([before, after]) => {
-      const review = await buildSessionChangeReview(taskId, segment.startedAt, endedAt, before, after, generateUnifiedPatch);
+  return Promise.all([segment.baseline, finalInspection])
+    .then(async ([beforeInspection, afterInspection]) => {
+      if (beforeInspection.status !== "available") {
+        emitChangeReviewStatus(taskId, beforeInspection);
+        return;
+      }
+      if (afterInspection.status !== "available") {
+        emitChangeReviewStatus(taskId, afterInspection);
+        return;
+      }
+      const review = await buildSessionChangeReview(
+        taskId,
+        segment.startedAt,
+        endedAt,
+        inspectionState(beforeInspection),
+        inspectionState(afterInspection),
+        generateUnifiedPatch,
+      );
       if (!review || sessionManagers.get(stateKey) !== session.sessionManager) return;
-      persistSessionChangeReview(session, review);
+      if (segment.outcome) review.outcome = segment.outcome;
+      let storageFailed = false;
+      try {
+        await persistSessionChangeReview(session, review);
+      } catch (error) {
+        storageFailed = true;
+        console.error(`PiHost change review storage failed for ${taskId}`, error);
+      }
       emit(taskId, { type: "change-review.updated", review: jsonSafe(review) });
+      if (storageFailed) emit(taskId, { type: "change-review.status", availability: "error", reason: "review-storage-failed" });
     })
     .catch((error) => console.error(`PiHost change review failed for ${taskId}`, error));
 }
@@ -399,20 +519,25 @@ function rotateChangeReview(
 ): void {
   const tracker = activeChangeReviews.get(stateKey);
   if (!tracker) {
-    startChangeReview(stateKey, taskId, cwd, boundary);
+    startChangeReview(stateKey, taskId, cwd, boundary, generateUnifiedPatch);
     return;
   }
+  cancelChangeReviewPreview(tracker);
   const previous = tracker.current;
-  const boundaryState = captureWorkspaceChangeState(cwd);
-  const current = { startedAt: boundary, baseline: boundaryState };
+  const boundaryInspection = inspectWorkspaceChangeState(cwd);
+  const current = { startedAt: boundary, baseline: boundaryInspection };
   tracker.current = current;
-  tracker.previewRevision += 1;
-  void boundaryState.then((baseline) => {
-    if (baseline && activeChangeReviews.get(stateKey) === tracker && tracker.current === current) {
-      emit(taskId, { type: "change-review.updated", review: emptyRunningChangeReview(taskId, boundary) });
-    }
-  });
-  tracker.persistence = tracker.persistence.then(() => finalizeChangeReviewSegment(session, stateKey, taskId, previous, boundaryState, boundary, generateUnifiedPatch));
+  announceChangeReviewBaseline(stateKey, tracker, current, taskId);
+  tracker.persistence = tracker.persistence.then(() => finalizeChangeReviewSegment(
+    session,
+    stateKey,
+    taskId,
+    previous,
+    boundaryInspection,
+    boundary,
+    generateUnifiedPatch,
+  ));
+  trackChangeReviewWrite(stateKey, tracker.persistence);
 }
 
 function finishChangeReview(
@@ -425,9 +550,19 @@ function finishChangeReview(
 ): void {
   const tracker = activeChangeReviews.get(stateKey);
   if (!tracker) return;
+  cancelChangeReviewPreview(tracker);
   activeChangeReviews.delete(stateKey);
-  const finalState = captureWorkspaceChangeState(cwd);
-  tracker.persistence = tracker.persistence.then(() => finalizeChangeReviewSegment(session, stateKey, taskId, tracker.current, finalState, endedAt, generateUnifiedPatch));
+  const finalInspection = inspectWorkspaceChangeState(cwd);
+  tracker.persistence = tracker.persistence.then(() => finalizeChangeReviewSegment(
+    session,
+    stateKey,
+    taskId,
+    tracker.current,
+    finalInspection,
+    endedAt,
+    generateUnifiedPatch,
+  ));
+  trackChangeReviewWrite(stateKey, tracker.persistence);
 }
 
 function previewChangeReview(
@@ -438,17 +573,41 @@ function previewChangeReview(
 ): void {
   const tracker = activeChangeReviews.get(stateKey);
   if (!tracker || !generateUnifiedPatch) return;
+  cancelChangeReviewPreview(tracker);
   const segment = tracker.current;
-  const revision = ++tracker.previewRevision;
-  const previewState = captureWorkspaceChangeState(cwd);
-  void Promise.all([segment.baseline, previewState])
-    .then(async ([before, after]) => {
-      const review = await buildSessionChangeReview(taskId, segment.startedAt, Date.now(), before, after, generateUnifiedPatch, "running");
-      const current = activeChangeReviews.get(stateKey);
-      if (!review || current !== tracker || current.current !== segment || current.previewRevision !== revision) return;
-      emit(taskId, { type: "change-review.updated", review: jsonSafe(review) });
-    })
-    .catch((error) => console.error(`PiHost live change review failed for ${taskId}`, error));
+  const revision = tracker.previewRevision;
+  tracker.previewTimer = setTimeout(() => {
+    tracker.previewTimer = undefined;
+    const controller = new AbortController();
+    tracker.previewController = controller;
+    const previewInspection = inspectWorkspaceChangeState(cwd, controller.signal);
+    void Promise.all([segment.baseline, previewInspection])
+      .then(async ([beforeInspection, afterInspection]) => {
+        if (beforeInspection.status !== "available" || afterInspection.status !== "available") {
+          if (afterInspection.status !== "available") emitChangeReviewStatus(taskId, afterInspection);
+          return;
+        }
+        const review = await buildSessionChangeReview(
+          taskId,
+          segment.startedAt,
+          Date.now(),
+          beforeInspection.state,
+          afterInspection.state,
+          generateUnifiedPatch,
+          "running",
+          controller.signal,
+        );
+        const current = activeChangeReviews.get(stateKey);
+        if (!review || current !== tracker || current.current !== segment || current.previewRevision !== revision) return;
+        emit(taskId, { type: "change-review.updated", review: jsonSafe(review) });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) console.error(`PiHost live change review failed for ${taskId}`, error);
+      })
+      .finally(() => {
+        if (tracker.previewController === controller) tracker.previewController = undefined;
+      });
+  }, 180);
 }
 
 type NormalizedPromptImage = { type: "image"; data: string; mimeType: string };
@@ -590,9 +749,17 @@ function queueStateWithDetails(session: any, taskId: string) {
     text,
     images: (entries[index]?.images ?? []).map((image) => ({ data: image.data, mimeType: image.mimeType })),
   }));
+  const staged = manualCompactionQueues.list(taskId);
+  const stagedMessages = (delivery: "steer" | "followUp") => staged
+    .filter((entry) => entry.delivery === delivery)
+    .map((entry) => ({
+      id: entry.id,
+      text: entry.text,
+      images: entry.images.map((image) => ({ data: image.data, mimeType: image.mimeType })),
+    }));
   return {
-    steering: messages(current.steering, details.steering),
-    followUp: messages(current.followUp, details.followUp),
+    steering: [...messages(current.steering, details.steering), ...stagedMessages("steer")],
+    followUp: [...messages(current.followUp, details.followUp), ...stagedMessages("followUp")],
     steeringMode: current.steeringMode,
     followUpMode: current.followUpMode,
   };
@@ -655,6 +822,48 @@ async function withQueueMutationLock<T>(taskId: string, operation: () => Promise
   }
 }
 
+async function resumeManualCompactionQueue(taskId: string, stateKey: string, session: any): Promise<void> {
+  const queued = manualCompactionQueues.drain(stateKey);
+  emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
+  if (queued.length === 0) return;
+
+  const [first, ...remaining] = queued;
+  const reservation = createAgentRunReservation();
+  agentRunReservations.set(stateKey, reservation);
+  void (async () => {
+    try {
+      await session.prompt(first!.text, {
+        source: "interactive",
+        images: first!.images,
+        preflightResult: (started: boolean) => reservation.markStarted(started),
+      });
+    } catch (error) {
+      emit(taskId, { type: "prompt_error", message: publicRuntimeError(error) });
+      try { await session.abort(); } catch { /* Preserve the original prompt error. */ }
+    } finally {
+      reservation.markStarted(false);
+      reservation.markFinished();
+      if (agentRunReservations.get(stateKey) === reservation) agentRunReservations.delete(stateKey);
+    }
+  })();
+
+  const started = await reservation.started;
+  if (!started) return;
+  await withQueueMutationLock(stateKey, async () => {
+    for (const entry of remaining) {
+      trackQueuedPrompt(stateKey, entry.delivery, entry.text, entry.images);
+      await session.prompt(entry.text, {
+        source: "interactive",
+        images: entry.images,
+        streamingBehavior: entry.delivery,
+      });
+    }
+    const current = queueState(session);
+    reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
+    emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
+  });
+}
+
 async function createPackageManagerContext(cwd: string): Promise<{ manager: any; settingsManager: any }> {
   const sdk = await loadPiSdk();
   if (!sdk.DefaultPackageManager || !sdk.SettingsManager) throw new Error("Pi PackageManager is not available in this Pi runtime");
@@ -665,6 +874,26 @@ async function createPackageManagerContext(cwd: string): Promise<{ manager: any;
 
 async function createPackageManager(cwd: string): Promise<any> {
   return (await createPackageManagerContext(cwd)).manager;
+}
+
+async function settingsManagerFor(cwd: string): Promise<any> {
+  const sdk = await loadPiSdk();
+  if (!sdk.SettingsManager) throw new Error("Pi SettingsManager is not available in this Pi runtime");
+  const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+  return sdk.SettingsManager.create(cwd, agentDir);
+}
+
+function settingsSummary(manager: any) {
+  const compaction = manager.getCompactionSettings();
+  return {
+    defaultProvider: manager.getDefaultProvider(),
+    defaultModel: manager.getDefaultModel(),
+    defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
+    transport: manager.getTransport() ?? "auto",
+    compactionEnabled: compaction?.enabled !== false,
+    steeringMode: manager.getSteeringMode(),
+    followUpMode: manager.getFollowUpMode(),
+  };
 }
 
 function packageSourceString(value: unknown): string | undefined {
@@ -872,7 +1101,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     queuedPromptImages.delete(stateKey);
     queueDeliveryHints.delete(stateKey);
     queueRebuilds.delete(stateKey);
-    agentRunReservations.delete(stateKey);
+    clearAgentRunReservation(stateKey);
   }
   const pending = agentSessionPromises.get(stateKey);
   if (pending) return pending;
@@ -934,7 +1163,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
         if (event.type === "agent_start") {
           const startedAt = Date.now();
           executionGroupStarts.set(stateKey, startedAt);
-          startChangeReview(stateKey, taskId, cwd, startedAt);
+          startChangeReview(stateKey, taskId, cwd, startedAt, sdk.generateUnifiedPatch);
         }
         if (event.type === "agent_settled") {
           const endedAt = Date.now();
@@ -951,10 +1180,14 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
           } else if (!executionGroupStarts.has(stateKey)) {
             const startedAt = Date.now();
             executionGroupStarts.set(stateKey, startedAt);
-            startChangeReview(stateKey, taskId, cwd, startedAt);
+            startChangeReview(stateKey, taskId, cwd, startedAt, sdk.generateUnifiedPatch);
           }
           emit(taskId, normalizeAgentEvent(event, queueDelivery));
           return;
+        }
+        if (event.type === "message_end") updateChangeReviewOutcome(stateKey, event.message);
+        if (event.type === "agent_end" && Array.isArray(event.messages)) {
+          updateChangeReviewOutcome(stateKey, [...event.messages].reverse().find((message: any) => message?.role === "assistant"));
         }
         if (event.type === "tool_execution_end" && /^(?:edit|write|bash|powershell)$/i.test(event.toolName ?? "")) {
           previewChangeReview(stateKey, taskId, cwd, sdk.generateUnifiedPatch);
@@ -1023,6 +1256,20 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "runtime.status":
         send({ id: request.id, ok: true, result: "connected" });
         return;
+      case "runtime.shutdown": {
+        const deadline = Date.now() + 3_000;
+        while (pendingChangeReviewWrites.size && Date.now() < deadline) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            Promise.allSettled([...pendingChangeReviewWrites]),
+            new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.max(1, deadline - Date.now())); }),
+          ]);
+          if (timer) clearTimeout(timer);
+        }
+        await Promise.allSettled([...sessionManagers.values()].map((manager) => flushSessionChangeReviewStore(manager)));
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
       case "app.changelog": {
         send({ id: request.id, ok: true, result: existsSync(changelogPath()) ? readFileSync(changelogPath(), "utf8") : "" });
         return;
@@ -1199,8 +1446,20 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "sessions.changeReviews": {
         const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        const sdk = await loadPiSdk();
+        send({ id: request.id, ok: true, result: jsonSafe(await sessionChangeReviewCollection(session, cwd, typeof sdk.generateUnifiedPatch === "function")) });
+        return;
+      }
+      case "sessions.changeReview": {
+        const payload = request.payload as { taskId?: string; reviewId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || !payload.reviewId) throw new Error("taskId and reviewId are required");
+        if (payload.reviewId.length > 512) throw new Error("reviewId is too long");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        send({ id: request.id, ok: true, result: jsonSafe(sessionChangeReviews(session)) });
+        const loaded = await loadSessionChangeReviews(session);
+        const review = loaded.reviews.find((item) => item.id === payload.reviewId) ?? null;
+        send({ id: request.id, ok: true, result: jsonSafe(review) });
         return;
       }
       case "sessions.capabilities": {
@@ -1241,18 +1500,67 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string; instructions?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
         const sdk = await loadPiSdk();
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        const result = await session.compact(payload.instructions);
-        emit(payload.taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        if (manualCompactionQueues.isActive(stateKey)) throw new Error("Manual compaction is already running for this session");
+        manualCompactionQueues.begin(stateKey);
+        let result: unknown;
+        try {
+          result = await session.compact(payload.instructions);
+          emit(payload.taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
+        } finally {
+          await resumeManualCompactionQueue(payload.taskId, stateKey, session);
+        }
         send({ id: request.id, ok: true, result: jsonSafe(result) });
+        return;
+      }
+      case "sessions.reload": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        if (session.isStreaming || session.isCompacting || agentRunReservations.has(stateKey)) throw new Error("Wait for the current agent run or compaction to finish before reloading extensions");
+        await session.reload({ beforeSessionStart: () => permissionEngine.resetUi(payload.taskId!) });
+        agentSessionPackageRevisions.set(stateKey, packageConfigRevision);
+        agentSessionRevisions.set(stateKey, permissionEngine.revision);
+        const runtime = await getModelRuntime();
+        const activeModel = session.model;
+        const provider = activeModel ? runtime.getProvider(activeModel.provider) : undefined;
+        const auth = provider ? runtime.getProviderAuthStatus(provider.id) : undefined;
+        const slash = await listSlashCommands(session);
+        const capabilities = {
+          model: activeModel && provider ? modelSummary(provider, activeModel, Boolean(auth?.configured)) : undefined,
+          thinkingLevel: session.thinkingLevel,
+          thinkingLevels: session.getAvailableThinkingLevels(),
+          slashCommands: slash.builtins,
+          prompts: slash.prompts,
+          skills: slash.skills,
+          scopedModels: Array.isArray(session.scopedModels) ? session.scopedModels.map((item: any) => `${item.model?.provider}/${item.model?.id}`).filter((value: string) => !value.includes("undefined")) : [],
+          contextUsage: jsonSafe(session.getContextUsage?.()),
+        };
+        send({ id: request.id, ok: true, result: capabilities });
         return;
       }
       case "sessions.export": {
         const payload = request.payload as { taskId?: string; format?: "jsonl" | "html"; cwd?: string } | undefined;
         if (!payload?.taskId || !payload.format) throw new Error("taskId and format are required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        await Promise.allSettled([...(pendingChangeReviewWritesBySession.get(stateKey) ?? [])]);
+        if (payload.format === "jsonl") await flushSessionChangeReviewStore(session);
         const outputPath = payload.format === "html" ? await session.exportToHtml() : session.exportToJsonl();
-        send({ id: request.id, ok: true, result: { path: outputPath } });
+        const copiedReviewStore = payload.format === "jsonl" && await copySessionChangeReviewStore(session, outputPath);
+        send({
+          id: request.id,
+          ok: true,
+          result: {
+            path: outputPath,
+            ...(copiedReviewStore ? { reviewPath: sessionChangeReviewStorePath(outputPath) } : {}),
+          },
+        });
         return;
       }
       case "sessions.import": {
@@ -1270,6 +1578,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         mkdirSync(targetDir, { recursive: true });
         const destination = path.join(targetDir, `import-${Date.now()}-${path.basename(inputPath)}`);
         copyFileSync(inputPath, destination);
+        await copySessionChangeReviewStore(inputPath, destination);
         const manager = sdk.SessionManager.open(destination, targetDir, cwd);
         normalizeSessionImages(manager);
         const sessionId = manager.getSessionId();
@@ -1368,6 +1677,17 @@ async function handle(request: PiHostRequest): Promise<void> {
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const stateKey = sessionStateKey(payload.taskId, cwd);
         const session = await ensureAgentSession(payload.taskId, cwd);
+        if (manualCompactionQueues.isActive(stateKey) && !isExtensionCommand(session, payload.text ?? "")) {
+          manualCompactionQueues.enqueue(stateKey, {
+            id: randomUUID(),
+            text: payload.text ?? "",
+            images: images ?? [],
+            delivery: payload.delivery ?? "followUp",
+          });
+          emit(payload.taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
+          send({ id: request.id, ok: true, result: { disposition: "queued" } });
+          return;
+        }
         const sessionName = session.sessionManager?.getSessionName?.();
         if (!titledSessions.has(stateKey) && (isDefaultSessionTitle(sessionName) || isCommandDerivedSessionTitle(sessionName))) {
           const title = deriveSessionTitle(payload.text ?? "");
@@ -1377,39 +1697,93 @@ async function handle(request: PiHostRequest): Promise<void> {
             titledSessions.add(stateKey);
           }
         }
-        const wasStreaming = Boolean(session.isStreaming || agentRunReservations.has(stateKey));
-        const queuedDelivery = wasStreaming ? payload.delivery ?? "followUp" as const : undefined;
-        if (!queuedDelivery) agentRunReservations.add(stateKey);
-        const runPrompt = async () => {
-          if (queuedDelivery) trackQueuedPrompt(stateKey, queuedDelivery, payload.text ?? "", images);
+        let pendingRun = agentRunReservations.get(stateKey);
+        // Outside compaction, wait until the earlier prompt either enters Pi's
+        // streaming state or finishes its preflight. This closes the tiny gap
+        // before `isStreaming` becomes authoritative without inventing a
+        // renderer-owned execution queue.
+        if (pendingRun && !session.isStreaming && !session.isCompacting) {
+          await waitForReservedAgentRun(pendingRun, () => Boolean(session.isStreaming));
+          pendingRun = agentRunReservations.get(stateKey);
+        }
+        const queuedDelivery = (session.isStreaming || pendingRun)
+          ? payload.delivery ?? ("followUp" as const)
+          : undefined;
+        const directReservation = queuedDelivery ? undefined : createAgentRunReservation();
+        if (directReservation) agentRunReservations.set(stateKey, directReservation);
+        const runPrompt = async (): Promise<"completed" | "queued" | "extension-command"> => {
+          // Pi CLI executes extension commands immediately during compaction;
+          // ordinary prompts enter AgentSession's real steer/follow-up queues.
+          const extensionCommand = Boolean(queuedDelivery && isExtensionCommand(session, payload.text ?? ""));
+          if (queuedDelivery && !extensionCommand) trackQueuedPrompt(stateKey, queuedDelivery, payload.text ?? "", images);
+          const queuedDuringCompaction = queuedDelivery
+            ? await queuePromptDuringCompaction(session, payload.text ?? "", images, queuedDelivery)
+            : false;
+          if (queuedDuringCompaction) {
+            const current = queueState(session);
+            reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
+            return "queued";
+          }
           await session.prompt(payload.text ?? "", {
             source: "interactive",
             images,
-            ...(queuedDelivery ? { streamingBehavior: queuedDelivery } : {}),
+            ...(queuedDelivery && !extensionCommand ? { streamingBehavior: queuedDelivery } : {}),
+            ...(directReservation ? { preflightResult: (started: boolean) => directReservation.markStarted(started) } : {}),
           });
-          if (queuedDelivery) {
+          if (queuedDelivery && !extensionCommand) {
             const current = queueState(session);
             reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
           }
+          if (extensionCommand || isExtensionCommand(session, payload.text ?? "")) return "extension-command";
+          return queuedDelivery ? "queued" : "completed";
         };
+        let disposition: "completed" | "queued" | "extension-command";
         try {
-          if (queuedDelivery) await withQueueMutationLock(stateKey, runPrompt);
-          else await runPrompt();
+          disposition = queuedDelivery ? await withQueueMutationLock(stateKey, runPrompt) : await runPrompt();
         } catch (error) {
           if (queuedDelivery) {
             const current = queueState(session);
             reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
           }
-          // A failed prompt must not leave Pi's AgentSession streaming. Aborting
-          // here lets the next user prompt start a fresh execution group.
-          if (session.isStreaming) {
-            try { await session.abort(); } catch { /* Preserve the original prompt error. */ }
-          }
+          // A competing Agent.prompt can make AgentSession emit `agent_settled`
+          // and report idle while the lower-level Agent still owns an active
+          // run. Always abort after a failed prompt so subsequent prompts can
+          // recover from that split state.
+          try { await session.abort(); } catch { /* Preserve the original prompt error. */ }
           throw error;
         } finally {
-          if (!queuedDelivery) agentRunReservations.delete(stateKey);
+          if (directReservation && agentRunReservations.get(stateKey) === directReservation) {
+            directReservation.markStarted(false);
+            directReservation.markFinished();
+            agentRunReservations.delete(stateKey);
+          }
         }
-        send({ id: request.id, ok: true, result: undefined });
+        send({ id: request.id, ok: true, result: { disposition } });
+        return;
+      }
+      case "agent.executeBash": {
+        const payload = request.payload as { taskId?: string; command?: string; excludeFromContext?: boolean; cwd?: string } | undefined;
+        if (!payload?.taskId || !payload.command?.trim()) throw new Error("taskId and command are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        if (session.isStreaming || session.isCompacting || agentRunReservations.has(stateKey)) throw new Error("Wait for the current agent run or compaction to finish before running a shell command");
+        const bashId = randomUUID();
+        emit(payload.taskId, { type: "bash_execution_start", id: bashId, command: payload.command.trim(), excludeFromContext: Boolean(payload.excludeFromContext) });
+        let result: any;
+        try {
+          result = await session.executeBash(payload.command.trim(), undefined, {
+            excludeFromContext: Boolean(payload.excludeFromContext),
+            id: bashId,
+          });
+          emit(payload.taskId, { type: "bash_execution_end", id: bashId, result: jsonSafe(result) });
+        } catch (error) {
+          emit(payload.taskId, { type: "bash_execution_end", id: bashId, error: publicRuntimeError(error) });
+          throw error;
+        }
+        const sdk = await loadPiSdk();
+        emit(payload.taskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
+        send({ id: request.id, ok: true, result: jsonSafe(result) });
         return;
       }
       case "sessions.delete": {
@@ -1419,8 +1793,12 @@ async function handle(request: PiHostRequest): Promise<void> {
         const stateKey = sessionStateKey(payload.taskId, cwd);
         const sessionPath = sessionFiles.get(stateKey);
         const session = agentSessions.get(stateKey);
+        session?.abortBash?.();
         if (session?.isStreaming) await session.abort();
+        await Promise.allSettled([...(pendingChangeReviewWritesBySession.get(stateKey) ?? [])]);
         await session?.dispose?.();
+        if (sessionPath) await deleteSessionChangeReviewStore(sessionPath);
+        else if (session) await deleteSessionChangeReviewStore(session);
         if (sessionPath && existsSync(sessionPath)) await unlink(sessionPath);
         sessionFiles.delete(stateKey);
         titledSessions.delete(stateKey);
@@ -1432,9 +1810,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         queueDeliveryHints.delete(stateKey);
         queueMutationLocks.delete(stateKey);
         queueRebuilds.delete(stateKey);
-        agentRunReservations.delete(stateKey);
+        manualCompactionQueues.dispose(stateKey);
+        clearAgentRunReservation(stateKey);
         executionGroupStarts.delete(stateKey);
+        const activeReview = activeChangeReviews.get(stateKey);
+        if (activeReview) cancelChangeReviewPreview(activeReview);
         activeChangeReviews.delete(stateKey);
+        pendingChangeReviewWritesBySession.delete(stateKey);
         permissionEngine.dispose(stateKey);
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -1444,7 +1826,10 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.taskId) throw new Error("taskId is required");
         const stateKey = sessionStateKey(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         const session = agentSessions.get(stateKey);
-        if (session) await session.abort();
+        if (session) {
+          session.abortBash?.();
+          await session.abort();
+        }
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -1452,7 +1837,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { taskId?: string; level?: string; cwd?: string } | undefined;
         if (!payload?.taskId || !payload.level) throw new Error("taskId and level are required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
-        session.setThinkingLevel(payload.level);
+        session.setThinkingLevel(payload.level, { persist: true });
         send({ id: request.id, ok: true, result: session.thinkingLevel });
         return;
       }
@@ -1463,7 +1848,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const runtime = await getModelRuntime();
         const model = runtime.getModel(payload.providerId, payload.modelId);
         if (!model) throw new Error(`Unknown model: ${payload.providerId}/${payload.modelId}`);
-        await session.setModel(model);
+        await session.setModel(model, { persist: true });
         send({ id: request.id, ok: true, result: { providerId: model.provider, modelId: model.id, name: model.name } });
         return;
       }
@@ -1525,6 +1910,7 @@ async function handle(request: PiHostRequest): Promise<void> {
           queueRebuilds.add(stateKey);
           try {
             session.clearQueue();
+            manualCompactionQueues.clear(stateKey);
             setQueuedPromptImages(stateKey, [], []);
             queueDeliveryHints.delete(stateKey);
             send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
@@ -1541,6 +1927,14 @@ async function handle(request: PiHostRequest): Promise<void> {
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const session = await ensureAgentSession(payload.taskId, cwd);
         const stateKey = sessionStateKey(payload.taskId, cwd);
+        const nativeFollowUpCount = queueState(session).followUp.length;
+        if ((payload.followUpIndex ?? 0) >= nativeFollowUpCount) {
+          if (!manualCompactionQueues.promote(stateKey, (payload.followUpIndex ?? 0) - nativeFollowUpCount)) throw new Error("Queued message is no longer available");
+          const result = queueStateWithDetails(session, stateKey);
+          emit(payload.taskId, { type: "queue_update", ...result });
+          send({ id: request.id, ok: true, result });
+          return;
+        }
         await withQueueMutationLock(stateKey, async () => {
           // Validate against the live queue before clearing it. A stale UI
           // index must never cause a different message to be promoted.
@@ -1607,6 +2001,12 @@ async function handle(request: PiHostRequest): Promise<void> {
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const stateKey = sessionStateKey(payload.taskId, cwd);
         const session = await ensureAgentSession(payload.taskId, cwd);
+        if (manualCompactionQueues.edit(stateKey, payload.messageId, payload.text?.trim() ?? "", images)) {
+          const result = queueStateWithDetails(session, stateKey);
+          emit(payload.taskId, { type: "queue_update", ...result });
+          send({ id: request.id, ok: true, result });
+          return;
+        }
         await withQueueMutationLock(stateKey, async () => {
           const liveQueue = queueState(session);
           reconcileQueuedPromptImages(stateKey, liveQueue.steering, liveQueue.followUp);
@@ -1661,6 +2061,12 @@ async function handle(request: PiHostRequest): Promise<void> {
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const stateKey = sessionStateKey(payload.taskId, cwd);
         const session = await ensureAgentSession(payload.taskId, cwd);
+        if (manualCompactionQueues.delete(stateKey, payload.messageId)) {
+          const result = queueStateWithDetails(session, stateKey);
+          emit(payload.taskId, { type: "queue_update", ...result });
+          send({ id: request.id, ok: true, result });
+          return;
+        }
         await withQueueMutationLock(stateKey, async () => {
           // Pi exposes clearQueue(), steer(), and followUp(), but no arbitrary
           // row deletion API. Validate the stable Renderer ID against the live
@@ -1710,6 +2116,48 @@ async function handle(request: PiHostRequest): Promise<void> {
             queueRebuilds.delete(stateKey);
           }
         });
+        return;
+      }
+      case "settings.get": {
+        const payload = request.payload as { cwd?: string } | undefined;
+        const manager = await settingsManagerFor(payload?.cwd ?? resolveWorkspaceCwd());
+        send({ id: request.id, ok: true, result: settingsSummary(manager) });
+        return;
+      }
+      case "settings.update": {
+        const payload = request.payload as Record<string, unknown> | undefined;
+        const manager = await settingsManagerFor(typeof payload?.cwd === "string" ? payload.cwd : resolveWorkspaceCwd());
+        const provider = typeof payload?.defaultProvider === "string" ? payload.defaultProvider.trim() : undefined;
+        const model = typeof payload?.defaultModel === "string" ? payload.defaultModel.trim() : undefined;
+        if (provider || model) {
+          if (!provider || !model) throw new Error("defaultProvider and defaultModel must be updated together");
+          const runtime = await getModelRuntime();
+          if (!runtime.getModel(provider, model)) throw new Error(`Unknown model: ${provider}/${model}`);
+          manager.setDefaultModelAndProvider(provider, model);
+        }
+        if (payload?.defaultThinkingLevel !== undefined) {
+          const level = String(payload.defaultThinkingLevel);
+          if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh"]).has(level)) throw new Error(`Unsupported default thinking level: ${level}`);
+          manager.setDefaultThinkingLevel(level);
+        }
+        if (payload?.transport !== undefined) {
+          const transport = String(payload.transport);
+          if (!new Set(["auto", "sse", "websocket"]).has(transport)) throw new Error(`Unsupported transport: ${transport}`);
+          manager.setTransport(transport);
+        }
+        if (payload?.compactionEnabled !== undefined) manager.setCompactionEnabled(Boolean(payload.compactionEnabled));
+        if (payload?.steeringMode !== undefined) {
+          const mode = String(payload.steeringMode);
+          if (!new Set(["all", "one-at-a-time"]).has(mode)) throw new Error(`Unsupported steering mode: ${mode}`);
+          manager.setSteeringMode(mode);
+        }
+        if (payload?.followUpMode !== undefined) {
+          const mode = String(payload.followUpMode);
+          if (!new Set(["all", "one-at-a-time"]).has(mode)) throw new Error(`Unsupported follow-up mode: ${mode}`);
+          manager.setFollowUpMode(mode);
+        }
+        await manager.flush();
+        send({ id: request.id, ok: true, result: settingsSummary(manager) });
         return;
       }
       case "extension.ui.resolve": {
