@@ -85,7 +85,7 @@ Currently supported:
 
 1. Start PiHost and show runtime status.
 2. Auto-discover projects that own Pi Sessions, remember manually added project directories, and support hiding directory references via the project context menu (without deleting files or Sessions).
-3. Expand multiple projects' session lists at once; project expansion states are independent, and the central workspace switches only when a specific session is clicked. Projects without sessions can create their first Session directly in the expanded area; creating, switching, and deleting local Sessions are supported.
+3. Expand multiple projects' session lists at once; project expansion states and Session-row caches are `cwd`-scoped, so cross-project switches never render the previous project's rows under the new project. The central workspace switches only when a specific session is clicked. Projects without sessions can create their first Session directly in the expanded area; creating, switching, and deleting local Sessions are supported.
 4. Read and display Session messages.
 5. Select an authenticated Provider/Model and thinking level.
 6. Send prompts, view streaming replies, and stop runs.
@@ -93,12 +93,13 @@ Currently supported:
 8. Reference workspace files via `@file`.
 9. Compact context and export JSONL/HTML; import Pi JSONL sessions, rename, and view session stats.
 10. Use Pi slash command catalog, Prompt, Skill, and Extension command suggestions.
-11. Authenticate locally with Provider API keys/OAuth; OpenAI Codex browser login uses Pi's loopback callback by default, exposes manual callback entry only as a fallback, and refocuses PiDeck after success. PiHost network calls honor explicit proxy environment variables, Pi's global `httpProxy`, and the cross-platform system proxy in that order.
+11. Authenticate locally with Provider API keys/OAuth; OpenAI Codex browser login uses Pi's loopback callback by default, exposes manual callback entry only as a fallback, and refocuses PiDeck after success. Closing Provider settings aborts an unfinished OAuth operation, so a later attempt starts a fresh browser flow. PiHost network calls honor explicit proxy environment variables, Pi's global `httpProxy`, and the cross-platform system proxy in that order.
 12. Switch Chinese/English and light/dark themes.
-13. Use Steering/Follow-up queues, batch mode, and the queue panel.
+13. Use Steering/Follow-up queues, batch mode with checked current-mode and in-flight feedback, and a compact Composer-attached queue stack with image thumbnails, promotion, re-editing in the original queue position, and deletion of any pending row; the queue trigger remains single-line and available when change review compresses the conversation pane.
 14. Use a plain document-flow list with earlier-message folding for long sessions (only the most recent 200 messages stay mounted; older ones fold behind a "show earlier" button), caching message panes, scroll positions, and follow state per Session.
 15. Desktop mappings of `/copy`, `/share`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`; `/share` requires a local `gh` CLI.
 16. Persist precise per-run start/end times in Pi Session custom entries so "processed" durations stay consistent across restarts.
+17. Review each run's file changes from the summary above the Composer in a responsive split pane with run selection, file navigation, unified line diff, and additions/deletions.
 
 ## 4. Message and Conversation Behavior
 
@@ -106,12 +107,14 @@ Currently supported:
 - The Renderer never receives Pi SDK instances; only serializable message objects are passed to components.
 - Markdown, code blocks, tables, and links are rendered in the Renderer presentation layer without altering Pi's raw messages.
 - Session titles avoid embedding full Skill text; after the first user message, the title first uses a reload-safe truncated fallback, then asynchronously upgrades to a 3–8 word LLM summary of the first message (new `sessions.generateTitle` bridge: PiHost summarizes with `ModelRuntime.complete`, then persists via `sessions.rename`). Manual renames take precedence over LLM upgrades. The collapsed Skill reference card for expanded `<skill>` content is still pending; it must not be claimed as complete.
-- Tool calls and thinking should render as collapsible activity blocks showing tool count, thinking-block count, and duration.
+- Completed tool calls and thinking render as collapsible activity blocks showing tool count, thinking-block count, and duration. While a run is active, its summary is only a non-expandable elapsed-time indicator; the low-emphasis inline Activity flow interleaves thinking blocks and tool calls chronologically, keeps each tool's arguments/results expandable, renders thinking as Markdown, and compacts excessive blank lines. Turn, continuation, and Activity-to-response spacing use a shared conversation rhythm. After settlement, the complete process moves into the expandable summary. Live and completed detail regions share a bounded height and scroll internally on overflow. The live region follows refreshed and late-resizing content to its newest output until an intentional upward wheel/touch gesture pauses it; returning to the inner bottom resumes following. Scrolling a process region remains isolated from the outer transcript follow state and never triggers its "jump to latest" control.
 - Pi's raw thinking/tool content is used to rebuild the step content of "processed" summaries; exact durations come from `pideck.execution-run` metadata written by PiHost via `SessionManager.appendCustomEntry()` at `agent_start`, Follow-up group boundaries, and `agent_settled`; Steering messages share the same execution group. Runtime `completedActivity` is still not a persisted field; old sessions without metadata only show "processed" and never infer durations from message timestamps.
-- Thinking summaries, streaming replies, and final Assistant messages reuse stable timeline items, avoiding unmount/rebuild of the whole message list when a reply completes.
+- Session reloads project the complete active `SessionManager.getBranch()` for the desktop transcript. `AgentSession.messages` remains the separate compaction-aware model context, so compacting reduces future prompt context without hiding persisted earlier turns after PiDeck restarts.
+- Per-run change review captures the Git working-tree state at `agent_start` and each Follow-up boundary, refreshes a running preview after known mutating tools, compares the final state authoritatively at settlement, generates patches with Pi's public `generateUnifiedPatch()`, and persists bounded `pideck.change-review` custom entries. Existing dirty files are not attributed to the run unless their working-tree content changes during that run; Steering stays in the same review group. Desktop review separators are pointer/keyboard resizable, the run picker uses a rounded accessible popover, changed paths form a collapsible directory tree, review view state is restored per Session, and an empty queued Follow-up does not hide the newest non-empty Composer change summary.
+- Thinking summaries, streaming replies, and final Assistant messages reuse stable timeline items, avoiding unmount/rebuild of the whole message list when a reply completes. Multiple Assistant commentary records in one turn keep unique identities and the shared continuation rhythm through the transition into live Activity instead of stacking full standalone-message gaps or hidden status placeholders.
 - Switching Sessions immediately jumps to the session's latest or saved position without cross-session scroll animations.
 - When the user manually leaves the bottom, a "jump to latest" affordance appears; scroll position is never force-restored.
-- Queue message additions, insertions, and processing auto-scroll only while the user is still following; scrolling up exits follow immediately.
+- Queue message additions, insertions, edits, deletions, and processing auto-scroll only while the user is still following; scrolling up exits follow immediately. Queue entries are presented as a compact inset stack attached to the Composer and expose PiHost-held image thumbnails. Editing or deleting any row validates its stable ID and atomically rebuilds the remaining Pi queue through `clearQueue()` plus ordered `steer()`/`followUp()` calls, restoring the original queue if rebuilding fails.
 
 ## 5. Current Bridge Contract
 
@@ -121,12 +124,12 @@ Currently supported:
 app.setLanguage/setWindowTheme/quit
 runtime.status
 projects.list/chooseDirectory/remove/setTrust
-sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
+sessions.list/create/delete/remove/messages/runMetadata/changeReviews/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
 models.list
 workspace.snapshot
-providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl
+providers.list/login/cancelLogin/logout/setApiKey/resolveAuth/openAuthUrl
 agent.prompt/abort/setThinkingLevel/setModel/setScopedModels
-agent.queue/setQueueModes/clearQueue/promoteQueue
+agent.queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue
 approvals.resolve
 events.subscribe
 extensions.resolveUi
@@ -192,7 +195,7 @@ Integration constraints:
 Still planned, not current product promises:
 
 - Print, JSON, RPC, stdin, and Auth Print compatibility channels.
-- Monaco Diff, task-level baselines, and chunk-by-chunk review.
+- Chunk-by-chunk accept/revert and an editable Monaco merge workflow on top of the integrated task-baseline unified diff review.
 - Extension TUI-only `custom` components, themes, Widgets, Footers, Headers — anything that cannot pass component instances across processes.
 
 ## 9. Technical and Security Constraints
@@ -235,6 +238,8 @@ providers.list
 sessions.create
 sessions.runMetadata
 sessions.capabilities
+agent.queue
+agent.deleteQueue (missing stable ID must fail without mutation)
 workspace.snapshot
 ```
 

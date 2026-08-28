@@ -16,8 +16,9 @@ test("close-confirmation copy keys exist in both locale blocks", () => {
   const source = fs.readFileSync(path.join(__dirname, "../../../packages/i18n/src/index.ts"), "utf8");
   const keys = ["confirmCloseTitle", "confirmCloseBody", "confirmCloseDontAsk", "confirmCloseExit", "confirmCloseCancel"];
   // The catalog is a single `copy` object with `zh:` and `en:` literal blocks.
-  const zhBlock = source.slice(source.indexOf("zh:"), source.indexOf("en:"));
-  const enBlock = source.slice(source.indexOf("en:"));
+  const englishLocaleStart = source.indexOf("\n  en: {");
+  const zhBlock = source.slice(source.indexOf("\n  zh: {"), englishLocaleStart);
+  const enBlock = source.slice(englishLocaleStart);
   for (const key of keys) {
     assert.ok(zhBlock.includes(`${key}:`), `zh block must define ${key}`);
     assert.ok(enBlock.includes(`${key}:`), `en block must define ${key}`);
@@ -65,6 +66,16 @@ test("new task creation stays scoped to the current project", () => {
   // a task once leaked a phantom session into every other expanded project).
   assert.match(controller, /setTasks\(\(current\) => sortTasksByUpdatedAt\(\[task, \.\.\.current\.filter/);
   assert.doesNotMatch(controller, /updateTaskLists\(\(current\) => sortTasksByUpdatedAt\(\[task, \.\.\.current\.filter/);
+});
+
+test("cross-project switches keep each sidebar session list cwd-scoped", () => {
+  const sidebar = rendererSource("app-sidebar.tsx");
+  const appView = rendererSource("app-view.tsx");
+
+  const sidebarProps = appView.slice(appView.indexOf("<AppSidebar"), appView.indexOf("<PaneResizeHandle"));
+  assert.match(sidebar, /const projectTasks = projectTasksByCwd\[project\.cwd\] \?\? \[\]/);
+  assert.doesNotMatch(sidebar, /selected \? tasks : projectTasksByCwd/);
+  assert.doesNotMatch(sidebarProps, /tasks=\{tasks\}/);
 });
 
 test("startup restores sessions for every persisted expanded project", () => {
@@ -116,6 +127,18 @@ test("execution durations use durable Pi session metadata", () => {
   assert.match(runtimeEvents, /sessions\.runMetadata\(taskId, projectCwd\)/);
   assert.match(executionSummary, /persistedDurationMs/);
   assert.match(timeline, /persisted:\$\{record\.id\}/);
+});
+
+test("running execution is a timer only and completed details stay bounded", () => {
+  const executionSummary = rendererSource("ui/execution-summary.tsx");
+  const styles = rendererSource("styles.css");
+
+  assert.match(executionSummary, /if \(running\) \{\s*return <div className="execution-summary execution-summary-running" role="timer">/);
+  assert.match(executionSummary, /<span>\{t\.executionProcessing\(duration\)\}<\/span>/);
+  const runningBlock = executionSummary.slice(executionSummary.indexOf("if (running)"), executionSummary.indexOf("// A restored group"));
+  assert.doesNotMatch(runningBlock, /<details|<summary|Icon/);
+  assert.match(styles, /\.execution-details\s*\{[^}]*max-height:\s*min\(420px, 38vh\)[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s);
+  assert.match(styles, /\.execution-summary-running\s*\{[^}]*cursor:\s*default/);
 });
 
 test("name command opens an editable rename dialog without an argument", () => {
@@ -247,6 +270,42 @@ test("OpenAI Codex OAuth prefers the loopback callback and restores the desktop 
   assert.match(main, /if \(method === "oauth"\) focusHostWindow\(\)/);
   assert.match(providerSettings, /authPrompt\.type !== "manual_code" \|\| manualAuthVisible/);
   assert.match(providerSettings, /setAuthPrompt\(null\); setManualAuthVisible\(false\); setAuthNotice\(null\)/);
+});
+
+test("closing Provider settings cancels an unfinished OAuth login", () => {
+  const host = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
+    "utf8",
+  );
+  const contracts = fs.readFileSync(
+    path.join(__dirname, "../../../packages/contracts/src/index.ts"),
+    "utf8",
+  );
+  const main = fs.readFileSync(
+    path.join(__dirname, "../src/main/index.ts"),
+    "utf8",
+  );
+  const preload = fs.readFileSync(
+    path.join(__dirname, "../src/preload/index.ts"),
+    "utf8",
+  );
+  const providerSettings = fs.readFileSync(
+    path.join(__dirname, "../src/renderer/ui/provider-settings.tsx"),
+    "utf8",
+  );
+
+  assert.match(contracts, /cancelLogin\(authOperationId: string\): Promise<void>/);
+  assert.match(contracts, /\| "providers\.cancelLogin"/);
+  assert.match(main, /"providers:cancel-login"/);
+  assert.match(preload, /cancelLogin: .*"providers:cancel-login"/);
+  assert.match(providerSettings, /activeOAuthLoginIdsRef\.current/);
+  assert.match(providerSettings, /providers\.cancelLogin\(authOperationId\)/);
+  assert.match(providerSettings, /crypto\.randomUUID\(\)/);
+  assert.match(host, /activeProviderLoginByProvider\.get\(payload\.providerId\)/);
+  assert.match(host, /controller\.abort\(new Error\("Authentication superseded by a new login attempt"\)\)/);
+  assert.match(host, /createAuthInteraction\(operationId, payload\.providerId, undefined, operation\.controller\.signal\)/);
+  assert.match(host, /case "providers\.cancelLogin"/);
+  assert.match(host, /controller\.abort\(new Error\("Authentication cancelled"\)\)/);
 });
 
 test("Pi 0.84.3 thinking command is handled by the desktop thinking selector", () => {
@@ -447,6 +506,141 @@ test("the active final turn keeps a stable summary and response item", () => {
   assert.equal(settled.find((item) => item.type === "message" && item.message.id === "a1").stableKey, "response-task-1-0");
 });
 
+test("Assistant continuations keep unique identities and compact spacing into live activity", () => {
+  const items = buildMessageTimelineItems({
+    messages: [
+      message("u1", "user", "build", 1),
+      message("a-progress-1", "assistant", "starting", 2),
+      message("a-progress-2", "assistant", "packaging", 3),
+      message("a-final", "assistant", "done", 4),
+    ],
+    language: "en",
+    running: false,
+    completedActivity: [activity("run")],
+    steeringMessageKeys: [],
+    taskId: "task-progress",
+  });
+  const assistantItems = items.filter((item) => item.type === "message" && item.message.role === "assistant");
+  assert.equal(assistantItems.length, 3);
+  assert.equal(assistantItems.at(-1).stableKey, "response-task-progress-0");
+  assert.equal(new Set(assistantItems.map((item) => item.stableKey ?? messageIdentity(item.message))).size, 3);
+
+  const timelineView = rendererSource("ui/message-timeline.tsx");
+  const styles = rendererSource("styles.css");
+  assert.match(timelineView, /if \(item\?\.type === "live"\) return true/);
+  assert.match(timelineView, /assistant-continues/);
+  assert.match(timelineView, /timeline-item-\$\{items\[index\]\?\.type/);
+  assert.doesNotMatch(timelineView, /live-message-status/);
+  assert.match(styles, /--conversation-turn-gap:\s*28px/);
+  assert.match(styles, /--conversation-continuation-gap:\s*20px/);
+  assert.match(styles, /\.timeline-item\.assistant-continues \.assistant-message/);
+  assert.match(styles, /\.live-activity \{[^}]*border:\s*0;[^}]*background:\s*transparent;/);
+  assert.match(styles, /\.live-response-content\.after-activity/);
+});
+
+test("per-run file changes open a persisted split-pane review", () => {
+  const contracts = fs.readFileSync(path.join(__dirname, "../../../packages/contracts/src/index.ts"), "utf8");
+  const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
+  const preload = fs.readFileSync(path.join(__dirname, "../src/preload/index.ts"), "utf8");
+  const conversation = rendererSource("app-conversation.tsx");
+  const review = rendererSource("ui/change-review.tsx");
+  const reviewState = rendererSource("use-change-review.ts");
+  const resizeHandle = rendererSource("ui/pane-resize-handle.tsx");
+  const styles = rendererSource("styles.css");
+
+  assert.match(contracts, /export interface SessionChangeReview/);
+  assert.match(contracts, /changeReviews\(taskId: string/);
+  assert.match(host, /pideck\.change-review/);
+  assert.match(host, /event\.type === "tool_execution_end"[\s\S]*?previewChangeReview/);
+  assert.match(host, /case "sessions\.changeReviews"/);
+  assert.match(preload, /sessions:change-reviews/);
+  assert.match(main, /sessions:change-reviews/);
+  assert.match(conversation, /ChangeReviewLauncher/);
+  assert.match(conversation, /ChangeReviewPanel/);
+  assert.match(review, /parseUnifiedPatch/);
+  assert.match(review, /change-review-line-number/);
+  assert.match(review, /buildChangeFileTree/);
+  assert.match(review, /change-review-tree-directory/);
+  assert.match(review, /aria-expanded=\{isExpanded\}/);
+  assert.match(review, /change-review-run-menu/);
+  assert.doesNotMatch(review, /<select/);
+  assert.match(review, /change-review-files-resize-handle/);
+  assert.match(conversation, /change-review-panel-resize-handle/);
+  assert.match(resizeHandle, /role="separator"/);
+  assert.match(resizeHandle, /setPointerCapture/);
+  assert.match(reviewState, /viewStatesRef/);
+  assert.match(reviewState, /launcherReview/);
+  assert.doesNotMatch(reviewState, /setOpen\(false\)/);
+  assert.match(styles, /\.conversation-layout\.review-open/);
+  assert.match(styles, /\.change-review-panel/);
+  assert.match(styles, /\.pane-resize-handle/);
+});
+
+test("queued messages expose image thumbnails, editing, and arbitrary deletion", () => {
+  const composer = rendererSource("ui/composer.tsx");
+  const controller = rendererSource("use-app-controller.tsx");
+  const styles = rendererSource("styles.css");
+  const contracts = fs.readFileSync(path.join(__dirname, "../../../packages/contracts/src/index.ts"), "utf8");
+  const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
+  const preload = fs.readFileSync(path.join(__dirname, "../src/preload/index.ts"), "utf8");
+
+  assert.match(contracts, /export interface AgentQueuedMessage/);
+  assert.match(contracts, /editQueue\(taskId: string, messageId: string/);
+  assert.match(contracts, /deleteQueue\(taskId: string, messageId: string/);
+  assert.match(composer, /composer-queue-thumbnail/);
+  assert.match(composer, /props\.onEditQueue\(item\.message, item\.delivery\)/);
+  assert.match(composer, /props\.onDeleteQueue\(item\.message\)/);
+  assert.match(composer, /composer-queue-edit-banner/);
+  assert.match(styles, /\.composer-queue \{[^}]*margin:\s*0 auto -11px/);
+  assert.match(styles, /\.composer-queue-header \{ display:\s*none;/);
+  assert.match(styles, /\.composer-queue-delete:hover:not\(:disabled\)/);
+  assert.match(controller, /window\.pideck\.agent\.editQueue/);
+  assert.match(controller, /window\.pideck\.agent\.deleteQueue/);
+  assert.match(host, /case "agent\.editQueue"/);
+  assert.match(host, /case "agent\.deleteQueue"/);
+  assert.match(host, /original\.steering\.filter\(\(message\) => message\.id !== messageId\)/);
+  assert.match(host, /queueRebuilds\.add\(stateKey\)/);
+  assert.match(main, /agent:edit-queue/);
+  assert.match(main, /agent:delete-queue/);
+  assert.match(preload, /agent:edit-queue/);
+  assert.match(preload, /agent:delete-queue/);
+});
+
+test("queue processing mode reflects the Pi mode and acknowledges mutations", () => {
+  const composer = rendererSource("ui/composer.tsx");
+  const controller = rendererSource("use-app-controller.tsx");
+  const styles = rendererSource("styles.css");
+
+  assert.match(composer, /props\.queueState\.steeringMode === props\.queueState\.followUpMode/);
+  assert.match(composer, /role="menuitemradio" aria-checked=\{queueBatchMode === "all"\}/);
+  assert.match(composer, /role="menuitemradio" aria-checked=\{queueBatchMode === "one-at-a-time"\}/);
+  assert.match(composer, /className={`queue-mode-option/);
+  assert.match(composer, /pendingQueueBatchMode === "all"[\s\S]*queue-mode-pending/);
+  assert.match(composer, /const applied = await props\.onQueueModes/);
+  assert.match(composer, /if \(applied\) setQueueMenuOpen\(false\)/);
+  assert.match(controller, /async function setQueueModes[\s\S]*setQueueMutationBusy\(true\)[\s\S]*return true[\s\S]*return false[\s\S]*setQueueMutationBusy\(false\)/);
+  assert.match(styles, /\.queue-mode-option\.active/);
+  assert.match(styles, /\.queue-mode-option:not\(\.active\) > svg \{ opacity: 0; \}/);
+});
+
+test("review split compression keeps the queue delivery control on one line", () => {
+  const composer = rendererSource("ui/composer.tsx");
+  const styles = rendererSource("styles.css");
+
+  assert.match(composer, /composer-model-control/);
+  assert.match(composer, /composer-queue-control/);
+  assert.match(composer, /composer-mention/);
+  assert.match(styles, /\.conversation-primary \{[^}]*container-name:\s*conversation-primary;[^}]*container-type:\s*inline-size;/);
+  assert.match(styles, /\.composer-queue-control[^}]*flex:\s*0 0 auto/);
+  assert.match(styles, /\.composer-model-control \{[^}]*min-width:\s*0;[^}]*flex:\s*0 1 300px/);
+  assert.match(styles, /\.chip, \.model-chip \{[^}]*white-space:\s*nowrap/);
+  assert.match(styles, /@container conversation-primary \(max-width: 760px\)[\s\S]*\.composer-hint \{ display:\s*none;/);
+  assert.match(styles, /@container conversation-primary \(max-width: 560px\)[\s\S]*\.composer-mention, \.model-provider \{ display:\s*none;/);
+  assert.doesNotMatch(styles, /\.composer-tools \.chip\.subtle \{ display:\s*none;/);
+});
+
 test("runtime activity aligns to the newest persisted turn", () => {
   const messages = [
     message("u1", "user", "old", 1),
@@ -544,6 +738,18 @@ test("auto-scroll survives content shrinking and programmatic smooth scrolls", (
   assert.match(timeline, /scrollToLatest: \(behavior\) => \{[\s\S]*?setFollow\(true\)/);
 });
 
+test("nested process scrolling does not change transcript follow state", () => {
+  const timeline = rendererSource("ui/message-timeline.tsx");
+  const liveActivity = rendererSource("ui/live-activity.tsx");
+  const executionSummary = rendererSource("ui/execution-summary.tsx");
+
+  assert.match(timeline, /target\.closest\("\[data-conversation-scroll-island\]"\)/);
+  assert.match(timeline, /if \(isNestedScrollIsland\(event\.target\)\) return;/);
+  assert.match(timeline, /if \(!element \|\| event\.target !== element\) return;/);
+  assert.match(liveActivity, /data-conversation-scroll-island="true"/);
+  assert.match(executionSummary, /data-conversation-scroll-island="true"/);
+});
+
 test("inactive conversation panes stay laid out so the browser keeps their scrollTop", () => {
   const conversation = rendererSource("app-conversation.tsx");
   const styles = rendererSource("styles.css");
@@ -589,7 +795,8 @@ test("long running turn surfaces live thinking, short turn does not", () => {
   });
   const longLive = longItems.find((item) => item.type === "live");
   assert.ok(longLive, "running turn with enough thinking exposes a live item");
-  assert.equal(longLive.thinkingText, longActivity[0].detail);
+  assert.deepEqual(longLive.activitySteps.map((step) => step.id), ["t-long"]);
+  assert.equal(longLive.activitySteps[0].detail, longActivity[0].detail);
 
   const shortActivity = [{
     id: "t-short",
@@ -609,7 +816,45 @@ test("long running turn surfaces live thinking, short turn does not", () => {
   });
   const shortLive = shortItems.find((item) => item.type === "live");
   assert.ok(shortLive, "running turn still exposes a live item");
-  assert.equal(shortLive.thinkingText, undefined, "short turn under the threshold hides live thinking");
+  assert.deepEqual(shortLive.activitySteps, [], "short turn under the threshold hides live thinking");
+});
+
+test("live activity interleaves compact thinking and tool calls", () => {
+  const activeActivity = [
+    { id: "think-1", kind: "thinking", label: "Thinking", detail: "**Inspecting files**\n\n\n\nbefore the tool call", startedAt: Date.now() - 4_000, endedAt: Date.now() - 3_000 },
+    { id: "tool-1", kind: "tool", label: "read", args: { path: "src/index.ts" }, result: "contents", startedAt: Date.now() - 3_000, endedAt: Date.now() - 2_000 },
+    { id: "think-2", kind: "thinking", label: "Thinking", detail: "**Applying the result**", startedAt: Date.now() - 2_000 },
+  ];
+  const items = buildMessageTimelineItems({
+    messages: [message("u1", "user", "first", 1)],
+    language: "en",
+    running: true,
+    completedActivity: [],
+    steeringMessageKeys: [],
+    taskId: "task-live-tools",
+    activeActivity,
+  });
+  const live = items.find((item) => item.type === "live");
+  assert.ok(live, "running turn exposes a live item");
+  assert.deepEqual(live.activitySteps.map((step) => step.id), ["think-1", "tool-1", "think-2"], "tool calls stay between their surrounding thinking blocks");
+  assert.doesNotMatch(live.activitySteps[0].detail, /\n{3,}/, "provider blank-line runs are collapsed in the live feed");
+
+  const liveActivity = rendererSource("ui/live-activity.tsx");
+  assert.match(liveActivity, /steps\.map/);
+  assert.match(liveActivity, /step\.kind === "thinking"/);
+  assert.match(liveActivity, /t\.executionTools/);
+  assert.match(liveActivity, /MarkdownContent text=\{step\.detail/);
+});
+
+test("live activity follows refreshed and asynchronously resized content", () => {
+  const liveActivity = rendererSource("ui/live-activity.tsx");
+
+  assert.match(liveActivity, /list\.scrollTop = list\.scrollHeight/);
+  assert.match(liveActivity, /if \(followingRef\.current\) pinToLatest\(\)/);
+  assert.match(liveActivity, /new ResizeObserver/);
+  assert.match(liveActivity, /observer\.observe\(content\)/);
+  assert.match(liveActivity, /\[pinToLatest, steps\.length\]/);
+  assert.match(liveActivity, /event\.deltaY < 0/);
 });
 
 test("live thinking retracts into the collapsed summary on settle", () => {
@@ -630,7 +875,7 @@ test("live thinking retracts into the collapsed summary on settle", () => {
     taskId: "task-retract",
     activeActivity,
   });
-  assert.ok(running.find((item) => item.type === "live" && item.thinkingText), "thinking is live during the run");
+  assert.ok(running.find((item) => item.type === "live" && item.activitySteps.some((step) => step.kind === "thinking")), "thinking is live during the run");
 
   const settled = buildMessageTimelineItems({
     messages: [message("u1", "user", "first", 1), message("a1", "assistant", "here is the fix", 2)],
@@ -680,7 +925,7 @@ test("live thinking re-appears in a later round of a steered run", () => {
   });
   const live = items.find((item) => item.type === "live");
   assert.ok(live, "a live item still appears after a prior reply in the same run");
-  assert.equal(live.thinkingText, round2Thinking.detail, "live thinking shows only the in-progress round, not the ended prior one");
+  assert.equal(live.activitySteps.find((step) => step.kind === "thinking")?.detail, round2Thinking.detail, "live thinking shows only the in-progress round, not the ended prior one");
   assert.ok(items.find((item) => item.type === "message" && item.message.id === "a1"), "prior reply stays visible above the live panel");
 });
 
@@ -712,6 +957,6 @@ test("ended thinking retracts once a later reply formalizes it", () => {
   });
   const live = items.find((item) => item.type === "live");
   assert.ok(live, "live item still exists while the run continues");
-  assert.equal(live.thinkingText, undefined, "ended thinking with a reply present does not linger in the live panel");
+  assert.equal(live.activitySteps.some((step) => step.kind === "thinking"), false, "ended thinking with a reply present does not linger in the live panel");
 });
 

@@ -15,6 +15,8 @@ export type PiSdk = {
   ProjectTrustStore?: new (agentDir: string) => any;
   getAgentDir?: () => string;
   parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
+  sessionEntryToContextMessages?: (entry: unknown) => unknown[];
+  generateUnifiedPatch?: (path: string, oldContent: string, newContent: string, contextLines?: number) => string;
   SessionManager: {
     list(cwd: string): Promise<any[]>;
     listAll(): Promise<any[]>;

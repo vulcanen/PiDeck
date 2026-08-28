@@ -5,6 +5,7 @@ import { messageIdentity } from "../message-utils";
 import { buildMessageTimelineItems } from "../timeline-utils";
 import type { ConversationScrollHandle, ConversationScrollSnapshot } from "../use-conversation-scroll";
 import { ExecutionSummary } from "./execution-summary";
+import { LiveActivity } from "./live-activity";
 import { MarkdownContent } from "./markdown";
 import { MemoMessageView } from "./message-view";
 import { WorkingIndicator } from "./working-indicator";
@@ -22,6 +23,15 @@ const FOLD_WINDOW = 200;
 const FOLD_STEP = 200;
 // Distance from the bottom that still counts as reading the latest message.
 const FOLLOW_THRESHOLD = 80;
+
+function isAssistantTimelineItem(item: { type: string; message?: any } | undefined): boolean {
+  if (item?.type === "live") return true;
+  return item?.type === "message" && item.message?.role !== "user" && item.message?.role !== "toolResult";
+}
+
+function isNestedScrollIsland(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-conversation-scroll-island]"));
+}
 
 interface MessageTimelineProps {
   messages: any[];
@@ -122,6 +132,10 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   // waiting for the scroll event closes the window in which a pending pin could
   // yank the reader back down, which is what made scrolling up feel springy.
   const handleWheel = useCallback((event: WheelEvent) => {
+    // Process detail regions own their scroll position. Their wheel events
+    // bubble through the conversation pane, but must not opt the outer
+    // transcript out of follow or show an unrelated "jump to latest" button.
+    if (isNestedScrollIsland(event.target)) return;
     if (event.deltaY >= 0) return;
     endPinning();
     if (userScrollOverrideRef.current) return;
@@ -129,12 +143,16 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     setFollow(false);
   }, [endPinning, setFollow]);
 
-  const handleTouchStart = useCallback(() => { touchActiveRef.current = true; }, []);
+  const handleTouchStart = useCallback((event: TouchEvent) => {
+    if (!isNestedScrollIsland(event.target)) touchActiveRef.current = true;
+  }, []);
   const handleTouchEnd = useCallback(() => { touchActiveRef.current = false; }, []);
 
-  const handleNativeScroll = useCallback(() => {
+  const handleNativeScroll = useCallback((event: Event) => {
     const element = conversationRef.current;
-    if (!element) return;
+    // Scroll does not bubble, so this listener uses capture for the pane itself.
+    // Ignore captured scroll events from independently scrollable descendants.
+    if (!element || event.target !== element) return;
     const previous = scrollPositionsRef.current[scrollKey];
     const top = element.scrollTop;
     const nearBottom = Math.max(0, element.scrollHeight - element.clientHeight - top) <= FOLLOW_THRESHOLD;
@@ -247,14 +265,10 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
       ? <ExecutionSummary steps={item.steps} language={language} running={Boolean(item.running)} />
       : item.type === "live"
         ? <article className="message assistant-message live-message">
-            {item.thinkingText
-              ? <div className="live-thinking">
-                  <div className="live-thinking-label">{copy[language].executionThinking}</div>
-                  <div className="live-thinking-body">{item.thinkingText}</div>
-                </div>
-              : null}
-            <div className="live-message-status">{item.text ? <span className="live-pill"><span className="live-dot" />{copy[language].working}</span> : null}</div>
-            {item.text ? <div className="message-content"><MarkdownContent text={item.text} language={language} /></div> : <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} />}
+            <LiveActivity steps={item.activitySteps} language={language} />
+            {item.text
+              ? <div className={`message-content live-response-content ${item.activitySteps.length ? "after-activity" : ""}`}><MarkdownContent text={item.text} language={language} /></div>
+              : <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} />}
           </article>
         : <MemoMessageView message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />;
   }, [items, language, onContextMenuImage, onPreviewImage]);
@@ -270,7 +284,7 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     {hiddenCount > 0 && <button type="button" className="timeline-show-earlier" onClick={showEarlier}>
       {copy[language].showEarlierMessages(hiddenCount)}
     </button>}
-    {visibleIndexes.map((index) => <div key={getItemKey(index)} className="timeline-item">{renderItem(index)}</div>)}
+    {visibleIndexes.map((index) => <div key={getItemKey(index)} className={`timeline-item timeline-item-${items[index]?.type ?? "unknown"} ${isAssistantTimelineItem(items[index]) && isAssistantTimelineItem(items[index + 1]) ? "assistant-continues" : ""}`}>{renderItem(index)}</div>)}
     {footer ? <div className="timeline-item">{footer}</div> : null}
   </div>;
 }

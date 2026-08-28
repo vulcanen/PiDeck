@@ -34,16 +34,21 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
   const persistedDurationMs = running ? undefined : steps.find((step) => Number.isFinite(step.durationMs))?.durationMs;
   const seconds = Math.max(0, (persistedDurationMs ?? endedAt - startedAt) / 1000);
   const duration = formatActivityDuration(seconds);
+  if (running) {
+    return <div className="execution-summary execution-summary-running" role="timer">
+      <span>{t.executionProcessing(duration)}</span>
+    </div>;
+  }
   // A restored group can have unknown per-step timing while its total run
   // duration is authoritative in the persisted metadata.
-  const timingKnown = running || persistedDurationMs !== undefined || steps.every((step) => step.timing !== "unknown");
+  const timingKnown = persistedDurationMs !== undefined || steps.every((step) => step.timing !== "unknown");
   const toolContent = (step: ActivityStep) => (<>
     {step.args !== undefined && <div className="execution-value"><span>{t.executionArguments}</span><pre>{activityValue(step.args)}</pre></div>}
     {step.result !== undefined && <div className="execution-value"><span>{t.executionResult}</span><pre>{activityValue(step.result)}</pre></div>}
   </>);
   return <details className="execution-summary" open={false}>
-    <summary><span>{running ? t.executionProcessing(duration) : timingKnown ? t.executionProcessed(duration) : t.executionProcessedUnknown}</span><Icon name="chevron" size={13} /></summary>
-    <div className="execution-details">
+    <summary><span>{timingKnown ? t.executionProcessed(duration) : t.executionProcessedUnknown}</span><Icon name="chevron" size={13} /></summary>
+    <div className="execution-details" data-conversation-scroll-island="true">
       {steps.map((step) => {
         const heading = <>
           <span className="execution-step-icon"><Icon name={step.kind === "thinking" ? "spark" : step.isError ? "alert" : "terminal"} size={13} /></span>

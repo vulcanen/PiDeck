@@ -5,9 +5,10 @@
 
 ## 1. Source of Truth and State Boundaries
 
-- Pi `AgentSession.messages` / Session JSONL is the source of truth for messages; the Renderer stores only serializable DTOs and does not duplicate a message database.
+- Pi Session JSONL is the source of truth for messages; the Renderer stores only serializable DTOs and does not duplicate a message database. `AgentSession.messages` is only the current compaction-aware model context and must not be used as the reload transcript. PiHost projects the complete active branch from `SessionManager.getBranch()` for display so persisted pre-compaction turns remain visible after restart.
 - Pi persists raw `thinking`, `toolCall`, `toolResult`, and final message content; it does not guarantee a ready-made UI summary such as "processed for xx seconds".
 - `TaskUiState.activity`, `streamText`, and `completedActivity` are runtime state of the current Renderer lifecycle and are lost after a restart.
+- Each expanded project's sidebar Session list must render exclusively from its `cwd`-scoped cache. During a cross-project switch, never use the previous active project's global task list as a fallback for the newly selected project; show that project's cached rows or its loading state instead.
 - The step content of historical execution summaries should preferably be rebuilt from Pi's saved thinking/tool content; exact durations must only be read from the `pideck.execution-run` metadata that PiHost writes via `SessionManager.appendCustomEntry()`, never inferred from user/assistant message timestamps.
 - Do not write Renderer activity details back into the Pi Session, and do not change the Pi Session file format to restore UI positions. PiHost may use Pi's official custom entry API to store minimal, versionable run start/end metadata; that data must not enter the LLM context.
 
@@ -20,10 +21,14 @@
 
 ## 3. Timeline Stability
 
-- Thinking summaries, streaming replies, and the final persisted reply must be stable timeline items of the same logical turn: the execution summary of an active turn uses a stable key, and the streaming reply and the final Assistant message must reuse the same response key. Do not unmount/rebuild them through footer, temporary nodes, and final messages interchangeably.
+- Thinking summaries, streaming replies, and the final persisted reply must be stable timeline items of the same logical turn: the execution summary of an active turn uses a stable key, and the streaming reply and the final Assistant message must reuse the same response key. Earlier Assistant commentary records in that turn must retain their own message identities and compact continuation spacing, including the transition from the latest Assistant commentary into the live Activity row; never assign one response key to multiple mounted rows. Do not unmount/rebuild them through footer, temporary nodes, and final messages interchangeably.
 - Each session, each turn, and each execution group must be isolated by `taskId`. When a message has no Pi id, use a stable role/timestamp/content identity; do not use array index as a long-term key.
 - `agent_start → turn/message/tool events → agent_end/agent_settled` must only update the state of the corresponding turn, not trigger a rebuild of the whole page or the whole message list.
-- When adding or changing message snapshot merge logic, preserve Pi's canonical order; do not reorder queued turns by timestamp.
+- When adding or changing message snapshot merge logic, preserve Pi's canonical branch order; do not reorder queued turns by timestamp. Compaction may replace the snapshot authoritatively, but the replacement must still contain the full display branch rather than only `AgentSession.messages`.
+- The active turn's live activity feed must preserve the `ActivityStep` event order, interleaving thinking and tool calls instead of concatenating only thinking text. While the turn is running, its execution-summary row is a non-interactive elapsed-time indicator; the live feed owns process detail and uses a low-emphasis inline flow with shared turn/continuation/section spacing rather than an isolated raised card or hidden status spacer. After settlement, the live feed retracts and the complete process moves into the expandable summary. Tool arguments/results stay collapsed until requested; presentation-only whitespace normalization must never alter Pi's persisted message content.
+- Per-run file review uses the same execution-group boundaries: Steering shares the active Git working-tree baseline; a Follow-up closes the previous review and begins the next at one shared boundary snapshot. Pre-existing dirty files must not be attributed to the run unless their content changes after that baseline. Persist review metadata as bounded Pi Session custom entries; binary/oversized files remain listed but must not create unbounded Session or IPC payloads. Review-open state, selected run, and split widths are Session-scoped presentation state: switching away and back must restore them without exposing the previous Session's review for an intermediate render. Run selection and the collapsible directory tree are Renderer projections over the flat review DTO; they must not rewrite PiHost review records. An empty running Follow-up must not hide the newest non-empty Composer change summary.
+- Expanded completed execution summaries and the live activity feed share a bounded detail height. Overflow scrolls inside the process region with contained overscroll; an execution summary must never grow without a viewport-relative ceiling.
+- While the live activity feed is following, every `ActivityStep` refresh and late asynchronous content resize must pin its inner scroll region to the newest process output. A real upward wheel/touch gesture suspends this inner follow so the reader can inspect earlier steps; reaching the inner bottom restores it. Process-region wheel, touch, and captured scroll events must not change the outer transcript's follow state or show its "jump to latest" control.
 
 ## 4. Long Sessions and Scroll Containers
 
@@ -45,7 +50,8 @@
 - A programmatic smooth scroll reports "not at the bottom" for its whole duration. Latch follow with a pinning flag while it is in flight (with a timeout safety valve so an interrupted scroll cannot leave it latched), otherwise the "jump to latest" button flashes back on mid-animation.
 - Restore follow only when the user scrolls back to the bottom, clicks "jump to latest", or explicitly sends a new message.
 - `scrollToLatest` must record the follow *intent*, not just the current offset: `sendPrompt` calls it before the optimistic message exists, so the flag is what keeps the viewport pinned once the new rows render.
-- For queue list changes, formal insertion of queued messages, a queued turn starting processing, and streaming text growth, auto-scroll only when follow is `true`.
+- For queue list changes, edits, deletions, formal insertion of queued messages, a queued turn starting processing, and streaming text growth, auto-scroll only when follow is `true`.
+- Queue rows are Renderer DTOs over Pi's real steering/follow-up queues. They may use a compact Composer-attached visual stack, but must not imply unsupported drag reordering. Batch-mode controls must derive their selected state from Pi's returned `steeringMode`/`followUpMode`, lock while mutating, and close only after confirmation. Composer controls must respond to the conversation pane width rather than only the window viewport: change-review compression may hide secondary hints, but the queue trigger must remain available and must not wrap. Image thumbnails come from PiHost's attachment sidecar; editing or deleting an arbitrary row must validate its stable queue-entry ID and atomically rebuild the remaining queue through Pi's official `clearQueue()`/`steer()`/`followUp()` APIs under a mutation lock, never maintain a second Renderer queue.
 - Do not trigger expensive React list recomputation on every scroll event; use lightweight DOM snapshots and passive listeners. Scroll handlers must not call `onAtEndChange` from an inactive pane.
 - Any auto-follow fix must verify: scrolling up from the bottom does not jerk, an intentional swipe up is not pulled back, switching sessions still restores the original position, and first open still lands at the latest position.
 
@@ -59,12 +65,19 @@
 
 - [ ] On first launch, each Session is at its latest message.
 - [ ] After scrolling up, switching Session and back keeps the position unchanged.
+- [ ] Switching to a Session in another project never renders the previous project's Session rows under the new project, even for one intermediate frame.
 - [ ] A message containing Mermaid/KaTeX/highlighted code does not shift the reader's position when it finishes rendering above the viewport.
 - [ ] Sending a new message pins to the bottom and stays pinned through streaming; the reply completing (live row → final message) does not drop follow.
 - [ ] "Jump to latest" scrolls smoothly without the button flashing back on mid-animation.
 - [ ] A session longer than 200 items shows the "show earlier" button, and expanding it does not jump the viewport.
-- [ ] Thinking summaries, streaming replies, and final replies do not jitter or reorder the whole list at the moment of completion.
-- [ ] Queue additions, insertions, processing, and streaming growth auto-follow when at the bottom; they do not steal position after scrolling up.
+- [ ] Thinking summaries, streaming replies, and final replies do not jitter or reorder the whole list at the moment of completion; consecutive Assistant commentary and its transition into live Activity use compact spacing and unique mounted keys.
+- [ ] A completed run's change summary opens the matching persisted baseline diff; earlier dirty files are excluded unless changed in that run, Steering stays grouped, Follow-up starts a new review, and oversized/binary content remains bounded. Switching Sessions restores each review's open/selected/split state, queued empty runs retain the newest non-empty count, and every desktop divider works by pointer and keyboard.
+- [ ] During execution, the summary is only a non-expandable elapsed-time indicator; thinking blocks and tool calls remain in chronological order in the live feed, tool details are keyboard-expandable, and provider blank-line runs do not create oversized gaps.
+- [ ] The live activity region follows refreshed and late-resizing content to its inner bottom until the user intentionally scrolls upward; returning to the bottom resumes following, and scrolling this inner region never shows or changes the outer transcript's "jump to latest" control.
+- [ ] After settlement, the complete process is available in the expandable summary, whose bounded detail region scrolls internally instead of growing indefinitely.
+- [ ] Queue additions, edits, deletions, insertions, processing, and streaming growth auto-follow when at the bottom; they do not steal position after scrolling up.
+- [ ] Queue batch-mode options visibly identify Pi's confirmed current mode, expose pending state, remain available for an empty queue, and keep the queue trigger single-line when the change-review split narrows the conversation pane; queued images render as previewable thumbnails; saving/cancelling an edit preserves queue position, attachments, and the user's prior Composer draft; deleting any steering/follow-up row preserves every remaining row's order and images.
+- [ ] After a restart, pre-compaction messages remain visible from the full active Session branch, while the model still receives only Pi's compacted context.
 - [ ] After a restart, historical turns with `pideck.execution-run` metadata show the exact duration consistent with runtime; old sessions do not fake durations.
 - [ ] Message dates appear only on hover/focus, with no stale Session residue.
 - [ ] Run `npm run typecheck`, `npm run test:renderer`, `npm run build`, and `git diff --check`.

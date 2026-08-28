@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, fork } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -11,6 +11,8 @@ const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
+const { buildSessionChangeReview, captureWorkspaceChangeState } = require("../../../packages/pi-host/dist/session-change-review.js");
+const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/session-transcript.js");
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
@@ -43,6 +45,60 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("session reload keeps persisted messages from before context compaction", async () => {
+  const root = path.join(__dirname, "../../..");
+  const sdk = await import(pathToFileURL(path.join(root, "node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
+  const manager = sdk.SessionManager.inMemory("C:/pideck-compaction-regression");
+  manager.appendMessage({ role: "user", content: "old persisted turn", timestamp: 1 });
+  const firstKeptEntryId = manager.appendMessage({ role: "user", content: "recent retained turn", timestamp: 2 });
+  manager.appendCompaction("summary of the old turn", firstKeptEntryId, 2048);
+
+  const compactedContext = manager.buildSessionContext().messages;
+  assert.deepEqual(compactedContext.map((message) => message.role), ["compactionSummary", "user"]);
+  assert.equal(compactedContext.some((message) => message.content === "old persisted turn"), false);
+
+  const transcript = sessionTranscriptMessages(
+    { messages: compactedContext, sessionManager: manager },
+    sdk.sessionEntryToContextMessages,
+  );
+  assert.deepEqual(transcript.map((message) => message.role), ["user", "user", "compactionSummary"]);
+  assert.equal(transcript.some((message) => message.content === "old persisted turn"), true);
+
+  const hostSource = readText(path.join(root, "packages/pi-host/src/index.ts"));
+  assert.match(hostSource, /case "sessions\.messages"[\s\S]*?sessionTranscriptMessages/);
+  assert.match(hostSource, /event\.type === "compaction_end"[\s\S]*?sessionTranscriptMessages/);
+});
+
+test("per-run change review excludes dirty files that predate the agent turn", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-change-review-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "tracked.txt"), "alpha\n", "utf8");
+  fs.writeFileSync(path.join(workspace, "preexisting.txt"), "committed\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["-c", "user.name=PiDeck Test", "-c", "user.email=pideck@example.invalid", "commit", "--quiet", "-m", "baseline"], { cwd: workspace });
+
+  fs.writeFileSync(path.join(workspace, "preexisting.txt"), "user change before run\n", "utf8");
+  const before = await captureWorkspaceChangeState(workspace);
+  fs.writeFileSync(path.join(workspace, "tracked.txt"), "beta\n", "utf8");
+  fs.writeFileSync(path.join(workspace, "added.txt"), "new file\n", "utf8");
+  const after = await captureWorkspaceChangeState(workspace);
+  const sdk = await import(pathToFileURL(path.join(__dirname, "../../../node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
+  const review = await buildSessionChangeReview("task-review", 100, 200, before, after, sdk.generateUnifiedPatch);
+
+  assert.ok(review);
+  assert.equal(review.state, "completed");
+  assert.deepEqual(review.files.map((file) => file.path), ["added.txt", "tracked.txt"]);
+  assert.equal(review.files.some((file) => file.path === "preexisting.txt"), false);
+  assert.equal(review.files.find((file) => file.path === "added.txt").status, "added");
+  assert.match(review.files.find((file) => file.path === "tracked.txt").patch, /^--- tracked\.txt[\s\S]*^\+beta$/m);
+
+  const unchanged = await buildSessionChangeReview("task-review", 200, 300, after, await captureWorkspaceChangeState(workspace), sdk.generateUnifiedPatch);
+  assert.ok(unchanged);
+  assert.deepEqual(unchanged.files, []);
+});
 
 test("system proxy rules preserve per-URL HTTP, SOCKS, and direct fallback order", () => {
   assert.deepEqual(systemProxyRoutesFromElectronRules("PROXY 127.0.0.1:7897; SOCKS5 localhost:1080; DIRECT"), [
@@ -146,6 +202,99 @@ test("Pi HTTP networking resolves each request URL and fails over before transmi
       directResult: "direct",
     });
   } finally {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("a cancelled Provider OAuth login can start a fresh attempt", async () => {
+  const root = path.join(__dirname, "../../..");
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-oauth-cancel-"));
+  const child = fork(path.join(root, "packages/pi-host/dist/index.js"), [], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PI_CODING_AGENT_DIR: agentDir,
+      PIDECK_HOST_PROCESS: "1",
+      PIDECK_PI_MODULE: path.join(root, "node_modules/@earendil-works/pi-coding-agent/dist/index.js"),
+    },
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+    windowsHide: true,
+  });
+  let stderr = "";
+  let phase = "starting";
+  let firstLoginRejected = false;
+  let firstCancelResolved = false;
+  let secondLoginRejected = false;
+  let secondCancelResolved = false;
+  child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`OAuth cancellation regression timed out${stderr ? `\n${stderr.trim()}` : ""}`)), 20_000);
+      const fail = (error) => { clearTimeout(timer); reject(error); };
+      const maybeStartSecondAttempt = () => {
+        if (!firstLoginRejected || !firstCancelResolved || phase !== "cancelling-first") return;
+        phase = "waiting-second-prompt";
+        child.send({ id: "oauth-login-2", command: "providers.login", payload: { providerId: "openai-codex", method: "oauth", authOperationId: "oauth-operation-2" } });
+      };
+      const maybeFinish = () => {
+        if (!secondLoginRejected || !secondCancelResolved) return;
+        clearTimeout(timer);
+        resolve();
+      };
+
+      child.once("error", fail);
+      child.once("exit", (code, signal) => {
+        if (phase !== "complete") fail(new Error(`PiHost exited during OAuth cancellation regression (code ${code ?? "null"}, signal ${signal ?? "none"})${stderr ? `\n${stderr.trim()}` : ""}`));
+      });
+      child.on("message", (message) => {
+        if (message?.type === "proxy.resolve") {
+          child.send({ type: "proxy.resolve-result", requestId: message.requestId, rules: "DIRECT" });
+          return;
+        }
+        if (message?.type === "runtime.status" && message.payload === "connected" && phase === "starting") {
+          phase = "waiting-first-prompt";
+          child.send({ id: "oauth-login-1", command: "providers.login", payload: { providerId: "openai-codex", method: "oauth", authOperationId: "oauth-operation-1" } });
+          return;
+        }
+        if (message?.type === "auth.event" && message.requestId === "oauth-operation-1:1" && phase === "waiting-first-prompt") {
+          phase = "cancelling-first";
+          child.send({ id: "oauth-cancel-1", command: "providers.cancelLogin", payload: { authOperationId: "oauth-operation-1" } });
+          return;
+        }
+        if (message?.id === "oauth-cancel-1") {
+          if (!message.ok) { fail(new Error(`First OAuth cancellation failed: ${message.error ?? "unknown error"}`)); return; }
+          firstCancelResolved = true;
+          maybeStartSecondAttempt();
+          return;
+        }
+        if (message?.id === "oauth-login-1") {
+          if (message.ok || !String(message.error ?? "").includes("Authentication cancelled")) { fail(new Error(`First OAuth login was not cancelled: ${JSON.stringify(message)}`)); return; }
+          firstLoginRejected = true;
+          maybeStartSecondAttempt();
+          return;
+        }
+        if (message?.type === "auth.event" && message.requestId === "oauth-operation-2:1" && phase === "waiting-second-prompt") {
+          phase = "cancelling-second";
+          child.send({ id: "oauth-cancel-2", command: "providers.cancelLogin", payload: { authOperationId: "oauth-operation-2" } });
+          return;
+        }
+        if (message?.id === "oauth-cancel-2") {
+          if (!message.ok) { fail(new Error(`Second OAuth cancellation failed: ${message.error ?? "unknown error"}`)); return; }
+          secondCancelResolved = true;
+          maybeFinish();
+          return;
+        }
+        if (message?.id === "oauth-login-2") {
+          if (message.ok || !String(message.error ?? "").includes("Authentication cancelled")) { fail(new Error(`Second OAuth login was not cancelled: ${JSON.stringify(message)}`)); return; }
+          secondLoginRejected = true;
+          maybeFinish();
+        }
+      });
+    });
+    phase = "complete";
+  } finally {
+    child.kill();
     fs.rmSync(agentDir, { recursive: true, force: true });
   }
 });

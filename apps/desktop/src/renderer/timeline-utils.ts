@@ -6,7 +6,7 @@ import { messageErrorText, messageIdentity, textFromMessage } from "./message-ut
 export type MessageTimelineItem =
   | { type: "message"; message: any; index: number; stableKey?: string }
   | { type: "execution"; steps: ActivityStep[]; index: number; stableKey?: string; running?: boolean }
-  | { type: "live"; text: string; index: number; stableKey: string; phase: WorkingPhase; toolName?: string; thinkingText?: string };
+  | { type: "live"; text: string; index: number; stableKey: string; phase: WorkingPhase; toolName?: string; activitySteps: ActivityStep[] };
 
 // Below these thresholds a running turn is too short (or has produced too
 // little thinking) to be worth surfacing the live thinking panel; the compact
@@ -15,18 +15,36 @@ export type MessageTimelineItem =
 const LIVE_THINKING_MIN_MS = 8_000;
 const LIVE_THINKING_MIN_CHARS = 120;
 
-function extractLiveThinkingText(steps: ActivityStep[], now: number, hasReplyInTurn: boolean): string | undefined {
+function normalizeLiveThinkingText(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    // Provider thinking deltas can contain long runs of blank lines. Keep one
+    // paragraph break so the live feed stays compact without flattening prose.
+    .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n")
+    .trim();
+}
+
+function extractLiveActivitySteps(steps: ActivityStep[], now: number, hasReplyInTurn: boolean): ActivityStep[] {
   // When the running turn already shows a finalized assistant reply, only an
   // in-progress thinking stream below it is worth surfacing; ended thinking has
-  // already been formalized into the reply above and must retract. This keeps
-  // the panel from lingering beneath every later round of a long run.
-  const thinking = steps.filter((step) => step.kind === "thinking" && step.detail && (!hasReplyInTurn || !step.endedAt));
-  if (!thinking.length) return undefined;
-  const startedAt = Math.min(...thinking.map((step) => step.startedAt));
-  const elapsed = now - startedAt;
-  const text = thinking.map((step) => step.detail ?? "").join("\n\n").trim();
-  if (text.length < LIVE_THINKING_MIN_CHARS && elapsed < LIVE_THINKING_MIN_MS) return undefined;
-  return text || undefined;
+  // already been formalized into the reply above and must retract. Tool calls
+  // remain visible while the run continues so the live feed preserves what the
+  // agent actually did between two thinking blocks.
+  const thinking = steps
+    .filter((step) => step.kind === "thinking" && step.detail && (!hasReplyInTurn || !step.endedAt))
+    .map((step) => ({ ...step, detail: normalizeLiveThinkingText(step.detail ?? "") }))
+    .filter((step) => Boolean(step.detail));
+  const thinkingById = new Map(thinking.map((step) => [step.id, step]));
+  const tools = steps.filter((step) => step.kind === "tool");
+  if (!thinking.length && !tools.length) return [];
+  if (!tools.length) {
+    const startedAt = Math.min(...thinking.map((step) => step.startedAt));
+    const elapsed = now - startedAt;
+    const textLength = thinking.reduce((length, step) => length + (step.detail?.length ?? 0), 0);
+    if (textLength < LIVE_THINKING_MIN_CHARS && elapsed < LIVE_THINKING_MIN_MS) return [];
+  }
+  return steps.flatMap((step) => step.kind === "tool" ? [step] : thinkingById.get(step.id) ? [thinkingById.get(step.id)!] : []);
 }
 
 function activityFromMessages(messages: any[], language: Language): ActivityStep[] {
@@ -216,6 +234,7 @@ export function buildMessageTimelineItems({
     // inserted once immediately before the first assistant reply, so all
     // inputs are visible above it and the response follows below it.
     let summaryInserted = false;
+    const finalAssistantMessage = [...turn].reverse().find((message) => message?.role === "assistant" && (textFromMessage(message) || messageErrorText(message)));
     for (const message of turn) {
       if (message?.role === "user") {
         items.push({ type: "message", message, index: items.length });
@@ -227,7 +246,10 @@ export function buildMessageTimelineItems({
           items.push({ type: "execution", steps, index: items.length, stableKey: `execution-${steps[0]?.id ?? `${taskId}-${turnIndex}`}`, running: activeTurn });
           summaryInserted = true;
         }
-        items.push({ type: "message", message, index: items.length, stableKey: activeTurn || isFinal ? responseKey : undefined });
+        // Only the settled turn's final Assistant record replaces the live row.
+        // Earlier progress/commentary messages keep their own identities; using
+        // one response key for every record creates duplicate React keys.
+        items.push({ type: "message", message, index: items.length, stableKey: isFinal && !activeTurn && message === finalAssistantMessage ? responseKey : undefined });
       }
     }
     // A completed turn can contain user messages without a textual assistant
@@ -243,7 +265,7 @@ export function buildMessageTimelineItems({
     // stream. Gating on `!hasAssistantText` would suppress it for every round
     // after the first, leaving the user with only the bare working indicator.
     if (activeTurn) {
-      items.push({ type: "live", text: liveText, index: items.length, stableKey: responseKey, phase: workingPhase, toolName, thinkingText: extractLiveThinkingText(activeActivity, Date.now(), hasAssistantText) });
+      items.push({ type: "live", text: liveText, index: items.length, stableKey: responseKey, phase: workingPhase, toolName, activitySteps: extractLiveActivitySteps(activeActivity, Date.now(), hasAssistantText) });
     }
     turn = [];
     hasAssistantInTurn = false;

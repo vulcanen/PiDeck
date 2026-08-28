@@ -38,6 +38,7 @@ const bridge: PideckBridge = {
     remove: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:delete", taskId, cwd),
     messages: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:messages", taskId, cwd),
     runMetadata: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:run-metadata", taskId, cwd),
+    changeReviews: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:change-reviews", taskId, cwd),
     capabilities: (taskId?: string, cwd?: string) => ipcRenderer.invoke("sessions:capabilities", taskId, cwd),
     compact: (taskId: string, instructions?: string, cwd?: string) => ipcRenderer.invoke("sessions:compact", taskId, instructions, cwd),
     export: (taskId: string, format: "jsonl" | "html", cwd?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd),
@@ -56,7 +57,8 @@ const bridge: PideckBridge = {
   },
   providers: {
     list: () => ipcRenderer.invoke("providers:list"),
-    login: (providerId: string, method: "api-key" | "oauth", secret?: string) => ipcRenderer.invoke("providers:login", providerId, method, secret),
+    login: (providerId: string, method: "api-key" | "oauth", secret?: string, authOperationId?: string) => ipcRenderer.invoke("providers:login", providerId, method, secret, authOperationId),
+    cancelLogin: (authOperationId: string) => ipcRenderer.invoke("providers:cancel-login", authOperationId),
     logout: (providerId: string) => ipcRenderer.invoke("providers:logout", providerId),
     setApiKey: (providerId: string, apiKey: string) => ipcRenderer.invoke("providers:set-api-key", providerId, apiKey),
     resolveAuth: (requestId: string, value: string, cancelled?: boolean) => ipcRenderer.invoke("providers:auth-response", requestId, value, cancelled),
@@ -72,6 +74,8 @@ const bridge: PideckBridge = {
     setQueueModes: (taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string) => ipcRenderer.invoke("agent:set-queue-modes", taskId, modes, cwd),
     clearQueue: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:clear-queue", taskId, cwd),
     promoteQueue: (taskId: string, followUpIndex: number, cwd?: string) => ipcRenderer.invoke("agent:promote-queue", taskId, followUpIndex, cwd),
+    editQueue: (taskId: string, messageId: string, text: string, images?: PromptImage[], cwd?: string) => ipcRenderer.invoke("agent:edit-queue", taskId, messageId, text, images, cwd),
+    deleteQueue: (taskId: string, messageId: string, cwd?: string) => ipcRenderer.invoke("agent:delete-queue", taskId, messageId, cwd),
   },
   extensions: {
     resolveUi: (requestId: string, value: string | boolean | undefined) => ipcRenderer.invoke("extension-ui:resolve", requestId, value),

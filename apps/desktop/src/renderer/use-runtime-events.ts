@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent } from "react";
-import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionRunRecord } from "@pideck/contracts";
+import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionChangeReview, SessionRunRecord } from "@pideck/contracts";
 import type { TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import type { ActivityStep, TaskUiState } from "./types";
@@ -40,6 +40,7 @@ export interface RuntimeEventsOptions {
   setActiveTask: React.Dispatch<React.SetStateAction<TaskSummary | null>>;
   refreshWorkspace: () => Promise<void>;
   onQueueActivity: () => void;
+  onChangeReviewUpdated: (taskId: string, review: SessionChangeReview) => void;
 }
 
 export function useRuntimeEvents({
@@ -47,7 +48,7 @@ export function useRuntimeEvents({
   patchTaskUi, updateTaskLists, discardStreamDeltas, queueStreamDelta, updateActivity,
   setQueueState, setExtensionUiRequest, setSteeringMessageKeysByTask, setMessagesByTask,
   setTaskUi, setMessageLoads, setContextUsage, setActiveTask, refreshWorkspace,
-  onQueueActivity,
+  onQueueActivity, onChangeReviewUpdated,
 }: RuntimeEventsOptions) {
   // Context usage only belongs to the conversation currently on screen; a
   // background task in another project must not overwrite it. Fetching per
@@ -97,9 +98,14 @@ export function useRuntimeEvents({
     }
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
+    if (event?.type === "change-review.updated" && event.review && typeof event.review === "object") {
+      onChangeReviewUpdated(taskId, event.review as SessionChangeReview);
+      return;
+    }
     if (event?.type === "queue_update") {
       if (taskId === activeTaskId) {
-        const nextQueue = { steering: Array.isArray(event.steering) ? [...event.steering] : [], followUp: Array.isArray(event.followUp) ? [...event.followUp] : [], steeringMode: queueState?.steeringMode ?? queueModes.steeringMode ?? "one-at-a-time", followUpMode: queueState?.followUpMode ?? queueModes.followUpMode ?? "one-at-a-time" };
+        const queueMessages = (value: unknown) => Array.isArray(value) ? value.filter((message): message is AgentQueueState["steering"][number] => Boolean(message && typeof message === "object" && typeof (message as { id?: unknown }).id === "string" && typeof (message as { text?: unknown }).text === "string")).map((message) => ({ ...message, images: Array.isArray(message.images) ? [...message.images] : [] })) : [];
+        const nextQueue: AgentQueueState = { steering: queueMessages(event.steering), followUp: queueMessages(event.followUp), steeringMode: event.steeringMode ?? queueState?.steeringMode ?? queueModes.steeringMode ?? "one-at-a-time", followUpMode: event.followUpMode ?? queueState?.followUpMode ?? queueModes.followUpMode ?? "one-at-a-time" };
         setQueueState(nextQueue);
         onQueueActivity();
       }

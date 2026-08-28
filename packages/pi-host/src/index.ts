@@ -1,4 +1,4 @@
-import type { PermissionMode, PiHostRequest, PiHostResponse, SessionRunRecord } from "@pideck/contracts";
+import type { PermissionMode, PiHostRequest, PiHostResponse, SessionChangeReview, SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
@@ -11,6 +11,8 @@ import { createServer } from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { pathToFileURL } from "node:url";
+import { buildSessionChangeReview, captureWorkspaceChangeState, type WorkspaceChangeState } from "./session-change-review.js";
+import { sessionTranscriptMessages } from "./session-transcript.js";
 
 function execFileText(file: string, args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -75,6 +77,11 @@ const agentSessionPromises = new Map<string, Promise<any>>();
 const agentSessionPackageRevisions = new Map<string, number>();
 const executionGroupStarts = new Map<string, number>();
 const SESSION_RUN_METADATA_TYPE = "pideck.execution-run";
+const SESSION_CHANGE_REVIEW_METADATA_TYPE = "pideck.change-review";
+const MAX_SESSION_CHANGE_REVIEW_HISTORY = 20;
+type ActiveChangeReviewSegment = { startedAt: number; baseline: Promise<WorkspaceChangeState | null> };
+type ActiveChangeReviewTracker = { current: ActiveChangeReviewSegment; persistence: Promise<void>; previewRevision: number };
+const activeChangeReviews = new Map<string, ActiveChangeReviewTracker>();
 // `session.isStreaming` is updated by Pi asynchronously. Reserve a task as
 // soon as a direct prompt is accepted so a second prompt arriving in that
 // small window is queued instead of starting a competing run.
@@ -105,6 +112,13 @@ type AuthWaiter = {
   beforeResolve?: (value: string) => Promise<void>;
 };
 const authWaiters = new Map<string, AuthWaiter>();
+type ActiveProviderLogin = {
+  operationId: string;
+  providerId: string;
+  controller: AbortController;
+};
+const activeProviderLogins = new Map<string, ActiveProviderLogin>();
+const activeProviderLoginByProvider = new Map<string, ActiveProviderLogin>();
 const agentSessionRevisions = new Map<string, number>();
 
 /**
@@ -200,11 +214,13 @@ async function assertOpenAICodexLoopbackAvailable(): Promise<void> {
   });
 }
 
-function createAuthInteraction(requestId: string, providerId: string, initialSecret?: string) {
+function createAuthInteraction(requestId: string, providerId: string, initialSecret?: string, operationSignal?: AbortSignal) {
   let initialSecretAvailable = Boolean(initialSecret);
   let promptSequence = 0;
   return {
+    signal: operationSignal,
     prompt: (prompt: any) => {
+      if (operationSignal?.aborted) return Promise.reject(operationSignal.reason ?? new Error("Authentication cancelled"));
       if (initialSecretAvailable && prompt?.type !== "select") {
         initialSecretAvailable = false;
         return Promise.resolve(initialSecret as string);
@@ -215,7 +231,10 @@ function createAuthInteraction(requestId: string, providerId: string, initialSec
         ? async (value: string) => { if (value === "browser") await assertOpenAICodexLoopbackAvailable(); }
         : undefined;
       return new Promise<string>((resolve, reject) => {
-        const signal = prompt?.signal as AbortSignal | undefined;
+        const promptSignal = prompt?.signal as AbortSignal | undefined;
+        const signal = operationSignal && promptSignal
+          ? AbortSignal.any([operationSignal, promptSignal])
+          : operationSignal ?? promptSignal;
         const cleanup = () => signal?.removeEventListener("abort", onAbort);
         const waiter: AuthWaiter = {
           beforeResolve,
@@ -232,7 +251,9 @@ function createAuthInteraction(requestId: string, providerId: string, initialSec
         else signal?.addEventListener("abort", onAbort, { once: true });
       });
     },
-    notify: (event: unknown) => emitAuth(requestId, { type: "notify", event: jsonSafe(event) }),
+    notify: (event: unknown) => {
+      if (!operationSignal?.aborted) emitAuth(requestId, { type: "notify", event: jsonSafe(event) });
+    },
   };
 }
 
@@ -303,6 +324,133 @@ function sessionRunMetadata(session: any): SessionRunRecord[] {
     ));
 }
 
+function sessionChangeReviews(session: any): SessionChangeReview[] {
+  const entries = session.sessionManager?.getBranch?.() ?? session.sessionManager?.getEntries?.() ?? [];
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry: any) => entry?.type === "custom" && entry.customType === SESSION_CHANGE_REVIEW_METADATA_TYPE)
+    .map((entry: any) => entry.data)
+    .filter((record: any): record is SessionChangeReview => Boolean(
+      record
+      && typeof record.id === "string"
+      && record.state === "completed"
+      && Number.isFinite(record.startedAt)
+      && Number.isFinite(record.endedAt)
+      && Array.isArray(record.files)
+      && Number.isFinite(record.additions)
+      && Number.isFinite(record.deletions),
+    ))
+    .slice(-MAX_SESSION_CHANGE_REVIEW_HISTORY);
+}
+
+function persistSessionChangeReview(session: any, review: SessionChangeReview): void {
+  const appendEntry = session.sessionManager?.appendCustomEntry;
+  if (typeof appendEntry !== "function") return;
+  try {
+    appendEntry.call(session.sessionManager, SESSION_CHANGE_REVIEW_METADATA_TYPE, review);
+  } catch {
+    // Review metadata is auxiliary. An in-memory/read-only Session must still
+    // be allowed to complete and deliver its canonical Pi messages.
+  }
+}
+
+function emptyRunningChangeReview(taskId: string, startedAt: number): SessionChangeReview {
+  return { id: `${taskId}:${startedAt}`, state: "running", startedAt, endedAt: startedAt, files: [], additions: 0, deletions: 0, truncated: false };
+}
+
+function startChangeReview(stateKey: string, taskId: string, cwd: string, startedAt: number): void {
+  const segment = { startedAt, baseline: captureWorkspaceChangeState(cwd) };
+  const tracker: ActiveChangeReviewTracker = { current: segment, persistence: Promise.resolve(), previewRevision: 0 };
+  activeChangeReviews.set(stateKey, tracker);
+  void segment.baseline.then((baseline) => {
+    if (baseline && activeChangeReviews.get(stateKey) === tracker && tracker.current === segment) {
+      emit(taskId, { type: "change-review.updated", review: emptyRunningChangeReview(taskId, startedAt) });
+    }
+  });
+}
+
+function finalizeChangeReviewSegment(
+  session: any,
+  stateKey: string,
+  taskId: string,
+  segment: ActiveChangeReviewSegment,
+  finalState: Promise<WorkspaceChangeState | null>,
+  endedAt: number,
+  generateUnifiedPatch: NonNullable<Awaited<ReturnType<typeof loadPiSdk>>["generateUnifiedPatch"]> | undefined,
+): Promise<void> {
+  if (!generateUnifiedPatch) return Promise.resolve();
+  return Promise.all([segment.baseline, finalState])
+    .then(async ([before, after]) => {
+      const review = await buildSessionChangeReview(taskId, segment.startedAt, endedAt, before, after, generateUnifiedPatch);
+      if (!review || sessionManagers.get(stateKey) !== session.sessionManager) return;
+      persistSessionChangeReview(session, review);
+      emit(taskId, { type: "change-review.updated", review: jsonSafe(review) });
+    })
+    .catch((error) => console.error(`PiHost change review failed for ${taskId}`, error));
+}
+
+function rotateChangeReview(
+  session: any,
+  stateKey: string,
+  taskId: string,
+  cwd: string,
+  boundary: number,
+  generateUnifiedPatch: NonNullable<Awaited<ReturnType<typeof loadPiSdk>>["generateUnifiedPatch"]> | undefined,
+): void {
+  const tracker = activeChangeReviews.get(stateKey);
+  if (!tracker) {
+    startChangeReview(stateKey, taskId, cwd, boundary);
+    return;
+  }
+  const previous = tracker.current;
+  const boundaryState = captureWorkspaceChangeState(cwd);
+  const current = { startedAt: boundary, baseline: boundaryState };
+  tracker.current = current;
+  tracker.previewRevision += 1;
+  void boundaryState.then((baseline) => {
+    if (baseline && activeChangeReviews.get(stateKey) === tracker && tracker.current === current) {
+      emit(taskId, { type: "change-review.updated", review: emptyRunningChangeReview(taskId, boundary) });
+    }
+  });
+  tracker.persistence = tracker.persistence.then(() => finalizeChangeReviewSegment(session, stateKey, taskId, previous, boundaryState, boundary, generateUnifiedPatch));
+}
+
+function finishChangeReview(
+  session: any,
+  stateKey: string,
+  taskId: string,
+  cwd: string,
+  endedAt: number,
+  generateUnifiedPatch: NonNullable<Awaited<ReturnType<typeof loadPiSdk>>["generateUnifiedPatch"]> | undefined,
+): void {
+  const tracker = activeChangeReviews.get(stateKey);
+  if (!tracker) return;
+  activeChangeReviews.delete(stateKey);
+  const finalState = captureWorkspaceChangeState(cwd);
+  tracker.persistence = tracker.persistence.then(() => finalizeChangeReviewSegment(session, stateKey, taskId, tracker.current, finalState, endedAt, generateUnifiedPatch));
+}
+
+function previewChangeReview(
+  stateKey: string,
+  taskId: string,
+  cwd: string,
+  generateUnifiedPatch: NonNullable<Awaited<ReturnType<typeof loadPiSdk>>["generateUnifiedPatch"]> | undefined,
+): void {
+  const tracker = activeChangeReviews.get(stateKey);
+  if (!tracker || !generateUnifiedPatch) return;
+  const segment = tracker.current;
+  const revision = ++tracker.previewRevision;
+  const previewState = captureWorkspaceChangeState(cwd);
+  void Promise.all([segment.baseline, previewState])
+    .then(async ([before, after]) => {
+      const review = await buildSessionChangeReview(taskId, segment.startedAt, Date.now(), before, after, generateUnifiedPatch, "running");
+      const current = activeChangeReviews.get(stateKey);
+      if (!review || current !== tracker || current.current !== segment || current.previewRevision !== revision) return;
+      emit(taskId, { type: "change-review.updated", review: jsonSafe(review) });
+    })
+    .catch((error) => console.error(`PiHost live change review failed for ${taskId}`, error));
+}
+
 type NormalizedPromptImage = { type: "image"; data: string; mimeType: string };
 
 function normalizePromptImages(images: unknown): NormalizedPromptImage[] | undefined {
@@ -363,13 +511,14 @@ function queueState(session: any) {
   };
 }
 
-type QueuedPromptImage = { text: string; images: NormalizedPromptImage[] };
+type QueuedPromptImage = { id: string; text: string; images: NormalizedPromptImage[] };
 type QueuedPromptImageState = { steering: QueuedPromptImage[]; followUp: QueuedPromptImage[] };
 type QueueDeliveryHint = { text: string; delivery: "steer" | "followUp" };
 
 // AgentSession exposes queue text for display, while its internal queue also
-// carries images. Keep the image sidecar here so promoteQueue can rebuild a
-// queue without silently dropping attachments.
+// carries images. Keep stable IDs and image attachments in this PiHost sidecar
+// so thumbnails, promotion, and editing can rebuild the real Pi queue without
+// silently dropping attachments.
 const queuedPromptImages = new Map<string, QueuedPromptImageState>();
 const queueDeliveryHints = new Map<string, QueueDeliveryHint[]>();
 const queueMutationLocks = new Map<string, Promise<void>>();
@@ -387,11 +536,27 @@ function reconcileQueuedPromptImages(taskId: string, steering: string[], followU
   const previous = queuedPromptImageState(taskId);
   const reconcile = (texts: string[], entries: QueuedPromptImage[]) => {
     const remaining = [...entries];
+    // Pi consumes queues from the front. When the queue shrinks, align from
+    // the end so duplicate text keeps the newest remaining entry's stable ID;
+    // appends are already tracked before Pi emits queue_update and align from
+    // the front in normal order.
+    if (entries.length > texts.length) {
+      const result = new Array<QueuedPromptImage>(texts.length);
+      for (let textIndex = texts.length - 1; textIndex >= 0; textIndex -= 1) {
+        const text = texts[textIndex]!;
+        let entryIndex = -1;
+        for (let index = remaining.length - 1; index >= 0; index -= 1) {
+          if (remaining[index]?.text === text) { entryIndex = index; break; }
+        }
+        const [entry] = remaining.splice(entryIndex >= 0 ? entryIndex : Math.max(0, remaining.length - 1), 1);
+        result[textIndex] = entry ? { ...entry, text } : { id: randomUUID(), text, images: [] };
+      }
+      return result;
+    }
     return texts.map((text) => {
       const index = remaining.findIndex((entry) => entry.text === text);
-      if (index < 0) return { text, images: [] };
-      const [entry] = remaining.splice(index, 1);
-      return entry;
+      const [entry] = remaining.splice(index >= 0 ? index : 0, 1);
+      return entry ? { ...entry, text } : { id: randomUUID(), text, images: [] };
     });
   };
   queuedPromptImages.set(taskId, {
@@ -402,8 +567,8 @@ function reconcileQueuedPromptImages(taskId: string, steering: string[], followU
 
 function setQueuedPromptImages(taskId: string, steering: QueuedPromptImage[], followUp: QueuedPromptImage[]) {
   queuedPromptImages.set(taskId, {
-    steering: steering.map((entry) => ({ text: entry.text, images: [...entry.images] })),
-    followUp: followUp.map((entry) => ({ text: entry.text, images: [...entry.images] })),
+    steering: steering.map((entry) => ({ id: entry.id, text: entry.text, images: [...entry.images] })),
+    followUp: followUp.map((entry) => ({ id: entry.id, text: entry.text, images: [...entry.images] })),
   });
 }
 
@@ -411,10 +576,26 @@ function queuedPromptImagesForTexts(texts: string[], candidates: QueuedPromptIma
   const remaining = [...candidates];
   return texts.map((text) => {
     const index = remaining.findIndex((entry) => entry.text === text);
-    if (index < 0) return { text, images: [] };
-    const [entry] = remaining.splice(index, 1);
-    return entry;
+    const [entry] = remaining.splice(index >= 0 ? index : 0, 1);
+    return entry ? { ...entry, text } : { id: randomUUID(), text, images: [] };
   });
+}
+
+function queueStateWithDetails(session: any, taskId: string) {
+  const current = queueState(session);
+  reconcileQueuedPromptImages(taskId, current.steering, current.followUp);
+  const details = queuedPromptImageState(taskId);
+  const messages = (texts: string[], entries: QueuedPromptImage[]) => texts.map((text, index) => ({
+    id: entries[index]?.id ?? randomUUID(),
+    text,
+    images: (entries[index]?.images ?? []).map((image) => ({ data: image.data, mimeType: image.mimeType })),
+  }));
+  return {
+    steering: messages(current.steering, details.steering),
+    followUp: messages(current.followUp, details.followUp),
+    steeringMode: current.steeringMode,
+    followUpMode: current.followUpMode,
+  };
 }
 
 function queueMessageText(message: any): string {
@@ -454,7 +635,7 @@ function consumeQueueDeliveryHint(taskId: string, text: string): "steer" | "foll
 function trackQueuedPrompt(taskId: string, delivery: "steer" | "followUp", text: string, images?: NormalizedPromptImage[]) {
   const state = queuedPromptImageState(taskId);
   const bucket = delivery === "steer" ? state.steering : state.followUp;
-  bucket.push({ text, images: images ? [...images] : [] });
+  bucket.push({ id: randomUUID(), text, images: images ? [...images] : [] });
   queuedPromptImages.set(taskId, state);
 }
 
@@ -733,18 +914,32 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     );
     session.subscribe((event: any) => {
       try {
-        if (event.type === "queue_update" && !queueRebuilds.has(stateKey)) {
-          recordQueueDeliveryHints(stateKey, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
-          reconcileQueuedPromptImages(stateKey, Array.isArray(event.steering) ? event.steering : [], Array.isArray(event.followUp) ? event.followUp : []);
+        if (event.type === "queue_update") {
+          // A clear-and-rebuild mutation is exposed atomically through its IPC
+          // response; suppress Pi's intermediate empty/partial queue events so
+          // the Renderer cannot edit or promote a transient row.
+          if (queueRebuilds.has(stateKey)) return;
+          const steering = Array.isArray(event.steering) ? event.steering : [];
+          const followUp = Array.isArray(event.followUp) ? event.followUp : [];
+          recordQueueDeliveryHints(stateKey, steering, followUp);
+          reconcileQueuedPromptImages(stateKey, steering, followUp);
+          emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
+          return;
         }
         // A delivery hint is only meaningful until the current agent run is
         // settled. If Pi aborts or drops a queued message without emitting its
         // message_start event, discard the hint so a later identical prompt
         // cannot inherit the wrong steering/follow-up classification.
         if (event.type === "agent_settled") queueDeliveryHints.delete(stateKey);
-        if (event.type === "agent_start") executionGroupStarts.set(stateKey, Date.now());
+        if (event.type === "agent_start") {
+          const startedAt = Date.now();
+          executionGroupStarts.set(stateKey, startedAt);
+          startChangeReview(stateKey, taskId, cwd, startedAt);
+        }
         if (event.type === "agent_settled") {
-          finishExecutionGroup(session, stateKey, taskId, Date.now());
+          const endedAt = Date.now();
+          finishExecutionGroup(session, stateKey, taskId, endedAt);
+          finishChangeReview(session, stateKey, taskId, cwd, endedAt, sdk.generateUnifiedPatch);
         }
         if (event.type === "message_start" && event.message?.role === "user") {
           const queueDelivery = consumeQueueDeliveryHint(stateKey, queueMessageText(event.message));
@@ -752,11 +947,17 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
             const boundary = Date.now();
             finishExecutionGroup(session, stateKey, taskId, boundary);
             executionGroupStarts.set(stateKey, boundary);
+            rotateChangeReview(session, stateKey, taskId, cwd, boundary, sdk.generateUnifiedPatch);
           } else if (!executionGroupStarts.has(stateKey)) {
-            executionGroupStarts.set(stateKey, Date.now());
+            const startedAt = Date.now();
+            executionGroupStarts.set(stateKey, startedAt);
+            startChangeReview(stateKey, taskId, cwd, startedAt);
           }
           emit(taskId, normalizeAgentEvent(event, queueDelivery));
           return;
+        }
+        if (event.type === "tool_execution_end" && /^(?:edit|write|bash|powershell)$/i.test(event.toolName ?? "")) {
+          previewChangeReview(stateKey, taskId, cwd, sdk.generateUnifiedPatch);
         }
         emit(taskId, normalizeAgentEvent(event));
       } catch (error) {
@@ -769,17 +970,16 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
           // AgentSession persists the message immediately after notifying its
           // subscribers. Defer the snapshot one tick so the renderer receives
           // the completed assistant reply before the next queued message starts.
-          setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) }), 0);
+          setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) }), 0);
         } else if (event.type === "agent_settled") {
-          emit(taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
+          emit(taskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         } else if (event.type === "compaction_end") {
-          // Compaction rewrites agent.state.messages in place (older entries
-          // fold into a compactionSummary message). Push the rewritten list
-          // with a replace marker so the renderer swaps its whole timeline
-          // instead of merging: the folded-away messages are gone from Pi and
-          // must not linger, and merge-based retention of "unmatched previous"
-          // would keep pre-compaction turns after the compaction summary.
-          emit(taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(session.messages) });
+          // AgentSession.messages now contains only the compacted model context,
+          // but the display transcript still comes from every persisted entry
+          // on the active Session branch. Replace the Renderer snapshot so a
+          // branch/compaction boundary is applied authoritatively without
+          // hiding the summarized prefix after a later restart.
+          emit(taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         }
       } catch (error) {
         console.error(`PiHost message snapshot handler failed for ${taskId}`, error);
@@ -981,16 +1181,12 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.taskId) throw new Error("taskId is required");
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const stateKey = sessionStateKey(payload.taskId, cwd);
-        const manager = sessionManagers.get(stateKey);
+        const sdk = await loadPiSdk();
         const session = agentSessions.get(stateKey) ?? await ensureAgentSession(
           payload.taskId,
           cwd,
         );
-        if (session) {
-          send({ id: request.id, ok: true, result: jsonSafe(session.messages) });
-          return;
-        }
-        send({ id: request.id, ok: true, result: jsonSafe(manager?.getEntries?.() ?? []) });
+        send({ id: request.id, ok: true, result: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         return;
       }
       case "sessions.runMetadata": {
@@ -998,6 +1194,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.taskId) throw new Error("taskId is required");
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         send({ id: request.id, ok: true, result: jsonSafe(sessionRunMetadata(session)) });
+        return;
+      }
+      case "sessions.changeReviews": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        send({ id: request.id, ok: true, result: jsonSafe(sessionChangeReviews(session)) });
         return;
       }
       case "sessions.capabilities": {
@@ -1037,9 +1240,10 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "sessions.compact": {
         const payload = request.payload as { taskId?: string; instructions?: string; cwd?: string } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
+        const sdk = await loadPiSdk();
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         const result = await session.compact(payload.instructions);
-        emit(payload.taskId, { type: "message.snapshot", messages: jsonSafe(session.messages) });
+        emit(payload.taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         send({ id: request.id, ok: true, result: jsonSafe(result) });
         return;
       }
@@ -1230,6 +1434,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         queueRebuilds.delete(stateKey);
         agentRunReservations.delete(stateKey);
         executionGroupStarts.delete(stateKey);
+        activeChangeReviews.delete(stateKey);
         permissionEngine.dispose(stateKey);
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -1296,16 +1501,18 @@ async function handle(request: PiHostRequest): Promise<void> {
         const session = await ensureAgentSession(payload.taskId, cwd);
         const current = queueState(session);
         reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
-        send({ id: request.id, ok: true, result: current });
+        send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
         return;
       }
       case "agent.setQueueModes": {
         const payload = request.payload as { taskId?: string; cwd?: string; steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" } | undefined;
         if (!payload?.taskId) throw new Error("taskId is required");
-        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
         if (payload.steeringMode) session.setSteeringMode(payload.steeringMode);
         if (payload.followUpMode) session.setFollowUpMode(payload.followUpMode);
-        send({ id: request.id, ok: true, result: queueState(session) });
+        send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
         return;
       }
       case "agent.clearQueue": {
@@ -1320,7 +1527,7 @@ async function handle(request: PiHostRequest): Promise<void> {
             session.clearQueue();
             setQueuedPromptImages(stateKey, [], []);
             queueDeliveryHints.delete(stateKey);
-            send({ id: request.id, ok: true, result: queueState(session) });
+            send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
           } finally {
             queueRebuilds.delete(stateKey);
           }
@@ -1343,8 +1550,8 @@ async function handle(request: PiHostRequest): Promise<void> {
 
           const imageState = queuedPromptImageState(stateKey);
           const queued = {
-            steering: liveQueue.steering.map((text, index) => imageState.steering[index] ?? { text, images: [] }),
-            followUp: liveQueue.followUp.map((text, index) => imageState.followUp[index] ?? { text, images: [] }),
+            steering: liveQueue.steering.map((text, index) => imageState.steering[index] ?? { id: randomUUID(), text, images: [] }),
+            followUp: liveQueue.followUp.map((text, index) => imageState.followUp[index] ?? { id: randomUUID(), text, images: [] }),
           };
           const selected = queued.followUp[followUpIndex];
           if (!selected) throw new Error("Queued message is no longer available");
@@ -1386,7 +1593,119 @@ async function handle(request: PiHostRequest): Promise<void> {
               queuedPromptImagesForTexts(next.steering, [selected, ...queued.steering]),
               queuedPromptImagesForTexts(next.followUp, queued.followUp.filter((_message, index) => index !== followUpIndex)),
             );
-            send({ id: request.id, ok: true, result: next });
+            send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
+          } finally {
+            queueRebuilds.delete(stateKey);
+          }
+        });
+        return;
+      }
+      case "agent.editQueue": {
+        const payload = request.payload as { taskId?: string; cwd?: string; messageId?: string; text?: string; images?: Array<{ data: string; mimeType: string }> } | undefined;
+        const images = normalizePromptImages(payload?.images) ?? [];
+        if (!payload?.taskId || !payload.messageId || (!payload.text?.trim() && images.length === 0)) throw new Error("taskId, messageId, and text or images are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        await withQueueMutationLock(stateKey, async () => {
+          const liveQueue = queueState(session);
+          reconcileQueuedPromptImages(stateKey, liveQueue.steering, liveQueue.followUp);
+          const imageState = queuedPromptImageState(stateKey);
+          const original = {
+            steering: liveQueue.steering.map((text, index) => imageState.steering[index] ?? { id: randomUUID(), text, images: [] }),
+            followUp: liveQueue.followUp.map((text, index) => imageState.followUp[index] ?? { id: randomUUID(), text, images: [] }),
+          };
+          const steeringIndex = original.steering.findIndex((message) => message.id === payload.messageId);
+          const followUpIndex = original.followUp.findIndex((message) => message.id === payload.messageId);
+          if (steeringIndex < 0 && followUpIndex < 0) throw new Error("Queued message is no longer available");
+
+          const edited = { id: payload.messageId!, text: payload.text?.trim() ?? "", images };
+          const updated = {
+            steering: original.steering.map((message, index) => index === steeringIndex ? edited : message),
+            followUp: original.followUp.map((message, index) => index === followUpIndex ? edited : message),
+          };
+          queueRebuilds.add(stateKey);
+          try {
+            session.clearQueue();
+            try {
+              for (const message of updated.steering) await session.steer(message.text, message.images);
+              for (const message of updated.followUp) await session.followUp(message.text, message.images);
+            } catch (error) {
+              try {
+                session.clearQueue();
+                for (const message of original.steering) await session.steer(message.text, message.images);
+                for (const message of original.followUp) await session.followUp(message.text, message.images);
+                setQueuedPromptImages(stateKey, original.steering, original.followUp);
+              } catch (restoreError) {
+                // eslint-disable-next-line preserve-caught-error
+                throw new Error(`${error instanceof Error ? error.message : String(error)}; queue restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+              }
+              throw error;
+            }
+            const next = queueState(session);
+            setQueuedPromptImages(
+              stateKey,
+              queuedPromptImagesForTexts(next.steering, updated.steering),
+              queuedPromptImagesForTexts(next.followUp, updated.followUp),
+            );
+            send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
+          } finally {
+            queueRebuilds.delete(stateKey);
+          }
+        });
+        return;
+      }
+      case "agent.deleteQueue": {
+        const payload = request.payload as { taskId?: string; cwd?: string; messageId?: string } | undefined;
+        if (!payload?.taskId || !payload.messageId) throw new Error("taskId and messageId are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        await withQueueMutationLock(stateKey, async () => {
+          // Pi exposes clearQueue(), steer(), and followUp(), but no arbitrary
+          // row deletion API. Validate the stable Renderer ID against the live
+          // queue, then atomically rebuild the remaining real Pi queue.
+          const liveQueue = queueState(session);
+          reconcileQueuedPromptImages(stateKey, liveQueue.steering, liveQueue.followUp);
+          const imageState = queuedPromptImageState(stateKey);
+          const original = {
+            steering: liveQueue.steering.map((text, index) => imageState.steering[index] ?? { id: randomUUID(), text, images: [] }),
+            followUp: liveQueue.followUp.map((text, index) => imageState.followUp[index] ?? { id: randomUUID(), text, images: [] }),
+          };
+          const messageId = payload.messageId!;
+          if (!original.steering.some((message) => message.id === messageId) && !original.followUp.some((message) => message.id === messageId)) {
+            throw new Error("Queued message is no longer available");
+          }
+          const updated = {
+            steering: original.steering.filter((message) => message.id !== messageId),
+            followUp: original.followUp.filter((message) => message.id !== messageId),
+          };
+
+          queueRebuilds.add(stateKey);
+          try {
+            session.clearQueue();
+            try {
+              for (const message of updated.steering) await session.steer(message.text, message.images);
+              for (const message of updated.followUp) await session.followUp(message.text, message.images);
+            } catch (error) {
+              try {
+                session.clearQueue();
+                for (const message of original.steering) await session.steer(message.text, message.images);
+                for (const message of original.followUp) await session.followUp(message.text, message.images);
+                setQueuedPromptImages(stateKey, original.steering, original.followUp);
+              } catch (restoreError) {
+                // eslint-disable-next-line preserve-caught-error
+                throw new Error(`${error instanceof Error ? error.message : String(error)}; queue restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+              }
+              throw error;
+            }
+            const next = queueState(session);
+            setQueuedPromptImages(
+              stateKey,
+              queuedPromptImagesForTexts(next.steering, updated.steering),
+              queuedPromptImagesForTexts(next.followUp, updated.followUp),
+            );
+            send({ id: request.id, ok: true, result: queueStateWithDetails(session, stateKey) });
           } finally {
             queueRebuilds.delete(stateKey);
           }
@@ -1479,16 +1798,38 @@ async function handle(request: PiHostRequest): Promise<void> {
         return;
       }
       case "providers.login": {
-        const payload = request.payload as { providerId?: string; method?: "api-key" | "oauth"; secret?: string } | undefined;
+        const payload = request.payload as { providerId?: string; method?: "api-key" | "oauth"; secret?: string; authOperationId?: string } | undefined;
         if (!payload?.providerId || !payload.method) throw new Error("providerId and method are required");
-        const runtime = await getModelRuntime();
+        if (payload.authOperationId !== undefined && (!payload.authOperationId.trim() || payload.authOperationId.length > 200)) throw new Error("Invalid auth operation ID");
         if (payload.method === "api-key") {
+          const runtime = await getModelRuntime();
           const apiKey = payload.secret?.trim();
           if (!apiKey) throw new Error("An API key is required");
           await persistProviderApiKey(runtime, payload.providerId, apiKey, request.id);
         } else {
-          await runtime.login(payload.providerId, "oauth", createAuthInteraction(request.id, payload.providerId));
+          const operationId = payload.authOperationId?.trim() || request.id;
+          const previousOperation = activeProviderLoginByProvider.get(payload.providerId);
+          previousOperation?.controller.abort(new Error("Authentication superseded by a new login attempt"));
+          const duplicateOperation = activeProviderLogins.get(operationId);
+          if (duplicateOperation !== previousOperation) duplicateOperation?.controller.abort(new Error("Authentication superseded by a new login attempt"));
+          const operation: ActiveProviderLogin = { operationId, providerId: payload.providerId, controller: new AbortController() };
+          activeProviderLogins.set(operationId, operation);
+          activeProviderLoginByProvider.set(payload.providerId, operation);
+          try {
+            const runtime = await getModelRuntime();
+            await runtime.login(payload.providerId, "oauth", createAuthInteraction(operationId, payload.providerId, undefined, operation.controller.signal));
+          } finally {
+            if (activeProviderLogins.get(operationId) === operation) activeProviderLogins.delete(operationId);
+            if (activeProviderLoginByProvider.get(payload.providerId) === operation) activeProviderLoginByProvider.delete(payload.providerId);
+          }
         }
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "providers.cancelLogin": {
+        const payload = request.payload as { authOperationId?: string } | undefined;
+        if (!payload?.authOperationId) throw new Error("authOperationId is required");
+        activeProviderLogins.get(payload.authOperationId)?.controller.abort(new Error("Authentication cancelled"));
         send({ id: request.id, ok: true, result: undefined });
         return;
       }

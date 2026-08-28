@@ -16,12 +16,26 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Signing, notarization, checksums, SBOM generation, provenance attestations,
   packaged PiHost smoke tests, and release-maintainer documentation.
 - GitHub issue/PR templates, dependency updates, dependency review, and CodeQL.
+- Per-run file change review with a live Composer summary after mutating tools, draggable conversation/review and diff/file dividers, a rounded keyboard-accessible run picker, collapsible changed-file directory tree, per-Session review-view restoration, unified line diff, and persisted task-baseline metadata generated through Pi's public diff API. The most recent non-empty change count remains visible while a queued Follow-up starts a new empty run.
 
 ### Changed
 
+- The project sidebar divider is keyboard- and pointer-resizable, with its desktop width retained locally.
+- Queued messages use a compact inset stack attached directly to the Composer instead of a separate header card and gap.
+- Queue rows preserve image attachments while supporting promotion, in-place editing, and arbitrary deletion; processing-mode choices now expose Pi's confirmed selection and pending state, and the queue trigger stays intact when change review narrows the Composer.
+- Running execution summaries are now non-expandable elapsed-time indicators; completed process details move into a bounded, internally scrollable summary.
+- Conversation typography now uses a consistent turn/continuation/section rhythm; consecutive Assistant commentary flows naturally into a low-emphasis inline live Activity view without hidden status placeholders, while retaining unique timeline identities.
+- The queued-message panel now uses a denser responsive layout, previews queued image thumbnails, and supports editing a queued message in its original Pi queue position.
 - Updated the Pi CLI / SDK compatibility baseline to 0.84.3.
 - Packaged builds now prefer the bundled, lockfile-pinned Pi SDK unless an
   explicit `PIDECK_PI_MODULE` override is supplied.
+
+### Fixed
+
+- Restarting PiDeck after context compaction now restores the complete persisted Session branch instead of showing only the compacted model context.
+- Cancelling an in-progress Provider OAuth login by closing settings now aborts the Pi auth operation, allowing the next attempt to open a fresh browser authorization flow.
+- The live execution panel now interleaves Markdown thinking blocks with expandable tool calls, compacts excessive provider blank lines, and intelligently follows refreshed or late-resizing content without nested scrolling changing the outer transcript position.
+- Project switches keep sidebar sessions strictly scoped to their workspace instead of briefly showing the previous project's conversations.
 
 ### Security
 

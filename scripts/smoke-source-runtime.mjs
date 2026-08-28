@@ -106,6 +106,14 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Unexpected sessions.runMetadata response: ${JSON.stringify(message)}`));
         return;
       }
+      child.send({ id: "session-change-reviews", command: "sessions.changeReviews", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "session-change-reviews") {
+      if (!message.ok || !Array.isArray(message.result)) {
+        finish(new Error(`Unexpected sessions.changeReviews response: ${JSON.stringify(message)}`));
+        return;
+      }
       child.send({ id: "session-capabilities", command: "sessions.capabilities", payload: { taskId, cwd: root } });
       return;
     }
@@ -113,6 +121,25 @@ await new Promise((resolve, reject) => {
       const commands = Array.isArray(message.result?.slashCommands) ? message.result.slashCommands : [];
       if (!message.ok || !commands.some((command) => command?.name === "permission-system")) {
         finish(new Error(`Permission Extension did not load: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "agent-queue", command: "agent.queue", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "agent-queue") {
+      if (!message.ok || !Array.isArray(message.result?.steering) || !Array.isArray(message.result?.followUp)) {
+        finish(new Error(`Unexpected agent.queue response: ${JSON.stringify(message)}`));
+        return;
+      }
+      // A successful arbitrary deletion requires a live queued prompt and would
+      // trigger Provider side effects. Exercise the command safely with a stale
+      // stable ID and require the actionable validation error instead.
+      child.send({ id: "agent-delete-queue", command: "agent.deleteQueue", payload: { taskId, cwd: root, messageId: "missing-smoke-queue-entry" } });
+      return;
+    }
+    if (message?.id === "agent-delete-queue") {
+      if (message.ok || !String(message.error ?? "").includes("Queued message is no longer available")) {
+        finish(new Error(`Unexpected agent.deleteQueue response: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "workspace-snapshot", command: "workspace.snapshot", payload: { cwd: root } });

@@ -473,8 +473,6 @@ https-proxy-agent@7.0.6 — MIT
   https://www.npmjs.com/package/https-proxy-agent/v/7.0.6
 iconv-lite@0.6.3 — MIT
   https://www.npmjs.com/package/iconv-lite/v/0.6.3
-ignore@5.3.2 — MIT
-  https://www.npmjs.com/package/ignore/v/5.3.2
 ignore@7.0.5 — MIT
   https://www.npmjs.com/package/ignore/v/7.0.5
 import-meta-resolve@4.2.0 — MIT
@@ -631,8 +629,6 @@ micromark-util-types@2.0.2 — MIT
   https://www.npmjs.com/package/micromark-util-types/v/2.0.2
 minimatch@10.2.5 — BlueOak-1.0.0
   https://www.npmjs.com/package/minimatch/v/10.2.5
-minimatch@10.2.6 — BlueOak-1.0.0
-  https://www.npmjs.com/package/minimatch/v/10.2.6
 ms@2.1.3 — MIT
   https://www.npmjs.com/package/ms/v/2.1.3
 node-addon-api@8.9.1 — MIT

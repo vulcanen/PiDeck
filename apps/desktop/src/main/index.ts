@@ -429,6 +429,7 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("sessions:delete", (_event, taskId: string, cwd?: string) => requestHost("sessions.delete", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:messages", (_event, taskId: string, cwd?: string) => requestHost("sessions.messages", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:run-metadata", (_event, taskId: string, cwd?: string) => requestHost("sessions.runMetadata", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:change-reviews", (_event, taskId: string, cwd?: string) => requestHost("sessions.changeReviews", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd: requireKnownProjectCwd(cwd) }));
@@ -451,10 +452,11 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("models:list", () => requestHost("models.list"));
   registerTrustedIpcHandler("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("providers:list", () => requestHost("providers.list"));
-  registerTrustedIpcHandler("providers:login", async (_event, providerId: string, method: "api-key" | "oauth", secret?: string) => {
-    await requestHost("providers.login", { providerId, method, secret });
+  registerTrustedIpcHandler("providers:login", async (_event, providerId: string, method: "api-key" | "oauth", secret?: string, authOperationId?: string) => {
+    await requestHost("providers.login", { providerId, method, secret, authOperationId });
     if (method === "oauth") focusHostWindow();
   });
+  registerTrustedIpcHandler("providers:cancel-login", (_event, authOperationId: string) => requestHost("providers.cancelLogin", { authOperationId }));
   registerTrustedIpcHandler("providers:set-api-key", (_event, providerId: string, apiKey: string) => requestHost("providers.setApiKey", { providerId, apiKey }));
   registerTrustedIpcHandler("providers:logout", (_event, providerId: string) => requestHost("providers.logout", { providerId }));
   registerTrustedIpcHandler("providers:auth-response", (_event, requestId: string, value: string, cancelled?: boolean) => requestHost("providers.auth-response", { requestId, value, cancelled }));
@@ -472,6 +474,8 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("agent:set-queue-modes", (_event, taskId: string, modes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" }, cwd?: string) => requestHost("agent.setQueueModes", { taskId, cwd: requireKnownProjectCwd(cwd), ...modes }));
   registerTrustedIpcHandler("agent:clear-queue", (_event, taskId: string, cwd?: string) => requestHost("agent.clearQueue", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:promote-queue", (_event, taskId: string, followUpIndex: number, cwd?: string) => requestHost("agent.promoteQueue", { taskId, followUpIndex, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:edit-queue", (_event, taskId: string, messageId: string, text: string, images?: Array<{ data: string; mimeType: string }>, cwd?: string) => requestHost("agent.editQueue", { taskId, messageId, text, images, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:delete-queue", (_event, taskId: string, messageId: string, cwd?: string) => requestHost("agent.deleteQueue", { taskId, messageId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
   registerTrustedIpcHandler("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
   registerTrustedIpcHandler("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));

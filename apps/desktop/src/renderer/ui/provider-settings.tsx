@@ -25,6 +25,7 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
   const dialogRef = useRef<HTMLElement>(null);
   const authPromptRef = useRef<HTMLFormElement>(null);
   const logoutPromptRef = useRef<HTMLDivElement>(null);
+  const activeOAuthLoginIdsRef = useRef(new Set<string>());
   const t = copy[language];
   const authPromptVisible = Boolean(authPrompt && (authPrompt.type !== "manual_code" || manualAuthVisible));
   const normalizedProviderQuery = providerQuery.trim().toLocaleLowerCase();
@@ -75,6 +76,13 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
     finally { setLoading(false); }
   }, [t.providerLoadFailed]);
   useEffect(() => { void loadProviders(); }, [loadProviders]);
+  useEffect(() => () => {
+    const activeLoginIds = [...activeOAuthLoginIdsRef.current];
+    activeOAuthLoginIdsRef.current.clear();
+    for (const authOperationId of activeLoginIds) {
+      void window.pideck.providers.cancelLogin(authOperationId).catch(() => { /* PiHost may already have completed the login. */ });
+    }
+  }, []);
   useEffect(() => {
     if (!focusProviderId || !providers.length) return;
     setProviderQuery("");
@@ -121,16 +129,21 @@ function ProviderSettings({ language, focusProviderId, onClose, onModelsRefresh 
 
   async function auth(providerId: string, method: AuthMethod, secret?: string) {
     if (method === "api-key" && !secret?.trim()) { setFieldErrors((current) => ({ ...current, [providerId]: t.apiKeyRequired })); return; }
+    const authOperationId = method === "oauth" ? crypto.randomUUID() : undefined;
+    if (authOperationId) activeOAuthLoginIdsRef.current.add(authOperationId);
     setBusyProvider(providerId); setAuthMethod(method); setAuthError(null); setAuthNotice(null); setAuthUrl(null); setAuthPrompt(null); setManualAuthVisible(false); setFieldErrors((current) => ({ ...current, [providerId]: undefined }));
     try {
       if (method === "api-key") await window.pideck.providers.setApiKey(providerId, secret!.trim());
-      else await window.pideck.providers.login(providerId, method);
+      else await window.pideck.providers.login(providerId, method, undefined, authOperationId);
       closeApiKeyForm(); setAuthPrompt(null); setManualAuthVisible(false); setAuthNotice(null); setAuthError(null); setAuthMethod(null); await loadProviders(); await onModelsRefresh(providerId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (method === "api-key") setFieldErrors((current) => ({ ...current, [providerId]: message }));
       else { setAuthPrompt(null); setManualAuthVisible(false); setAuthError(authErrorMessage(error)); }
-    } finally { setBusyProvider(null); setAuthMethod(null); }
+    } finally {
+      if (authOperationId) activeOAuthLoginIdsRef.current.delete(authOperationId);
+      setBusyProvider(null); setAuthMethod(null);
+    }
   }
 
   async function logout(providerId: string) {

@@ -80,6 +80,29 @@ export interface SessionRunRecord {
   durationMs: number;
 }
 
+export type SessionChangeFileStatus = "added" | "modified" | "deleted";
+
+export interface SessionChangeFile {
+  path: string;
+  status: SessionChangeFileStatus;
+  additions: number;
+  deletions: number;
+  patch?: string;
+  binary: boolean;
+  truncated: boolean;
+}
+
+export interface SessionChangeReview {
+  id: string;
+  state: "running" | "completed";
+  startedAt: number;
+  endedAt: number;
+  files: SessionChangeFile[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+}
+
 export interface ImportedSessionSummary {
   id: string;
   title: string;
@@ -92,9 +115,15 @@ export interface ImportedSessionSummary {
 export type QueueDelivery = "steer" | "followUp";
 export type QueueMode = "all" | "one-at-a-time";
 
+export interface AgentQueuedMessage {
+  id: string;
+  text: string;
+  images: PromptImage[];
+}
+
 export interface AgentQueueState {
-  steering: string[];
-  followUp: string[];
+  steering: AgentQueuedMessage[];
+  followUp: AgentQueuedMessage[];
   steeringMode: QueueMode;
   followUpMode: QueueMode;
 }
@@ -167,6 +196,7 @@ export interface PideckBridge {
     remove(taskId: string, cwd?: string): Promise<void>;
     messages(taskId: string, cwd?: string): Promise<unknown[]>;
     runMetadata(taskId: string, cwd?: string): Promise<SessionRunRecord[]>;
+    changeReviews(taskId: string, cwd?: string): Promise<SessionChangeReview[]>;
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string }>;
@@ -185,7 +215,8 @@ export interface PideckBridge {
   };
   providers: {
     list(): Promise<ProviderSummary[]>;
-    login(providerId: string, method: AuthMethod, secret?: string): Promise<void>;
+    login(providerId: string, method: AuthMethod, secret?: string, authOperationId?: string): Promise<void>;
+    cancelLogin(authOperationId: string): Promise<void>;
     logout(providerId: string): Promise<void>;
     setApiKey(providerId: string, apiKey: string): Promise<void>;
     resolveAuth(requestId: string, value: string, cancelled?: boolean): Promise<void>;
@@ -201,6 +232,8 @@ export interface PideckBridge {
     setQueueModes(taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string): Promise<AgentQueueState>;
     clearQueue(taskId: string, cwd?: string): Promise<AgentQueueState>;
     promoteQueue(taskId: string, followUpIndex: number, cwd?: string): Promise<AgentQueueState>;
+    editQueue(taskId: string, messageId: string, text: string, images?: PromptImage[], cwd?: string): Promise<AgentQueueState>;
+    deleteQueue(taskId: string, messageId: string, cwd?: string): Promise<AgentQueueState>;
   };
   extensions: {
     resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
@@ -243,6 +276,7 @@ export type PiHostCommand =
   | "sessions.delete"
   | "sessions.messages"
   | "sessions.runMetadata"
+  | "sessions.changeReviews"
   | "sessions.capabilities"
   | "sessions.compact"
   | "sessions.export"
@@ -255,6 +289,7 @@ export type PiHostCommand =
   | "workspace.snapshot"
   | "providers.list"
   | "providers.login"
+  | "providers.cancelLogin"
   | "providers.setApiKey"
   | "providers.logout"
   | "providers.auth-response"
@@ -267,6 +302,8 @@ export type PiHostCommand =
   | "agent.setQueueModes"
   | "agent.clearQueue"
   | "agent.promoteQueue"
+  | "agent.editQueue"
+  | "agent.deleteQueue"
   | "extension.ui.resolve"
   | "packages.list"
   | "packages.install"

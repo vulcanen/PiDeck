@@ -8,26 +8,27 @@
 | Pi 能力 | PiDeck 入口 | 当前实现 |
 | --- | --- | --- |
 | 项目发现、浏览与移除 | 左侧项目树；多个项目可同时展开，单击项目只切换自身展开状态，右键项目可从列表移除；560px 以下通过顶部按钮打开带焦点约束的会话抽屉，并将背景设为 inert | `SessionManager.listAll()` + Main 有序/隐藏 `cwd` 清单 → `projects.list` / `projects.remove`；移除不删除项目文件或 Pi Session |
-| 会话列表与切换 | 展开任意项目后按最近更新时间倒序显示会话；只有单击具体会话才切换中央工作区 | `SessionManager.list(cwd)` / `updatedAt` |
+| 会话列表与切换 | 展开任意项目后按最近更新时间倒序显示会话；只有单击具体会话才切换中央工作区 | `SessionManager.list(cwd)` / `updatedAt`；每个展开分组只从自身的 `projectTasksByCwd[cwd]` 缓存渲染，跨项目切换的中间帧不会借用前一项目的会话行 |
 | 新建会话 | New task；展开无会话项目时的“新建任务”按钮；空状态按钮 | `SessionManager.create(cwd)` |
-| 会话消息 | 中央对话线程 | `AgentSession.messages`；按 Pi `parseSkillBlock()` 语义将 Skill 引用与用户原文分层展示 |
+| 会话消息 | 中央对话线程 | 通过 Pi `sessionEntryToContextMessages()` 投影完整当前 `SessionManager.getBranch()`；`AgentSession.messages` 继续作为压缩后的模型上下文，重启后仍显示压缩前回合；按 Pi `parseSkillBlock()` 语义将 Skill 引用与用户原文分层展示 |
 | 执行耗时恢复 | “已处理”执行摘要 | PiHost 在 `agent_start`、Follow-up 分组边界和 `agent_settled` 记录 execution group，通过 `SessionManager.appendCustomEntry("pideck.execution-run", ...)` 将精确起止时间写入 Pi Session；Steering 仍合并为同一组，`sessions.runMetadata` 在重启后恢复，旧会话不伪造耗时 |
 | 会话命名 | 会话列表与对话标题 | 首条用户消息后：先用 `deriveSessionTitle` 生成去前缀短标题并经由 `sessions.rename`（对应 Pi `AgentSession.setSessionName()`）持久化作为重载安全的回退；随后异步调用新增的 `sessions.generateTitle` 桥（PiHost 用 `ModelRuntime.complete` 对首条消息做 3–8 词摘要），成功后将标题升级为 LLM 摘要并再次 `sessions.rename` 持久化。仅当标题仍是截断/占位名时才升级，手动改名不被覆盖；LLM 失败回退到截断标题 |
 | 会话删除 | 会话更多菜单 | `sessions.delete(taskId, cwd)`；PiHost 以规范化项目路径 + 会话 ID 标识运行时状态，不会影响其它项目导入的同 ID 会话 |
 | 会话位置与长会话 | 中央对话线程（普通文档流 + 早期消息折叠） | 不使用虚拟列表；只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后。防跳动依赖 `overflow-anchor: auto` 原生 scroll anchoring；非活动 pane 用 `visibility: hidden` 天然保留 `scrollTop` 并暂停 DOM observer；follow 仅由真实 wheel/touch 上滑事件退出，程序化滚动期间 latch 住 |
 | Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
-| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；OpenAI Codex 浏览器登录会预检 Pi 0.84.2–0.84.3 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
+| API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；关闭设置会通过 `AuthInteraction.signal` 中止未完成的登录，新尝试会先替换同一 Provider 的遗留认证再重新打开浏览器；OpenAI Codex 浏览器登录会预检 Pi 0.84.2–0.84.3 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
 | 思考等级 | Composer Thinking 菜单；`/thinking [level]` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel()`；除非显式使用 Pi 的持久化选项，否则变更只作用于当前 Session |
 | 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 0.84.3 应用 `defaultTools`，包括配置后可用的 Windows `powershell` 工具；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
 | Pi slash command catalog | 行首已知 `/` 前缀建议、命令面板 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
 | `@file` 提示 | Composer `@` | `workspace.snapshot` 返回的当前工作区文件快照 |
 | Agent 流式事件 | 中央线程 | `agent_start`、`agent_end.messages`、`agent_settled`、`message_update`、`tool_execution_*` 等 |
-| Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`；队列新增、插入和处理在 follow 状态下自动跟随 |
+| Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`、`editQueue`、`deleteQueue`；批处理模式单选项展示 Pi 已确认的当前模式与请求中反馈，变更审查分栏挤压时队列入口保持单行，带稳定 ID 的条目展示图片缩略图，并支持原位重新编辑或删除任意待处理 Steering/Follow-up 项。由于 Pi 没有任意单项删除 API，PiHost 会校验 sidecar 稳定 ID，再用 Pi 官方清空及按序重新入队 API 原子重建剩余队列，失败时恢复原队列；队列新增、编辑、删除、插入和处理在 follow 状态下自动跟随 |
 | 工具审批 | 中央审批卡 | 当前 PiHost `beforeToolCall` 适配 |
-| 工具过程 | 可折叠过程块 | Tool Result、工具名称、成功/失败状态 |
+| 工具过程 | 运行中不可展开的耗时提示 + 按时间排序的 Activity feed；完成后可折叠过程块 | 执行期间摘要只显示耗时，下方以低强调度的行内信息流和统一会话间距，按 Pi 事件顺序交错显示思考块与工具调用；结束后完整过程进入可展开摘要。实时/完成态详情使用同一高度上限并在溢出时内部滚动；实时区域会跟随刷新及延迟尺寸变化，直到用户有意向上滚动，且不会改变外层对话的 follow 状态；完成后保留 Tool Result、工具名称及成功/失败状态 |
+| 单轮文件变更审查 | Composer 上方的变更摘要可打开分栏审查面板，支持圆角无障碍轮次选择、可折叠变更目录树、统一行级 diff、增删统计、指针/键盘调整分栏及按 Session 恢复视图；排队空轮次会保留最近非空摘要 | PiHost 在每次 `agent_start`/Follow-up 边界记录 Git 工作区基线，在已知变更工具结束后刷新运行中预览，并在整轮结束时执行权威比较，使用 Pi 公开的 `generateUnifiedPatch()` 生成文本 patch，持久化 `pideck.change-review` custom entry。运行前已有的脏文件只有在本轮再次变化时才会计入；任务基线可覆盖 edit/write/bash/PowerShell 的最终结果，二进制和超大内容只报告状态，避免 IPC 负载无界增长 |
 | 本地终端 | 未接入：终端面板与 `Ctrl/Cmd + J` 已移除，`terminal.execute` 桥已删除 | `AgentSession.executeBash()` |
-| 上下文压缩 | Command Palette | `AgentSession.compact()` |
+| 上下文压缩 | Command Palette | `AgentSession.compact()` 缩减后续模型上下文；桌面时间线继续显示完整持久化当前 Session 分支 |
 | Session 导出 | Command Palette | `AgentSession.exportToJsonl()` / `exportToHtml()` |
 | Runtime 状态 | Sidebar | Main/PiHost runtime status event，以及脱敏的 `runtime.error` 启动失败信息 |
 | 中英文 | 顶部语言按钮 | Renderer i18n |
@@ -67,6 +68,6 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 - Pi Package install/remove/update/config 管理器；入口位于命令面板中的 Pi packages。
 当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 完成。
 
-Diff 预览、任务基线 diff 和逐块审阅仍未接入。Pi 提供编辑工具的底层 diff 计算，但 Monaco 编辑器和审阅工作流属于 PiDeck 的桌面产品能力。
+任务基线统一 diff 审查已经接入。逐块接受/撤销及 Monaco 可编辑合并流程仍未实现；在获得安全的 Pi/桌面映射前，PiDeck 不会把这些操作声明为已支持。
 
 新增能力必须先更新 `packages/contracts`，再更新 PiHost、Preload、Renderer 和本文矩阵。

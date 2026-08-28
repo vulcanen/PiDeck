@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
+import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
 import { deriveSessionTitle, isDefaultSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
@@ -8,6 +8,7 @@ import type { ActivityStep, ImageAttachment, ImageContextMenuState, MessageLoad,
 import { createDefaultTaskUiState, sortTasksByUpdatedAt, textFromMessage } from "./message-utils";
 import { useRuntimeEvents } from "./use-runtime-events";
 import { useSessionData } from "./use-session-data";
+import { useChangeReview } from "./use-change-review";
 import { useConversationScroll } from "./use-conversation-scroll";
 import { useGlobalShortcuts } from "./use-global-shortcuts";
 import { useSentImagesCache } from "./use-sent-images-cache";
@@ -63,6 +64,7 @@ export function useAppController() {
   const [queueState, setQueueState] = useState<AgentQueueState | null>(null);
   const [queueMutationBusy, setQueueMutationBusy] = useState(false);
   const [queueDelivery, setQueueDelivery] = useState<QueueDelivery>("followUp");
+  const [queueEdit, setQueueEdit] = useState<{ taskId: string; message: AgentQueuedMessage; delivery: QueueDelivery } | null>(null);
   const [extensionUiRequest, setExtensionUiRequest] = useState<ExtensionUiRequest | null>(null);
   const [packagesOpen, setPackagesOpen] = useState(false);
   const [commandDialog, setCommandDialog] = useState<{ title: string; body: string } | null>(null);
@@ -98,6 +100,7 @@ export function useAppController() {
   const projectLoadRequestRef = useRef(0);
   const modelSelectionRequestRef = useRef(0);
   const initialLoadStartedRef = useRef(false);
+  const queueEditDraftRef = useRef<{ text: string; images: ImageAttachment[]; delivery: QueueDelivery } | null>(null);
   const handlePreviewImage = useCallback((image: PreviewImage) => setPreviewImage(image), []);
   const openImageContextMenu = useCallback((event: React.MouseEvent, image: PreviewImage) => {
     event.preventDefault();
@@ -136,6 +139,22 @@ export function useAppController() {
   }, [activeTaskId, rawMessages, sentImagesByTask]);
   const messageLoad = activeTask ? messageLoads[activeTask.id] ?? { status: "idle" as const } : { status: "idle" as const };
   const activeProject = projects.find((project) => project.cwd === projectCwd) ?? null;
+  const handleChangeReviewError = useCallback((error: unknown) => showNotice(`${t.changeReviewLoadFailed}: ${error instanceof Error ? error.message : String(error)}`), [showNotice, t.changeReviewLoadFailed]);
+  const changeReview = useChangeReview({ taskId: activeTaskId, projectCwd, onError: handleChangeReviewError });
+
+  useEffect(() => {
+    if (!queueEdit) return;
+    const queueMessages = [...(queueState?.steering ?? []), ...(queueState?.followUp ?? [])];
+    const sameTask = queueEdit.taskId === activeTaskId;
+    if (sameTask && queueMessages.some((message) => message.id === queueEdit.message.id)) return;
+    const draft = queueEditDraftRef.current;
+    setComposer(draft?.text ?? "");
+    setComposerImages(draft?.images ?? []);
+    if (draft) setQueueDelivery(draft.delivery);
+    queueEditDraftRef.current = null;
+    setQueueEdit(null);
+    if (sameTask) showNotice(t.queueEditUnavailable);
+  }, [activeTaskId, queueEdit, queueState, showNotice, t.queueEditUnavailable]);
 
   function mergeLiveTaskState(task: TaskSummary): TaskSummary {
     const ui = taskUi[task.id];
@@ -192,6 +211,8 @@ export function useAppController() {
     setContextUsage(undefined);
     setComposer("");
     setComposerImages([]);
+    queueEditDraftRef.current = null;
+    setQueueEdit(null);
     setActiveModel(null);
     setThinkingLevel("off");
     setThinkingLevels(["off"]);
@@ -540,6 +561,7 @@ export function useAppController() {
     setActiveTask,
     refreshWorkspace,
     onQueueActivity: followLatest,
+    onChangeReviewUpdated: changeReview.applyUpdatedReview,
   });
 
   useEffect(() => { void window.pideck.runtime.status().then(setRuntimeStatus).catch(() => setRuntimeStatus("disconnected")); void window.pideck.permissions.status().then(setPermissionStatus).catch(() => undefined); }, []);
@@ -777,10 +799,70 @@ export function useAppController() {
     return false;
   }
 
+  function beginQueueEdit(message: AgentQueuedMessage, delivery: QueueDelivery) {
+    if (!activeTask || queueMutationBusy || queueEdit) return;
+    queueEditDraftRef.current = { text: composer, images: [...composerImages], delivery: queueDelivery };
+    setQueueEdit({ taskId: activeTask.id, message, delivery });
+    setComposer(message.text);
+    setComposerImages(message.images.map((image, index) => ({ id: `queue-${message.id}-${index}`, data: image.data, mimeType: image.mimeType, name: t.imageAttached })));
+    setQueueDelivery(delivery);
+    setSuggestionMode(null);
+  }
+
+  function finishQueueEdit() {
+    const draft = queueEditDraftRef.current;
+    setComposer(draft?.text ?? "");
+    setComposerImages(draft?.images ?? []);
+    if (draft) setQueueDelivery(draft.delivery);
+    queueEditDraftRef.current = null;
+    setQueueEdit(null);
+    setSuggestionMode(null);
+  }
+
+  function cancelQueueEdit() {
+    if (queueMutationBusy) return;
+    finishQueueEdit();
+  }
+
+  function replaceQueuedSentImages(taskId: string, original: AgentQueuedMessage, text: string, images: ImageAttachment[]) {
+    setSentImagesByTask((current) => {
+      const messages = [...(current[taskId] ?? [])];
+      if (original.images.length > 0) {
+        let originalIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const sent = messages[index];
+          if (sent && sent.text === original.text && sent.images.length === original.images.length && sent.images.every((image, imageIndex) => image.data === original.images[imageIndex]?.data && image.mimeType === original.images[imageIndex]?.mimeType)) {
+            originalIndex = index;
+            break;
+          }
+        }
+        if (originalIndex >= 0) messages.splice(originalIndex, 1);
+      }
+      if (images.length > 0) messages.push({ text, images: [...images] });
+      return { ...current, [taskId]: messages };
+    });
+  }
+
   async function sendPrompt() {
     const text = composer.trim();
     if (!text && !composerImages.length) return;
     if (suggestionMode && suggestions.length > 0) { applySuggestion(suggestions[suggestionIndex] as any); return; }
+    if (queueEdit) {
+      if (!activeTask || activeTask.id !== queueEdit.taskId || queueMutationBusy) return;
+      const images = [...composerImages];
+      setQueueMutationBusy(true);
+      try {
+        const next = await window.pideck.agent.editQueue(activeTask.id, queueEdit.message.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), projectCwd);
+        setQueueState(next);
+        replaceQueuedSentImages(activeTask.id, queueEdit.message, text, images);
+        finishQueueEdit();
+      } catch (error) {
+        showNotice(error instanceof Error ? error.message : String(error));
+      } finally {
+        setQueueMutationBusy(false);
+      }
+      return;
+    }
     if (await handleBuiltinCommand(text)) { setComposer(""); setSuggestionMode(null); return; }
     if (!activeModel?.authConfigured && !modelOptions.some((model) => model.authConfigured)) { showNotice(t.noModelAvailable); return; }
     const creating = !activeTask;
@@ -949,25 +1031,45 @@ export function useAppController() {
     return sortTasksByUpdatedAt([...listedById.values(), ...optimisticById.values()]);
   }
 
-  async function setQueueModes(modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }) {
-    if (!activeTask) return;
-    try { setQueueState(await window.pideck.agent.setQueueModes(activeTask.id, modes, projectCwd)); }
-    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+  async function setQueueModes(modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }): Promise<boolean> {
+    if (!activeTask || queueEdit || queueMutationBusy) return false;
+    setQueueMutationBusy(true);
+    try {
+      setQueueState(await window.pideck.agent.setQueueModes(activeTask.id, modes, projectCwd));
+      return true;
+    }
+    catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+    finally { setQueueMutationBusy(false); }
   }
 
   async function clearQueue() {
-    if (!activeTask) return;
+    if (!activeTask || queueEdit || queueMutationBusy) return;
     try { setQueueState(await window.pideck.agent.clearQueue(activeTask.id, projectCwd)); }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
   async function promoteQueuedMessage(followUpIndex: number) {
-    if (!activeTask || queueMutationBusy) return;
+    if (!activeTask || queueEdit || queueMutationBusy) return;
     setQueueMutationBusy(true);
     try {
       const next = await window.pideck.agent.promoteQueue(activeTask.id, followUpIndex, projectCwd);
       setQueueState(next);
       if (next.steering.length > 0) setQueueDelivery("steer");
+    }
+    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setQueueMutationBusy(false); }
+  }
+
+  async function deleteQueuedMessage(message: AgentQueuedMessage) {
+    if (!activeTask || queueEdit || queueMutationBusy) return;
+    setQueueMutationBusy(true);
+    try {
+      const next = await window.pideck.agent.deleteQueue(activeTask.id, message.id, projectCwd);
+      setQueueState(next);
+      replaceQueuedSentImages(activeTask.id, message, "", []);
     }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
     finally { setQueueMutationBusy(false); }
@@ -1005,7 +1107,7 @@ export function useAppController() {
     onChange: updateComposer,
     onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (suggestionMode && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setSuggestionIndex((current) => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))); return; }
-      if (event.key === "Escape") { setSuggestionMode(null); return; }
+      if (event.key === "Escape") { if (suggestionMode) setSuggestionMode(null); else if (queueEdit) cancelQueueEdit(); return; }
       if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendPrompt(); }
     },
     onPaste: handleComposerPaste,
@@ -1036,10 +1138,14 @@ export function useAppController() {
     queueDelivery,
     queueState,
     queueMutationBusy,
+    queueEdit: queueEdit ? { messageId: queueEdit.message.id, delivery: queueEdit.delivery } : null,
     onQueueDelivery: setQueueDelivery,
     onQueueModes: setQueueModes,
     onClearQueue: clearQueue,
     onPromoteQueue: (index: number) => void promoteQueuedMessage(index),
+    onEditQueue: beginQueueEdit,
+    onDeleteQueue: (message: AgentQueuedMessage) => void deleteQueuedMessage(message),
+    onCancelQueueEdit: cancelQueueEdit,
   };
 
   async function resolveExtensionUi(value: string | boolean | undefined) {
@@ -1058,7 +1164,7 @@ export function useAppController() {
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, searchQuery, setSearchQuery, createTask, createTaskForProject, chooseProjectDirectory,
     openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions,
     loadInitialData, restartHost, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
-    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities,
+    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities, changeReview,
     composerProps, jumpToLatest, sendPrompt, abortActive,
     paletteOpen, paletteCommands, composer, updateComposer, compactSession, exportSession,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,

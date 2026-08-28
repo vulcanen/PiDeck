@@ -7,6 +7,7 @@ export const icons: Record<string, string> = {
   panel: "M3 3h10v10H3zM3 6h10M6 6v7",
   terminal: "m4 5 3 3-3 3M8 11h4",
   file: "M4 2.5h5l3 3V13H4zM9 2.5v3h3",
+  diff: "M5 2.5v8M3 4.5l2-2 2 2M11 13.5v-8M9 11.5l2 2 2-2",
   send: "m3 8 10-5-3 10-2-4-5-1Z",
   stop: "M4 4h8v8H4z",
   settings: "M8 3.2 9.1 4.1l1.4-.4.7 1.3 1.4.4-.1 1.5 1 1-.9 1.2.4 1.4-1.3.7-.4 1.4-1.5-.1-1 1-1.2-.9-1.4.4-.7-1.3-1.4-.4.1-1.5-1-1 .9-1.2-.4-1.4 1.3-.7.4-1.4 1.5.1zM6.4 8a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 0 0-3.2 0Z",
@@ -27,6 +28,8 @@ export const icons: Record<string, string> = {
   folderOpen: "M2.5 5V4h4l1.3 1.5H13M2.5 6.5h11l-1.4 6H2.5z",
   more: "M4 8h.01M8 8h.01M12 8h.01",
   copy: "M5 5h7v8H5zM3 11H2.5V3h7v.5",
+  edit: "m3 11.8.7-2.8 6.7-6.7 2.3 2.3L6 11.3zM9.7 3l2.3 2.3",
+  trash: "M3.5 4.5h9M6 4.5v-2h4v2M5 6v6.5h6V6M7 7.5v3M9 7.5v3",
   alert: "M8 2.5 14 13H2zM8 6v3.5M8 11.5h.01",
   down: "m4 6 4 4 4-4",
 };

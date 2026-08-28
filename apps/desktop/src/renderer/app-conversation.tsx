@@ -1,12 +1,12 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PermissionStatus } from "@pideck/contracts";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { PermissionStatus, SessionChangeReview } from "@pideck/contracts";
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon } from "@pideck/ui-system";
 import type { MessageLoad, TaskUiState, WorkingPhase } from "./types";
 import type { ComposerProps } from "./ui";
 import type { ConversationScrollHandle, ConversationScrollSnapshot } from "./use-conversation-scroll";
-import { ApprovalCard, ConversationSkeleton, MemoComposer, MemoMessageTimeline, PermissionLevelControl } from "./ui";
+import { ApprovalCard, ChangeReviewLauncher, ChangeReviewPanel, ConversationSkeleton, MemoComposer, MemoMessageTimeline, PaneResizeHandle, PermissionLevelControl } from "./ui";
 
 type AppCopy = (typeof copy)[Language];
 
@@ -224,6 +224,13 @@ export interface AppConversationProps {
   steeringMessageKeys: string[];
   showJumpToLatest: boolean;
   permissionStatus: PermissionStatus | null;
+  changeReviews: SessionChangeReview[];
+  latestChangeReview: SessionChangeReview | null;
+  selectedChangeReview: SessionChangeReview | null;
+  changeReviewOpen: boolean;
+  changeReviewLoading: boolean;
+  changeReviewWidth: number;
+  changeReviewFileListWidth: number;
   composerProps: ComposerProps;
   onTimelineAtEnd: (atEnd: boolean) => void;
   onRetryInitialLoad: () => void | Promise<unknown>;
@@ -233,6 +240,11 @@ export interface AppConversationProps {
   onJumpToLatest: () => void;
   onResolveApproval: (decision: "allow-once" | "deny") => Promise<void>;
   onPermissionStatus: (status: PermissionStatus) => void;
+  onOpenChangeReview: () => void;
+  onCloseChangeReview: () => void;
+  onSelectChangeReview: (reviewId: string) => void;
+  onChangeReviewWidth: (width: number) => void;
+  onChangeReviewFileListWidth: (width: number) => void;
   backgroundInert?: boolean;
 }
 
@@ -240,10 +252,28 @@ export function AppConversation({
   language, t, activeTask, activeProject, projectCwd, tasks, initialLoading, projectSwitching,
   scrollPositionsRef, scrollHandleRef,
   loadError, messageLoad, messages, isWorking, streamText, workingPhase, activeTaskUi,
-  steeringMessageKeys, showJumpToLatest, permissionStatus, composerProps, onTimelineAtEnd,
+  steeringMessageKeys, showJumpToLatest, permissionStatus, changeReviews, latestChangeReview,
+  selectedChangeReview, changeReviewOpen, changeReviewLoading, changeReviewWidth,
+  changeReviewFileListWidth, composerProps, onTimelineAtEnd,
   onRetryInitialLoad, onChooseProject, onCreateTask, onRetryMessages, onJumpToLatest,
-  onResolveApproval, onPermissionStatus, backgroundInert = false,
+  onResolveApproval, onPermissionStatus, onOpenChangeReview, onCloseChangeReview,
+  onSelectChangeReview, onChangeReviewWidth, onChangeReviewFileListWidth, backgroundInert = false,
 }: AppConversationProps) {
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const [layoutWidth, setLayoutWidth] = useState(0);
+  useLayoutEffect(() => {
+    const layout = layoutRef.current;
+    if (!layout) return;
+    const update = () => setLayoutWidth(layout.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(layout);
+    return () => observer.disconnect();
+  }, []);
+  const minimumReviewWidth = 520;
+  const maximumReviewWidth = Math.max(minimumReviewWidth, layoutWidth - 400);
+  const effectiveReviewWidth = Math.min(maximumReviewWidth, Math.max(minimumReviewWidth, changeReviewWidth));
+
   const activeData = useMemo<ConversationPaneData | null>(() => activeTask ? {
     task: activeTask,
     messageLoad,
@@ -257,6 +287,8 @@ export function AppConversation({
 
   return <>
     <main className="main-column" id="main-content" tabIndex={-1} inert={backgroundInert} aria-hidden={backgroundInert || undefined}>
+      <div ref={layoutRef} className={`conversation-layout ${changeReviewOpen ? "review-open" : ""}`} style={{ "--change-review-width": `${effectiveReviewWidth}px` } as CSSProperties}>
+        <section className="conversation-primary">
       {activeTask && <div className="conversation-header"><div className="conversation-title"><div className="breadcrumb"><span>{activeProject?.name ?? "PiDeck"}</span><span>/</span><span>{activeTask.title ?? t.conversation}</span></div><h1>{activeTask.title ?? t.conversation}</h1></div></div>}
       <ConversationPaneDeck
         activeData={activeData}
@@ -280,8 +312,32 @@ export function AppConversation({
       />
       <div className="composer-dock">
         {showJumpToLatest && <button className="jump-latest" onClick={onJumpToLatest}><Icon name="down" size={13} />{t.jumpToLatest}</button>}
+        {latestChangeReview && latestChangeReview.files.length > 0 && <ChangeReviewLauncher review={latestChangeReview} language={language} onOpen={onOpenChangeReview} />}
         <MemoComposer {...composerProps} />
         <PermissionLevelControl language={language} status={permissionStatus} onStatus={onPermissionStatus} />
+      </div>
+        </section>
+        {changeReviewOpen && <>
+          <PaneResizeHandle
+            className="change-review-panel-resize-handle"
+            label={t.changeReviewResizePanel}
+            value={effectiveReviewWidth}
+            minimum={minimumReviewWidth}
+            maximum={maximumReviewWidth}
+            direction={-1}
+            onChange={onChangeReviewWidth}
+          />
+          <ChangeReviewPanel
+            reviews={changeReviews}
+            selectedReview={selectedChangeReview}
+            language={language}
+            loading={changeReviewLoading}
+            fileListWidth={changeReviewFileListWidth}
+            onFileListWidth={onChangeReviewFileListWidth}
+            onSelectReview={onSelectChangeReview}
+            onClose={onCloseChangeReview}
+          />
+        </>}
       </div>
     </main>
   </>;

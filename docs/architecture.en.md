@@ -54,7 +54,7 @@ Main is only responsible for:
 - Opening native dialogs for directory picking, session import, etc.
 - Setting the Dock icon on macOS and attempting to load `pideck-miniwindow.node` for the minimized-window icon; failures degrade to a warning.
 
-The project directory list stores only `cwd`, never Session or workspace content. Clicking a project in the Renderer expands its session list on demand via `sessions.list(cwd)`, keeping other projects' expansion states independent and leaving the central session untouched; only clicking a specific session switches the workspace. Right-click "remove" on a project only adds `cwd` to hidden references and never deletes project files or Pi Sessions. Main never creates `AgentSession`, never stores Provider credentials, and never executes user Shell commands.
+The project directory list stores only `cwd`, never Session or workspace content. Clicking a project in the Renderer expands its session list on demand via `sessions.list(cwd)`, keeping other projects' expansion states independent and leaving the central session untouched; only clicking a specific session switches the workspace. Every expanded group renders from its own `projectTasksByCwd[cwd]` cache, so the intermediate render of a cross-project switch cannot place the previous project's Sessions under the newly selected project. Right-click "remove" on a project only adds `cwd` to hidden references and never deletes project files or Pi Sessions. Main never creates `AgentSession`, never stores Provider credentials, and never executes user Shell commands.
 
 ### 2.2 Preload
 
@@ -69,11 +69,11 @@ Preload exposes a capability-scoped `window.pideck` via `contextBridge`. The Ren
 PiHost is responsible for:
 
 - Orchestrating `@pideck/pi-adapter`, SessionManager, AgentSession, and ModelRuntime.
-- Reading/restoring Pi Sessions and writing `pideck.execution-run` run metadata via `SessionManager.appendCustomEntry()`.
+- Reading/restoring Pi Sessions, projecting the complete active `SessionManager.getBranch()` as the desktop transcript while leaving `AgentSession.messages` as Pi's compacted model context, and writing `pideck.execution-run` run metadata via `SessionManager.appendCustomEntry()`.
 - Forwarding Agent events, Approval events, Auth events, and Extension UI requests.
 - Executing Pi built-in tools, Bash, Provider login, Pi package management, permission-mode reads/writes, and session operations.
 - Initializing Pi's own proxy-aware HTTP dispatcher before reporting `runtime.status=connected`, so OAuth token exchange, model requests, and Provider HTTP calls share the same PiHost route. Package-manager subprocesses such as npm, pnpm, and git retain their own proxy configuration.
-- Converting cross-process data into JSON-serializable responses (`jsonSafe`) and saving queued image attachments out-of-band so `promoteQueue` does not drop them.
+- Converting cross-process data into JSON-serializable responses (`jsonSafe`) and keeping stable IDs plus queued image attachments in a PiHost sidecar so queue thumbnails, `promoteQueue`, `editQueue`, and `deleteQueue` can rebuild Pi's queue without dropping attachments.
 - Scoping every in-memory SessionManager, AgentSession, queue, approval, and lifecycle resource by normalized `cwd` plus Pi session ID. Imported JSONL files may preserve the same ID in different projects, but deletion, abort, and queue operations remain project-isolated.
 - Running Git workspace inspection and `gh` sharing commands asynchronously with bounded timeouts so external processes do not block the PiHost IPC loop.
 
@@ -109,6 +109,7 @@ PiDeck/
 │        ├─ use-app-controller.tsx        # Page state and action orchestration
 │        ├─ use-session-data.ts           # Session/capability/message loading
 │        ├─ use-runtime-events.ts         # PiHost runtime event normalization
+│        ├─ use-change-review.ts          # Per-Session persisted run-review loading/state
 │        ├─ use-conversation-scroll.ts    # Session scroll snapshots and latest position
 │        ├─ use-stream-deltas.ts          # Bounded batching of streaming deltas
 │        ├─ use-global-shortcuts.ts       # Global shortcuts and focus boundaries
@@ -127,7 +128,10 @@ PiDeck/
 │           ├─ message-timeline.tsx       # Session timeline (document flow + earlier-message folding)
 │           ├─ message-view.tsx           # Single-message rendering
 │           ├─ execution-summary.tsx      # "Processed" execution summary
-│           ├─ composer.tsx               # Input, suggestions, queue delivery
+│           ├─ live-activity.tsx          # Live thinking and chronological tool-call feed
+│           ├─ change-review.tsx          # Split-pane per-run unified diff review
+│           ├─ pane-resize-handle.tsx     # Accessible pointer/keyboard pane separator
+│           ├─ composer.tsx               # Input, suggestions, queue thumbnails/editing
 │           ├─ command-palette.tsx        # Command palette
 │           ├─ dialogs.tsx                # Rename/trust/resume/extension dialogs
 │           ├─ approval-card.tsx          # Tool approval card
@@ -193,7 +197,11 @@ Must be observed:
 - New IPC must update `packages/contracts` first, then Main, Preload, and Renderer.
 - Pi fallback capabilities must live outside UI components and state that the Pi CLI/SDK remains the authoritative source.
 
-The Renderer session timeline is composed of `app-conversation.tsx` and `ui/message-timeline.tsx` as a **plain document-flow list with earlier-message folding** — no virtual list. Because Mermaid, KaTeX, and syntax highlighting are asynchronously sized, the measure-position loop of virtual lists is fundamentally incompatible with them (jumping, overlap, rubber-banding); instead only the most recent `FOLD_WINDOW = 200` messages stay mounted, with older messages folded behind a "show earlier" button revealing `FOLD_STEP = 200` at a time. Anti-jump relies on native scroll anchoring: `.conversation-scroll` must keep `overflow-anchor: auto` (the virtual-list-era `none` disables that mechanism).
+PiHost restores the desktop transcript by projecting every entry on Pi's complete active `SessionManager.getBranch()`. It deliberately does not expose `AgentSession.messages` as history because that array is the compaction-aware model context and omits the summarized prefix after a restart. Context compaction therefore remains effective for subsequent model requests without hiding persisted pre-compaction turns from the user.
+
+The Renderer session timeline is composed of `app-conversation.tsx` and `ui/message-timeline.tsx` as a **plain document-flow list with earlier-message folding** — no virtual list. Consecutive Assistant commentary records inside one turn retain unique React identities and use a shared three-level rhythm for turn, continuation, and section spacing through the transition into live Activity, while the final record alone reuses the live response key. During a run, the execution summary is a non-interactive elapsed-time indicator while `ui/live-activity.tsx` renders normalized thinking blocks and tool calls in their actual chronological order as a low-emphasis inline flow rather than a separate raised card. After settlement, the live panel retracts and the complete process moves into the expandable summary. Both live and completed process regions have the same bounded viewport-relative height and scroll internally on overflow; while the live region is following, `ActivityStep` refreshes and late Markdown/diagram resizes keep its inner viewport pinned to the newest output, an intentional upward wheel/touch gesture pauses that follow, and returning to the inner bottom resumes it. These process regions are marked as nested scroll islands, so their wheel/touch/captured-scroll events never change the outer transcript follow state or show its "jump to latest" control. Tool arguments/results stay collapsed per call, and excessive provider blank lines are compacted for presentation only. Because Mermaid, KaTeX, and syntax highlighting are asynchronously sized, the measure-position loop of virtual lists is fundamentally incompatible with them (jumping, overlap, rubber-banding); instead only the most recent `FOLD_WINDOW = 200` messages stay mounted, with older messages folded behind a "show earlier" button revealing `FOLD_STEP = 200` at a time. Anti-jump relies on native scroll anchoring: `.conversation-scroll` must keep `overflow-anchor: auto` (the virtual-list-era `none` disables that mechanism).
+
+Per-run change review is owned by PiHost plus `session-change-review.ts`. At `agent_start`, PiHost captures the current Git working-tree baseline without changing the user's index; a non-Steering Follow-up closes the previous segment and reuses the same boundary snapshot as the next baseline, while Steering remains in the active segment. Known mutating tool completions (edit, write, Bash, and PowerShell) compare against the active baseline to emit an in-progress review preview. Settlement performs the authoritative final comparison, including any other workspace changes, then uses Pi's public `generateUnifiedPatch()` and persists a bounded `pideck.change-review` custom entry. The `sessions.changeReviews` bridge restores the latest 20 entries after restart, and a `change-review.updated` agent event updates the active Renderer. `ui/change-review.tsx` opens from the summary above the Composer as a wide split pane or a responsive overlay drawer. Its run picker is a rounded keyboard-accessible popover rather than a native square menu, and changed paths are projected into a collapsible directory tree without changing the flat PiHost review DTO. On desktop, the project/conversation, conversation/review, and diff/file-list separators support pointer dragging and keyboard arrows; review-open state, selected run, and pane widths are cached per Session, while the global sidebar width is retained locally. A newly queued Follow-up may create an empty running review, so the Composer launcher falls back to the newest non-empty review until that run changes a file. Binary/oversized files remain visible as changed without sending unbounded content across IPC. Existing dirty files are excluded unless their actual working-tree content changes during the run.
 
 Each visited Session keeps its own pane; inactive panes use `visibility: hidden` instead of `display: none`, so the browser naturally preserves each pane's `scrollTop` without manual restore logic, while their scroll/resize/mutation observers are disconnected until the pane is active again. The `ConversationScrollSnapshot` is only `{ top, follow }`. Leaving follow is driven **only by real input gestures** (`wheel` with `deltaY < 0`, or an upward touch drag) — never by inferring direction from a shrinking `scrollTop`, because content legitimately shrinks (a live row replaced by the final message, the working indicator disappearing, an execution summary collapsing) and a delta-based guess misreads that as "user scrolled up", killing auto-follow mid-stream. During programmatic smooth scrolling, `pinningRef` (with a 1000ms timeout safety valve) latches follow so the "jump to latest" button does not flash back mid-animation. Modal overlays mark the application shell inert/hidden from assistive technology, and the shared focus primitive lets only the topmost nested dialog handle Escape.
 
@@ -206,11 +214,11 @@ Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
 - `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
 - `projects.list/chooseDirectory/remove/setTrust`
-- `sessions.list/create/delete/remove/messages/runMetadata/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
+- `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
 - `models.list`
 - `workspace.snapshot`
-- `providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl`
-- `agent.prompt/abort/setThinkingLevel/setModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue`
+- `providers.list/login/cancelLogin/logout/setApiKey/resolveAuth/openAuthUrl`
+- `agent.prompt/abort/setThinkingLevel/setModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
 - `extensions.resolveUi`
 - `packages.list/install/remove/update/configure`
 - `approvals.resolve`
@@ -222,7 +230,7 @@ Every invoke handler validates that the caller is the active PiDeck window's mai
 Three naming relationships need attention:
 
 - `sessions.remove` is an alias of `sessions.delete`; both go through the same `sessions:delete` IPC channel.
-- `providers.resolveAuth` / `providers.openAuthUrl` correspond to IPC channels `providers:auth-response` / `providers:open-auth-url`; only the former is forwarded to the PiHost command `providers.auth-response`, while the latter is opened by Main directly in the system browser.
+- `providers.resolveAuth` / `providers.cancelLogin` / `providers.openAuthUrl` correspond to IPC channels `providers:auth-response` / `providers:cancel-login` / `providers:open-auth-url`; the first two are forwarded to PiHost commands `providers.auth-response` / `providers.cancelLogin`, while the last is opened by Main directly in the system browser.
 - `sessions.changelog` maps to the PiHost command `app.changelog`; `projects.list/chooseDirectory/remove` are composed by Main from `projects.json` plus the PiHost `projects.list` and `sessions.list` commands, with no one-to-one Host command.
 
 If the docs disagree with `packages/contracts`, contracts and the implementation win; the docs must be updated in the same change.
@@ -246,9 +254,9 @@ Six message shapes are currently dispatched with a top-level `type`:
 
 `runtime.status` is published by Main: `connected` when PiHost reports it, `starting` during process startup, `disconnected` at process exit with all pending requests rejected.
 
-Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-response`) as text, options, or a cancel state; cancelling ends Pi's wait without leaving a pending login request, and PiHost also propagates Pi's per-prompt abort signal so SDK-cancelled fallback prompts do not leave stale waiters. For the version-guarded Pi 0.84.2–0.84.3 OpenAI Codex browser flow, PiHost probes the SDK's fixed loopback listener endpoint before resolving the browser-method prompt. A failed probe keeps that prompt active so the Renderer can show an actionable error and the user can choose Pi's device-code method. The SDK's concurrent manual-code prompt stays a secondary fallback while the loopback callback is pending, and Main restores/focuses the PiDeck window after `providers.login` succeeds.
+Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-response`) as text, options, or a cancel state; cancelling ends Pi's wait without leaving a pending login request, and PiHost also propagates Pi's per-prompt abort signal so SDK-cancelled fallback prompts do not leave stale waiters. Each Renderer OAuth attempt carries an opaque operation ID. Closing Provider settings calls `providers.cancelLogin`, and PiHost aborts that operation through Pi's `AuthInteraction.signal`; starting another attempt for the same Provider also supersedes any stale operation before invoking `ModelRuntime.login()`. For the version-guarded Pi 0.84.2–0.84.3 OpenAI Codex browser flow, PiHost probes the SDK's fixed loopback listener endpoint before resolving the browser-method prompt. A failed probe keeps that prompt active so the Renderer can show an actionable error and the user can choose Pi's device-code method. The SDK's concurrent manual-code prompt stays a secondary fallback while the loopback callback is pending, and Main restores/focuses the PiDeck window after `providers.login` succeeds.
 
-`agent.event` currently covers agent start/end, agent settled, turn start/end, message start/update/end/snapshot, tool execution start/update/end, and queue update events. The `messages` of `agent_end` come from the Pi SDK, so the Renderer can merge the round's messages before any automatic retry or queue continuation; `agent_settled` then reads the final Session snapshot. The Renderer only consumes serializable normalized objects, never `AgentSession` instances.
+`agent.event` currently covers agent start/end, agent settled, turn start/end, message start/update/end/snapshot, tool execution start/update/end, and queue update events. Queue updates are normalized into stable-ID entries with text and serializable image payloads; clear-and-rebuild mutations suppress intermediate empty/partial updates and publish one authoritative result. The `messages` of `agent_end` come from the Pi SDK, so the Renderer can merge the round's messages before any automatic retry or queue continuation; `agent_settled` then reads the final Session snapshot. The Renderer only consumes serializable normalized objects, never `AgentSession` instances.
 
 ## 7. Pi Capability Mapping
 
@@ -257,7 +265,7 @@ Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-resp
 - Pi slash command / Prompt / Skill catalog → Composer suggestions and command palette.
 - Pi Agent event → streaming replies, tool process, approvals, and run status.
 - Pi Session export/compact → session operations and command palette entries; Session Tree `/fork`, `/clone`, `/tree` remain on the to-support list.
-- Pi Agent steering/follow-up queue → Composer queue panel, delivery mode, and batch mode.
+- Pi Agent steering/follow-up queue → compact Composer-attached queue stack, delivery mode, batch mode, image thumbnails, promotion, in-place re-editing, and deletion of any queued row. The batch-mode radio rows reflect Pi's current `steeringMode`/`followUpMode`, expose an in-flight state, and close only after Pi confirms the mutation. The Composer toolbar responds to the conversation pane's container width, so opening or resizing change review trims secondary hints/model metadata before preserving the queue trigger as a single-line control. Pi has no arbitrary-row removal API, so editing and deletion validate the stable sidecar ID, then atomically use Pi's official `clearQueue()` plus ordered `steer()`/`followUp()` rebuilding under a PiHost mutation lock; failures restore the original queue.
 - Pi Package management → Pi packages settings panel in the command palette.
 - Pi permission system modes → permission-level control below the input.
 - Pi workspace file list → `@file` reference candidates in the Composer. `workspace.snapshot` also returns git `changes`, but the current UI has no standalone Files/Changes panel, so the field is not yet consumed.
@@ -284,6 +292,8 @@ providers.list
 sessions.create
 sessions.runMetadata
 sessions.capabilities
+agent.queue
+agent.deleteQueue (missing stable ID must fail without mutation)
 workspace.snapshot
 ```
 

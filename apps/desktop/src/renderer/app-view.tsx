@@ -1,10 +1,26 @@
+import { useEffect, useState, type CSSProperties } from "react";
 import { Icon } from "@pideck/ui-system";
 import { AppConversation } from "./app-conversation";
 import { AppOverlays } from "./app-overlays";
 import { AppSidebar } from "./app-sidebar";
+import { PaneResizeHandle } from "./ui";
 import type { AppController } from "./use-app-controller";
 
+const MINIMUM_SIDEBAR_WIDTH = 190;
+const MAXIMUM_SIDEBAR_WIDTH = 420;
+
 export function AppView({ controller }: { controller: AppController }) {
+  const [sidebarMaximumWidth, setSidebarMaximumWidth] = useState(() => Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = Number(localStorage.getItem("pideck.sidebar-width"));
+    return Number.isFinite(stored) ? Math.min(MAXIMUM_SIDEBAR_WIDTH, Math.max(MINIMUM_SIDEBAR_WIDTH, stored)) : 270;
+  });
+  useEffect(() => {
+    const updateMaximum = () => setSidebarMaximumWidth(Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
+    window.addEventListener("resize", updateMaximum);
+    return () => window.removeEventListener("resize", updateMaximum);
+  }, []);
+  const effectiveSidebarWidth = Math.min(sidebarMaximumWidth, Math.max(MINIMUM_SIDEBAR_WIDTH, sidebarWidth));
   const {
     language, setLanguage, theme, themePreference, cycleTheme, projectCwd, projects, expandedProjectCwds, tasks,
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
@@ -12,7 +28,7 @@ export function AppView({ controller }: { controller: AppController }) {
     openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions, createTaskForProject,
     searchQuery, setSearchQuery,
     loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
-    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus,
+    workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, changeReview,
     composerProps, jumpToLatest,
     setMessageReload, showNotice, handlePermissionStatus, openProviderSettings,
     patchTaskUi, updateTaskLists, restartHost,
@@ -42,7 +58,7 @@ export function AppView({ controller }: { controller: AppController }) {
       </div>
     </header>
 
-    <div className="workspace-grid">
+    <div className="workspace-grid" style={{ "--sidebar-width": `${effectiveSidebarWidth}px` } as CSSProperties}>
       <AppSidebar
         language={language}
         t={t}
@@ -51,7 +67,6 @@ export function AppView({ controller }: { controller: AppController }) {
         mobileSidebarOpen={mobileSidebarOpen}
         projectCwd={projectCwd}
         projects={projects}
-        tasks={tasks}
         projectTasksByCwd={projectTasksByCwd}
         projectTaskLoads={projectTaskLoads}
         expandedProjectCwds={expandedProjectCwds}
@@ -73,6 +88,17 @@ export function AppView({ controller }: { controller: AppController }) {
         onTaskMenu={(task, rect) => openContextMenu(task, rect.right - 160, rect.bottom + 4)}
         onLoadProjectSessions={loadProjectSessions}
         onRetry={runtimeStatus === "disconnected" ? restartHost : loadInitialData}
+      />
+      <PaneResizeHandle
+        className="sidebar-resize-handle"
+        label={t.resizeSidebar}
+        value={effectiveSidebarWidth}
+        minimum={MINIMUM_SIDEBAR_WIDTH}
+        maximum={sidebarMaximumWidth}
+        onChange={(width) => {
+          setSidebarWidth(width);
+          localStorage.setItem("pideck.sidebar-width", String(Math.round(width)));
+        }}
       />
 
       <AppConversation
@@ -96,6 +122,13 @@ export function AppView({ controller }: { controller: AppController }) {
         steeringMessageKeys={activeTask ? steeringMessageKeysByTask[activeTask.id] ?? [] : []}
         showJumpToLatest={showJumpToLatest}
         permissionStatus={permissionStatus}
+        changeReviews={changeReview.reviews}
+        latestChangeReview={changeReview.launcherReview}
+        selectedChangeReview={changeReview.selectedReview}
+        changeReviewOpen={changeReview.reviewOpen}
+        changeReviewLoading={changeReview.reviewLoading}
+        changeReviewWidth={changeReview.reviewWidth}
+        changeReviewFileListWidth={changeReview.fileListWidth}
         composerProps={composerProps}
         onTimelineAtEnd={handleTimelineAtEnd}
         onRetryInitialLoad={runtimeStatus === "disconnected" ? restartHost : loadInitialData}
@@ -109,6 +142,11 @@ export function AppView({ controller }: { controller: AppController }) {
           catch (error) { showNotice(error instanceof Error ? error.message : String(error)); throw error; }
         }}
         onPermissionStatus={handlePermissionStatus}
+        onOpenChangeReview={changeReview.openLatestReview}
+        onCloseChangeReview={() => changeReview.setReviewOpen(false)}
+        onSelectChangeReview={changeReview.setSelectedReviewId}
+        onChangeReviewWidth={changeReview.setReviewWidth}
+        onChangeReviewFileListWidth={changeReview.setFileListWidth}
         backgroundInert={mobileSidebarOpen}
       />
 

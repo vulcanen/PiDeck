@@ -14,7 +14,6 @@ export interface AppSidebarProps {
   mobileSidebarOpen: boolean;
   projectCwd: string;
   projects: ProjectSummary[];
-  tasks: TaskSummary[];
   projectTasksByCwd: Record<string, TaskSummary[]>;
   projectTaskLoads: Record<string, { status: "idle" | "loading" | "ready" | "error"; error?: string }>;
   expandedProjectCwds: string[];
@@ -39,7 +38,7 @@ export interface AppSidebarProps {
 }
 
 export function AppSidebar({
-  language, t, sidebarRef, searchInputRef, mobileSidebarOpen, projectCwd, projects, tasks,
+  language, t, sidebarRef, searchInputRef, mobileSidebarOpen, projectCwd, projects,
   projectTasksByCwd, projectTaskLoads, expandedProjectCwds, searchQuery, activeTask,
   initialLoading, runtimeStatus, shortcut, onCloseMobile, onOpenCommandPalette, onCreateTask, onCreateTaskForProject,
   onChooseProject, onSearchQuery, onSelectProject, onOpenProjectContext, onSelectTask,
@@ -59,9 +58,13 @@ export function AppSidebar({
           {projects.map((project) => {
             const selected = project.cwd === projectCwd;
             const expanded = expandedProjectCwds.includes(project.cwd);
-            const projectTasks = selected ? tasks : projectTasksByCwd[project.cwd] ?? [];
+            // Every expanded group renders from its own cwd-scoped cache. During
+            // a cross-project switch, `projectCwd` updates before the selected
+            // project's asynchronous load completes; borrowing the global
+            // active `tasks` list here briefly duplicated the previous project.
+            const projectTasks = projectTasksByCwd[project.cwd] ?? [];
             const filteredProjectTasks = projectTasks.filter((task) => task.title.toLocaleLowerCase().includes(normalizedQuery));
-            const projectTaskLoad = selected ? { status: initialLoading ? "loading" as const : "ready" as const } : projectTaskLoads[project.cwd] ?? { status: "idle" as const };
+            const projectTaskLoad = projectTaskLoads[project.cwd] ?? { status: selected && initialLoading ? "loading" as const : "idle" as const };
             return <section className={`project-group ${selected ? "selected" : ""} ${expanded ? "expanded" : ""}`} key={project.id}>
               <button className="project-row" type="button" disabled={initialLoading} aria-expanded={expanded} title={project.cwd} onClick={() => void onSelectProject(project)} onContextMenu={(event) => { event.preventDefault(); onOpenProjectContext(project, event.clientX, event.clientY); }} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onOpenProjectContext(project, rect.left + 24, rect.bottom - 4); } }}>
                 <Icon name={expanded ? "folderOpen" : "folder"} size={17} />
