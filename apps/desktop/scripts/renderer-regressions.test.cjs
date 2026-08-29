@@ -100,14 +100,26 @@ test("persisted user shell commands remain visible with their command and output
 
 test("shell result UI stays compact, accessible, and actionable", () => {
   const source = rendererSource("ui/message-view.tsx");
+  const shellOutput = rendererSource("ui/shell-output.tsx");
   const styles = rendererSource("styles.css");
   assert.match(source, /LONG_SHELL_OUTPUT_LINES/);
   assert.match(source, /copyText\(execution\.output\)/);
+  assert.match(source, /<ShellOutput output=\{displayOutput\}/);
   assert.match(source, /aria-expanded=\{expanded\}/);
   assert.match(source, /aria-controls=\{outputId\}/);
   assert.match(source, /shellExitCode/);
   assert.match(source, /shellExcludedFromContext/);
+  assert.match(source, /replace\(\/\\r\\n\?\/g, "\\n"\)\.replace\(\/\\n\+\$\/, ""\)/);
+  assert.match(shellOutput, /disableStdin:\s*true/);
+  assert.match(shellOutput, /convertEol:\s*true/);
+  assert.match(shellOutput, /screenReaderMode:\s*true/);
+  assert.match(shellOutput, /tabStopWidth:\s*8/);
+  assert.match(shellOutput, /new fitModule\.FitAddon\(\)/);
+  assert.match(shellOutput, /shell-command-output-fallback/);
   assert.match(styles, /\.shell-command-output-wrap\.collapsed/);
+  assert.match(styles, /\.shell-command-output-terminal \{[^}]*height:\s*min\(calc\(var\(--shell-output-lines\) \* 17px \+ 25px\)/);
+  assert.match(styles, /\.shell-command-output-wrap\.collapsed \.shell-command-output-terminal[^}]*height:\s*154px[^}]*max-height:\s*154px/);
+  assert.match(styles, /\.shell-command-footer > button \{[^}]*min-height:\s*var\(--control-height\)/);
   assert.match(styles, /\.shell-command-copy:focus-visible/);
 });
 
@@ -168,6 +180,34 @@ test("cross-project switches keep each sidebar session list cwd-scoped", () => {
   assert.match(sidebar, /const projectTasks = projectTasksByCwd\[project\.cwd\] \?\? \[\]/);
   assert.doesNotMatch(sidebar, /selected \? tasks : projectTasksByCwd/);
   assert.doesNotMatch(sidebarProps, /tasks=\{tasks\}/);
+});
+
+test("desktop sidebar collapse preserves compact navigation affordances", () => {
+  const sidebar = rendererSource("app-sidebar.tsx");
+  const appView = rendererSource("app-view.tsx");
+  const styles = rendererSource("styles.css");
+  const i18n = fs.readFileSync(path.join(__dirname, "../../../packages/i18n/src/index.ts"), "utf8");
+
+  assert.match(appView, /COLLAPSED_SIDEBAR_WIDTH\s*=\s*64/);
+  assert.match(appView, /pideck\.sidebar-collapsed/);
+  assert.match(appView, /sidebarCollapsed \? COLLAPSED_SIDEBAR_WIDTH : effectiveSidebarWidth/);
+  assert.match(appView, /sidebarCollapsed \? "sidebar-collapsed"/);
+  assert.match(appView, /onToggleSidebar=\{toggleSidebar\}/);
+  assert.match(appView, /disabled=\{reviewDrawerOpen \|\| sidebarCollapsed\}/);
+  assert.match(sidebar, /sidebarCollapsed: boolean/);
+  assert.match(sidebar, /onToggleSidebar: \(\) => void/);
+  assert.match(sidebar, /className=\{`sidebar \$\{mobileSidebarOpen \? "mobile-open" : ""\} \$\{sidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
+  assert.match(sidebar, /className="sidebar-collapse-toggle"/);
+  assert.match(sidebar, /aria-controls="workspace-sidebar"/);
+  assert.match(sidebar, /sidebarCollapsed \? t\.expandSidebar : t\.collapseSidebar/);
+  assert.match(styles, /@media \(min-width: 561px\)[\s\S]*?\.sidebar\.sidebar-collapsed \.project-sessions, \.sidebar\.sidebar-collapsed \.empty-sidebar \{ display: none; \}/);
+  assert.match(styles, /\.sidebar\.sidebar-collapsed \.project-row \{[^}]*width:\s*44px[^}]*min-height:\s*44px/);
+  assert.match(styles, /\.sidebar\.sidebar-collapsed \.runtime-status button \{[^}]*width:\s*44px[^}]*min-height:\s*28px/);
+  assert.match(styles, /@media \(max-width: 560px\)[\s\S]*?\.sidebar-collapse-toggle \{ display: none; \}/);
+  assert.match(i18n, /collapseSidebar: "收起项目侧栏"/);
+  assert.match(i18n, /collapseSidebar: "Collapse project sidebar"/);
+  assert.match(i18n, /expandSidebar: "展开项目侧栏"/);
+  assert.match(i18n, /expandSidebar: "Expand project sidebar"/);
 });
 
 test("startup restores sessions for every persisted expanded project", () => {
@@ -299,6 +339,7 @@ test("/settings opens the Pi settings surface backed by SettingsManager", () => 
   );
 
   assert.match(controller, /command === "settings"[\s\S]*?setPiSettingsOpen\(true\)/);
+  assert.match(controller, /new Set\(\["fork", "clone", "tree"\]\)/);
   assert.match(capabilities, /name: "settings"/);
   assert.match(settingsUi, /window\.pideck\.settings\.get/);
   assert.match(settingsUi, /window\.pideck\.settings\.update/);
@@ -665,7 +706,7 @@ test("per-run file changes open a bounded and accessible split-pane review", () 
   assert.match(conversation, /inert=\{changeReviewOpen && changeReviewDrawer\}/);
   assert.match(rendererSource("app-view.tsx"), /reviewDrawerOpen[\s\S]*?change-review-backdrop/);
   assert.match(rendererSource("app-sidebar.tsx"), /inert=\{backgroundInert\}/);
-  assert.match(rendererSource("app-view.tsx"), /disabled=\{reviewDrawerOpen\}/);
+  assert.match(rendererSource("app-view.tsx"), /disabled=\{reviewDrawerOpen(?: \|\| sidebarCollapsed)?\}/);
   assert.match(review, /parseUnifiedPatch/);
   assert.match(review, /change-review-line-number/);
   assert.match(review, /changeReviewUnchangedLines/);
@@ -703,8 +744,22 @@ test("per-run file changes open a bounded and accessible split-pane review", () 
   assert.match(styles, /\.change-review-split-cell\.empty[\s\S]*?repeating-linear-gradient/);
   assert.match(styles, /\.change-review-split-marker[\s\S]*?width:\s*3px/);
   assert.match(styles, /\.change-review-split-gap-cell/);
-  assert.match(styles, /\.app-shell\.dark \.change-review-code\.split/);
+  assert.match(styles, /--review-file-header-height:\s*44px/);
+  assert.match(styles, /--review-toolbar-height:\s*40px/);
+  assert.match(styles, /--selection-bg:/);
+  assert.match(styles, /--selection-bg-subtle:/);
+  assert.match(styles, /--selection-control-shadow:/);
+  assert.doesNotMatch(styles, /--selection-shadow:\s*inset/);
+  assert.doesNotMatch(styles, /--selection-control-shadow:\s*inset/);
+  assert.match(styles, /input\[type="checkbox"\], input\[type="radio"\][^}]*accent-color:\s*var\(--selection-indicator/);
+  assert.match(styles, /\.change-review-diff\s*\{[^}]*grid-template-rows:\s*var\(--review-file-header-height\)\s+var\(--review-toolbar-height\)/);
+  assert.match(styles, /\.change-review-files-title\s*\{[^}]*min-height:\s*var\(--review-file-header-height\)/);
+  assert.match(styles, /\.change-review-file-filter\s*\{[^}]*top:\s*var\(--review-file-header-height\)[^}]*min-height:\s*var\(--review-toolbar-height\)/);
+  assert.match(styles, /\.change-review-code\.split\s*\{[\s\S]*?--split-canvas:\s*var\(--diff-split-canvas\)/);
+  assert.doesNotMatch(styles, /\.app-shell\.dark \.change-review-code\.split/);
   assert.match(styles, /\.change-review-tree-toggle\[aria-pressed="true"\]/);
+  assert.match(styles, /\.change-review-segmented button\[aria-pressed="true"\][^}]*background:\s*var\(--selection-bg\)[^}]*box-shadow:\s*var\(--selection-control-shadow\)/);
+  assert.match(styles, /\.change-review-tree-file\.active[^}]*background:\s*var\(--selection-bg\)[^}]*box-shadow:\s*var\(--selection-shadow\)/);
   assert.match(styles, /@media \(max-width: 1280px\)[\s\S]*?\.change-review-panel/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.change-review-tree-row/);
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*?\.change-review-body/);
@@ -768,11 +823,47 @@ test("review split compression keeps the queue delivery control on one line", ()
   assert.match(composer, /composer-mention/);
   assert.match(styles, /\.conversation-primary \{[^}]*container-name:\s*conversation-primary;[^}]*container-type:\s*inline-size;/);
   assert.match(styles, /\.composer-queue-control[^}]*flex:\s*0 0 auto/);
-  assert.match(styles, /\.composer-model-control \{[^}]*min-width:\s*0;[^}]*flex:\s*0 1 300px/);
+  assert.match(styles, /\.composer-model-control \{[^}]*min-width:\s*0;[^}]*flex:\s*0 1 auto;[^}]*max-width:\s*min\(300px, 42vw\)/);
+  assert.match(styles, /\.composer-model-control \.model-chip \{[^}]*width:\s*auto;[^}]*max-width:\s*100%/);
+  assert.match(styles, /\.model-chip \{[^}]*width:\s*max-content;[^}]*max-width:\s*min\(300px, 42vw\)/);
   assert.match(styles, /\.chip, \.model-chip \{[^}]*white-space:\s*nowrap/);
   assert.match(styles, /@container conversation-primary \(max-width: 760px\)[\s\S]*\.composer-hint \{ display:\s*none;/);
   assert.match(styles, /@container conversation-primary \(max-width: 560px\)[\s\S]*\.composer-mention, \.model-provider \{ display:\s*none;/);
   assert.doesNotMatch(styles, /\.composer-tools \.chip\.subtle \{ display:\s*none;/);
+  assert.match(styles, /\.change-review-hunk-actions \{[^}]*flex-direction:\s*row;[^}]*padding:\s*2px;[^}]*border:/);
+  assert.match(styles, /\.change-review-hunk-actions button:hover:not\(:disabled\) \{[^}]*box-shadow:/);
+});
+
+test("renderer controls share theme tokens across surfaces and modes", () => {
+  const styles = rendererSource("styles.css");
+
+  assert.match(styles, /--radius-control:\s*8px/);
+  assert.match(styles, /--radius-dialog:\s*14px/);
+  assert.match(styles, /--control-height-touch:\s*44px/);
+  assert.match(styles, /--shadow-popover:/);
+  assert.match(styles, /--overlay-scrim:/);
+  assert.match(styles, /--selection-bg:/);
+  assert.match(styles, /--selection-bg-subtle:/);
+  assert.match(styles, /--selection-border:/);
+  assert.match(styles, /--selection-shadow:/);
+  assert.match(styles, /--selection-control-shadow:/);
+  assert.doesNotMatch(styles, /--selection-shadow:\s*inset/);
+  assert.doesNotMatch(styles, /--selection-control-shadow:\s*inset/);
+  assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark\s*\{[\s\S]*?--overlay-scrim:/);
+  assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark\s*\{[\s\S]*?--selection-bg:/);
+  assert.match(styles, /\.pi-settings-fields select[^}]*border:\s*1px solid var\(--line\)[^}]*border-radius:\s*var\(--radius-control\)/);
+  assert.match(styles, /\.extension-widget[^}]*border:\s*1px solid var\(--line\)[^}]*border-radius:\s*var\(--radius-control\)/);
+  assert.match(styles, /\.task-context-menu, \.image-context-menu[^}]*box-shadow:\s*var\(--shadow-popover\)/);
+  assert.match(styles, /\.change-review-hunk-actions button:hover:not\(:disabled\)[^}]*box-shadow:\s*var\(--shadow-subtle\)/);
+  assert.match(styles, /\.project-group\.selected > \.project-row[^}]*color:\s*var\(--text\)/);
+  assert.doesNotMatch(styles, /\.project-group\.selected > \.project-row[^}]*background:/);
+  assert.doesNotMatch(styles, /\.project-group\.selected > \.project-row[^}]*box-shadow:/);
+  assert.match(styles, /\.task-row\.active[^}]*background:\s*var\(--selection-bg-subtle\)[^}]*box-shadow:\s*var\(--selection-shadow\)/);
+  assert.match(styles, /\.inline-menu > button\.active[^}]*background:\s*var\(--selection-bg\)[^}]*box-shadow:\s*var\(--selection-control-shadow\)/);
+  assert.match(styles, /\.composer-thinking-control \.inline-menu\s*\{[^}]*right:\s*auto;[^}]*left:\s*0/);
+  assert.match(styles, /\.provider-filters button\[aria-pressed="true"\][^}]*background:\s*var\(--selection-bg\)[^}]*box-shadow:\s*var\(--selection-control-shadow\)/);
+  assert.doesNotMatch(styles, /\.provider-filters button\[aria-pressed="true"\][^}]*border-color:\s*var\(--selection-border\)/);
+  assert.doesNotMatch(styles, /\.change-review-run-trigger\[aria-expanded="true"\][^}]*border-color:\s*var\(--selection-border\)/);
 });
 
 test("runtime activity aligns to the newest persisted turn", () => {

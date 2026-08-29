@@ -8,6 +8,7 @@ import type { AppController } from "./use-app-controller";
 
 const MINIMUM_SIDEBAR_WIDTH = 190;
 const MAXIMUM_SIDEBAR_WIDTH = 420;
+const COLLAPSED_SIDEBAR_WIDTH = 64;
 
 export function AppView({ controller }: { controller: AppController }) {
   const [sidebarMaximumWidth, setSidebarMaximumWidth] = useState(() => Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
@@ -16,6 +17,7 @@ export function AppView({ controller }: { controller: AppController }) {
     const stored = Number(localStorage.getItem("pideck.sidebar-width"));
     return Number.isFinite(stored) ? Math.min(MAXIMUM_SIDEBAR_WIDTH, Math.max(MINIMUM_SIDEBAR_WIDTH, stored)) : 270;
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("pideck.sidebar-collapsed") === "true");
   useEffect(() => {
     const updateMaximum = () => setSidebarMaximumWidth(Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
     const drawerMedia = window.matchMedia("(max-width: 1280px)");
@@ -34,6 +36,12 @@ export function AppView({ controller }: { controller: AppController }) {
     };
   }, []);
   const effectiveSidebarWidth = Math.min(sidebarMaximumWidth, Math.max(MINIMUM_SIDEBAR_WIDTH, sidebarWidth));
+  const renderedSidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : effectiveSidebarWidth;
+  const toggleSidebar = () => setSidebarCollapsed((current) => {
+    const next = !current;
+    localStorage.setItem("pideck.sidebar-collapsed", String(next));
+    return next;
+  });
   const {
     language, setLanguage, theme, themePreference, cycleTheme, projectCwd, projects, expandedProjectCwds, tasks,
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
@@ -45,12 +53,12 @@ export function AppView({ controller }: { controller: AppController }) {
     composerProps, jumpToLatest,
     setMessageReload, showNotice, handlePermissionStatus, openProviderSettings,
     patchTaskUi, updateTaskLists, restartHost,
-    paletteOpen, pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen,
+    paletteOpen, pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen,
     commandDialog, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, previewImage,
   } = controller;
   const reviewDrawerOpen = changeReview.reviewOpen && reviewDrawer;
   const modalOverlayOpen = Boolean(
-    paletteOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen
+    paletteOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen || piSettingsOpen
     || commandDialog || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || previewImage,
   );
   return <>
@@ -72,7 +80,7 @@ export function AppView({ controller }: { controller: AppController }) {
       </div>
     </header>
 
-    <div className={`workspace-grid ${reviewDrawerOpen ? "review-drawer-open" : ""}`} style={{ "--sidebar-width": `${effectiveSidebarWidth}px` } as CSSProperties}>
+    <div className={`workspace-grid ${reviewDrawerOpen ? "review-drawer-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} style={{ "--sidebar-width": `${renderedSidebarWidth}px` } as CSSProperties}>
       {reviewDrawerOpen && <button type="button" className="change-review-backdrop" tabIndex={-1} aria-hidden="true" onClick={() => changeReview.setReviewOpen(false)} />}
       <AppSidebar
         language={language}
@@ -80,6 +88,7 @@ export function AppView({ controller }: { controller: AppController }) {
         sidebarRef={sidebarRef}
         searchInputRef={searchInputRef}
         mobileSidebarOpen={mobileSidebarOpen}
+        sidebarCollapsed={sidebarCollapsed}
         backgroundInert={reviewDrawerOpen}
         projectCwd={projectCwd}
         projects={projects}
@@ -92,6 +101,7 @@ export function AppView({ controller }: { controller: AppController }) {
         runtimeStatus={runtimeStatus}
         shortcut={shortcut}
         onCloseMobile={() => setMobileSidebarOpen(false)}
+        onToggleSidebar={toggleSidebar}
         onCreateTask={createTask}
         onCreateTaskForProject={createTaskForProject}
         onChooseProject={chooseProjectDirectory}
@@ -111,7 +121,7 @@ export function AppView({ controller }: { controller: AppController }) {
         value={effectiveSidebarWidth}
         minimum={MINIMUM_SIDEBAR_WIDTH}
         maximum={sidebarMaximumWidth}
-        disabled={reviewDrawerOpen}
+        disabled={reviewDrawerOpen || sidebarCollapsed}
         onChange={(width) => {
           setSidebarWidth(width);
           localStorage.setItem("pideck.sidebar-width", String(Math.round(width)));

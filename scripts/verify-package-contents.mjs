@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const REQUIRED_PATHS = [
   "apps/desktop/dist/main/index.js",
   "apps/desktop/dist/preload/index.js",
+  "packages/contracts/dist/index.js",
   "packages/pi-host/dist/index.js",
   "dist-renderer/index.html",
   "LICENSE",

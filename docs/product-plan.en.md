@@ -19,7 +19,7 @@ Provider API keys, OAuth, token refresh, and session files remain managed by the
 
 ## 2. Current Implementation Baseline
 
-Pi SDK baseline: `@earendil-works/pi-coding-agent@0.84.3`. PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.3 applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes remain session-scoped because PiDeck calls `setModel()` / `setThinkingLevel()` without Pi's explicit `persist` option, and `/thinking [level]` maps to the desktop thinking selector.
+Pi SDK baseline: `@earendil-works/pi-coding-agent@0.84.3`. PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.3 applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes persist through Pi's user settings because PiDeck calls `setModel()` / `setThinkingLevel()` with `{ persist: true }`; `/thinking [level]` maps to the desktop thinking selector. The `/settings` sheet edits the same user-wide defaults through `SettingsManager`.
 
 Current runnable topology:
 

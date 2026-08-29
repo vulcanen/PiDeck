@@ -5,12 +5,12 @@
   "main": "dist/main/index.js",
   "scripts": {
     "build:native": "node scripts/build-native.mjs",
-    "predev": "npm --workspace @pideck/domain run build && npm --workspace @pideck/pi-adapter run build && npm --workspace @pideck/permission-engine run build && npm --workspace @pideck/pi-host run build && npm --workspace @pideck/i18n run build && npm --workspace @pideck/ui-system run build && npm run build:native && tsc -p tsconfig.json",
+    "predev": "npm --workspace @pideck/contracts run build && npm --workspace @pideck/domain run build && npm --workspace @pideck/pi-adapter run build && npm --workspace @pideck/permission-engine run build && npm --workspace @pideck/pi-host run build && npm --workspace @pideck/i18n run build && npm --workspace @pideck/ui-system run build && npm run build:native && tsc -p tsconfig.json",
     "dev": "concurrently -k \"vite --config vite.config.mts\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
-    "prebuild": "npm --workspace @pideck/domain run build && npm --workspace @pideck/pi-adapter run build && npm --workspace @pideck/permission-engine run build && npm --workspace @pideck/pi-host run build && npm --workspace @pideck/i18n run build && npm --workspace @pideck/ui-system run build",
+    "prebuild": "npm --workspace @pideck/contracts run build && npm --workspace @pideck/domain run build && npm --workspace @pideck/pi-adapter run build && npm --workspace @pideck/permission-engine run build && npm --workspace @pideck/pi-host run build && npm --workspace @pideck/i18n run build && npm --workspace @pideck/ui-system run build",
     "build": "npm run build:native && tsc -p tsconfig.json && vite build --config vite.config.mts",
     "pretest:renderer": "npm run prebuild",
-    "test:renderer": "tsc -p tsconfig.json && node --test scripts/renderer-regressions.test.cjs scripts/behavior-regressions.test.cjs",
+    "test:renderer": "tsc -p tsconfig.json && node --test scripts/renderer-regressions.test.cjs scripts/behavior-regressions.test.cjs scripts/dom-regressions.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -19,6 +19,8 @@
     "@pideck/domain": "0.1.3",
     "@pideck/i18n": "0.1.3",
     "@pideck/ui-system": "0.1.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "katex": "^0.16.11",
     "mermaid": "^11.4.1",
     "react": "^19.2.8",
@@ -37,6 +39,7 @@
     "concurrently": "^10.0.4",
     "cross-env": "^10.1.0",
     "electron": "^43.2.0",
+    "happy-dom": "^20.11.15",
     "typescript": "^7.0.2",
     "vite": "^8.2.0",
     "wait-on": "^9.1.0"

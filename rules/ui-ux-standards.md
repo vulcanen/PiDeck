@@ -13,6 +13,53 @@ PiDeck is a local developer tool, not a marketing page. The interface uses:
 - SVG line icons; do not use Emoji as functional icons.
 - Visual effects serve state expression; do not add animation to every element for decoration.
 
+### 1.1 Semantic visual tokens
+
+All Renderer surfaces and controls must use the semantic tokens declared in `styles.css`. Do not introduce a new literal color, shadow, radius, or control height when an existing token expresses the same role.
+
+- Surfaces: `--canvas`, `--sidebar`, `--surface`, `--surface-raised`, `--surface-muted`, and `--surface-strong`.
+- Text and borders: `--text`, `--muted`, `--faint`, `--line`, and `--line-strong`.
+- State colors: `--accent`, `--green`, `--amber`, `--red`, and `--blue`. State color must still be paired with text, icon, shape, or status semantics.
+- Compatibility aliases such as `--border` and `--text-primary` are legacy bridges only; new styles must use the canonical tokens above.
+- Dark mode overrides belong in `.app-shell.dark, .overlay-root.dark`; component selectors must consume the semantic tokens rather than duplicating dark-mode literals.
+
+### 1.2 Radius, elevation, and control sizing
+
+Use this scale consistently so controls from the title bar, sidebar, composer, settings, and review drawer feel like one product:
+
+| Role | Token | Value |
+| --- | --- | --- |
+| Micro badge / icon affordance | `--radius-xs` | 5px |
+| Row / compact control | `--radius-sm` | 7px |
+| Form and segmented control | `--radius-control` | 8px |
+| Card / popover | `--radius-card` | 10px |
+| Modal / dialog | `--radius-dialog` | 14px |
+| Status pill | `--radius-pill` | 999px |
+
+Control heights follow the same contract:
+
+- `--control-height-compact` (28px) is for dense desktop toolbars and icon affordances.
+- `--control-height` (32px) is the default button, chip, and row height.
+- `--control-height-action` (36px) is for prominent actions and menu options.
+- `--control-height-touch` (44px) is required for touch/mobile controls and must be used by mobile overrides.
+- Review chrome uses `--review-file-header-height` (44px) for both the diff file header and file-list title, and `--review-toolbar-height` (40px) for both the diff viewbar and file filter. Keep these paired rows equal so the two review columns stay visually aligned.
+- Selection states use `--selection-bg` for the active option and `--selection-bg-subtle` for the active row/open trigger. Keep the fill close to its surrounding surface so selection feels calm; use text weight, a check/icon marker, or the existing ARIA state as the secondary cue. `--selection-border` is reserved for cases where an outline is genuinely needed and must not become the primary accent for ordinary selection.
+
+Use `--shadow-subtle` for hovered controls and lightweight grouped actions, `--shadow-control` for the composer and floating launchers, `--shadow-popover` for menus, and `--shadow` for dialogs or major panels. Selected controls may use the lower-contrast `--selection-control-shadow` when a little separation is needed. Overlay backdrops use `--overlay-scrim` (or `--overlay-scrim-subtle` for a drawer backdrop) and must have a dark-mode override.
+
+### 1.3 Component consistency rules
+
+- `.button` is the baseline action style. Variants may change intent colors, but must retain the shared control height, radius, focus ring, and active-state feedback.
+- Menus, suggestion popovers, context menus, and dialogs must use the shared radius/elevation tokens. Menu items need a visible hover and keyboard focus state; do not rely on hover to expose an important action.
+- The model selector is intrinsic-width: `.composer-model-control` may shrink, while `.model-chip` uses `width: max-content` with a bounded `max-width`. Do not give it a fixed `width: 100%`, which creates unexplained blank space beside the model name.
+- Review hunk navigation actions are a horizontal pair inside one compact segmented container on desktop. At mobile widths each action expands to the touch height while remaining a pair.
+- Split diff colors are expressed through `--diff-split-*` tokens. Do not hard-code a second dark-only split palette in the component selector.
+- Native checkbox/radio controls use the selection indicator color and must retain their checked state alongside a visible label; do not rely on a color-only custom replacement.
+- Every stateful control needs hover, `:focus-visible`, disabled, and (where applicable) active/pressed styling. Focus must remain visible against both `--surface` and `--surface-muted`.
+- Every selected/active state must combine at least two cues: a gentle visible fill plus an indicator such as a check icon, text weight, or `aria-pressed`/`aria-selected` semantics. Avoid inset shadows and accent-colored borders for ordinary selection; if a small depth cue is useful, use the low-contrast external `--selection-control-shadow`. The selected cue must remain distinguishable in both light and dark themes and must not depend on hover.
+- Hierarchical project rows are an intentional exception: when a child session is selected, the parent project row stays transparent so the two levels do not visually merge. Preserve the project text weight and accent folder icon, and keep the normal hover background available.
+- The desktop project sidebar supports a persisted collapsed rail at 64px. In the collapsed state keep New Task, collapse/expand, project, command-palette, and runtime-status affordances reachable through icons with labels/tooltips; hide secondary labels and session lists only. The mobile drawer remains independently controlled by the top navigation button.
+
 ## 2. Accessibility (Highest Priority)
 
 - Every icon button must have both `aria-label` and `title`.
@@ -79,9 +126,11 @@ Acceptance widths include at least: 375, 560, 760, 1024, 1440px.
 
 - Below 560px, hide non-core sidebars and keep primary actions in the conversation and input.
 - Below 760px, the Inspector uses a drawer and must not squeeze the main conversation.
-- Touch targets should be at least 44px; desktop compact controls must not be smaller than 32px and must have a keyboard-reachable path.
+- Touch targets should be at least 44px; labeled desktop controls should be at least 32px and must have a keyboard-reachable path. Dense icon-only toolbar affordances may use `--control-height-compact` (28px) when they retain a visible focus state and do not hide the only path to the action.
 - Popover, Tooltip, and Command Palette must not be clipped by a parent `overflow: hidden`.
 - Any fixed overlay must avoid the input, Inspector, Toast, and system bounds.
+- At 375–560px, the model selector must remain content-sized (with ellipsis when bounded) and must not reserve a large empty flex column; the review hunk actions must expand to `--control-height-touch`.
+- At 560–760px, controls may hide secondary labels, but the primary action, model, queue mode, and close controls must remain discoverable and keyboard reachable.
 
 ## 8. Copy and Data Boundaries
 
@@ -108,6 +157,8 @@ python3 "$UI_UX_PRO_MAX_SEARCH" "focus modal keyboard loading motion" --domain u
 - [ ] Running, awaiting approval, failure, empty state, and loading state all have clear visual feedback.
 - [ ] The main flows are completable by keyboard; Modal focus can enter/exit/restore.
 - [ ] Touch sizes, focus rings, contrast, and reduced-motion have been checked.
+- [ ] Shared radius, elevation, control-height, overlay, and diff tokens are used; no new undefined `var(--...)` references or component-level dark palette literals were introduced.
+- [ ] Pi Settings, Extension UI, menus, and the review drawer have been checked in both light and dark themes at desktop and mobile widths.
 - [ ] Commands, Skills, and file references do not falsely highlight normal text.
 - [ ] Images, long text, and long commands do not overflow in small windows.
 - [ ] New IPC updates `packages/contracts` first.

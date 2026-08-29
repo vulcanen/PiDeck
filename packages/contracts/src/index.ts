@@ -378,3 +378,148 @@ export interface PiHostResponse {
   result?: unknown;
   error?: string;
 }
+
+type PiHostPayloadField =
+  | "string"
+  | "boolean"
+  | "number"
+  | "string[]"
+  | "string[]|null"
+  | "images"
+  | "object"
+  | "model"
+  | "ui-value"
+  | `enum:${string}`;
+
+type PiHostPayloadSpec = {
+  fields: Record<string, PiHostPayloadField>;
+  required?: readonly string[];
+  allowUndefined?: boolean;
+};
+
+const piHostPayloadSpecs: Partial<Record<PiHostCommand, PiHostPayloadSpec>> = {
+  "runtime.status": { fields: {}, allowUndefined: true },
+  "runtime.shutdown": { fields: {}, allowUndefined: true },
+  "app.changelog": { fields: {}, allowUndefined: true },
+  "app.info": { fields: {}, allowUndefined: true },
+  "projects.list": { fields: { knownCwds: "string[]" } },
+  "projects.setTrust": { fields: { cwd: "string", trusted: "boolean" }, required: ["cwd", "trusted"] },
+  "sessions.list": { fields: { cwd: "string" } },
+  "sessions.create": { fields: { cwd: "string", name: "string" } },
+  "sessions.delete": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.messages": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.runMetadata": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.changeReviews": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.changeReview": { fields: { taskId: "string", reviewId: "string", cwd: "string" }, required: ["taskId", "reviewId"] },
+  "sessions.capabilities": { fields: { taskId: "string", cwd: "string" } },
+  "sessions.compact": { fields: { taskId: "string", instructions: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.reload": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.export": { fields: { taskId: "string", format: "enum:jsonl|html", cwd: "string" }, required: ["taskId", "format"] },
+  "sessions.import": { fields: { taskId: "string", inputPath: "string", cwd: "string" }, required: ["inputPath"] },
+  "sessions.rename": { fields: { taskId: "string", name: "string", cwd: "string" }, required: ["taskId", "name"] },
+  "sessions.generateTitle": { fields: { taskId: "string", message: "string", cwd: "string", model: "model" }, required: ["taskId", "message"] },
+  "sessions.stats": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "sessions.share": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "models.list": { fields: {}, allowUndefined: true },
+  "workspace.snapshot": { fields: { cwd: "string" }, required: ["cwd"] },
+  "providers.list": { fields: {}, allowUndefined: true },
+  "providers.login": { fields: { providerId: "string", method: "enum:api-key|oauth", secret: "string", authOperationId: "string" }, required: ["providerId", "method"] },
+  "providers.cancelLogin": { fields: { authOperationId: "string" }, required: ["authOperationId"] },
+  "providers.setApiKey": { fields: { providerId: "string", secret: "string" }, required: ["providerId", "secret"] },
+  "providers.logout": { fields: { providerId: "string" }, required: ["providerId"] },
+  "providers.auth-response": { fields: { requestId: "string", value: "string", cancelled: "boolean" }, required: ["requestId", "value"] },
+  "agent.prompt": { fields: { taskId: "string", text: "string", cwd: "string", images: "images", delivery: "enum:steer|followUp" }, required: ["taskId"] },
+  "agent.executeBash": { fields: { taskId: "string", command: "string", excludeFromContext: "boolean", cwd: "string" }, required: ["taskId", "command"] },
+  "agent.abort": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "agent.setThinkingLevel": { fields: { taskId: "string", level: "string", cwd: "string" }, required: ["taskId", "level"] },
+  "agent.setModel": { fields: { taskId: "string", providerId: "string", modelId: "string", cwd: "string" }, required: ["taskId", "providerId", "modelId"] },
+  "agent.setScopedModels": { fields: { taskId: "string", modelIds: "string[]|null", persist: "boolean", cwd: "string" }, required: ["taskId", "modelIds"] },
+  "agent.queue": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "agent.setQueueModes": { fields: { taskId: "string", steeringMode: "enum:all|one-at-a-time", followUpMode: "enum:all|one-at-a-time", cwd: "string" }, required: ["taskId"] },
+  "agent.clearQueue": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
+  "agent.promoteQueue": { fields: { taskId: "string", followUpIndex: "number", cwd: "string" }, required: ["taskId", "followUpIndex"] },
+  "agent.editQueue": { fields: { taskId: "string", messageId: "string", text: "string", images: "images", cwd: "string" }, required: ["taskId", "messageId", "text"] },
+  "agent.deleteQueue": { fields: { taskId: "string", messageId: "string", cwd: "string" }, required: ["taskId", "messageId"] },
+  "settings.get": { fields: { cwd: "string" } },
+  "settings.update": { fields: { cwd: "string", defaultProvider: "string", defaultModel: "string", defaultThinkingLevel: "string", transport: "enum:auto|sse|websocket", compactionEnabled: "boolean", steeringMode: "enum:all|one-at-a-time", followUpMode: "enum:all|one-at-a-time" } },
+  "extension.ui.resolve": { fields: { requestId: "string", value: "ui-value" }, required: ["requestId"] },
+  "packages.list": { fields: { cwd: "string" } },
+  "packages.install": { fields: { source: "string", local: "boolean", cwd: "string" }, required: ["source"] },
+  "packages.remove": { fields: { source: "string", local: "boolean", cwd: "string" }, required: ["source"] },
+  "packages.update": { fields: { source: "string", cwd: "string" } },
+  "packages.configure": { fields: { source: "string", enabled: "boolean", local: "boolean", cwd: "string" }, required: ["source", "enabled"] },
+  "permissions.status": { fields: {}, allowUndefined: true },
+  "permissions.setMode": { fields: { mode: "enum:ask|allow|deny|yolo" }, required: ["mode"] },
+  "approval.resolve": { fields: { requestId: "string", decision: "enum:allow-once|deny" }, required: ["requestId", "decision"] },
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function assertPiHostField(value: unknown, field: string, kind: PiHostPayloadField): void {
+  if (kind === "string") {
+    if (typeof value !== "string") throw new Error(`${field} must be a string`);
+    return;
+  }
+  if (kind === "boolean") {
+    if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+    return;
+  }
+  if (kind === "number") {
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${field} must be a finite number`);
+    return;
+  }
+  if (kind === "string[]") {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`${field} must be an array of strings`);
+    return;
+  }
+  if (kind === "string[]|null") {
+    if (value !== null && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) throw new Error(`${field} must be an array of strings or null`);
+    return;
+  }
+  if (kind === "images") {
+    if (!Array.isArray(value) || value.some((item) => !isPlainRecord(item) || typeof item.data !== "string" || typeof item.mimeType !== "string")) {
+      throw new Error(`${field} must be an array of image DTOs`);
+    }
+    return;
+  }
+  if (kind === "object") {
+    if (!isPlainRecord(value) && typeof value !== "string" && typeof value !== "boolean" && value !== undefined) throw new Error(`${field} must be serializable`);
+    return;
+  }
+  if (kind === "model") {
+    if (!isPlainRecord(value) || typeof value.providerId !== "string" || typeof value.modelId !== "string") throw new Error(`${field} must be a model DTO`);
+    return;
+  }
+  if (kind === "ui-value") {
+    if (value !== undefined && typeof value !== "string" && typeof value !== "boolean") throw new Error(`${field} must be a string, boolean, or undefined`);
+    return;
+  }
+  const allowed = kind.slice("enum:".length).split("|");
+  if (typeof value !== "string" || !allowed.includes(value)) throw new Error(`${field} has an unsupported value`);
+}
+
+/**
+ * Runtime validation for the structured-clone boundary. TypeScript protects
+ * PiDeck's own callers, but this boundary also receives JavaScript values from
+ * Electron IPC and must reject coercible or unknown shapes explicitly.
+ */
+export function validatePiHostPayload(command: PiHostCommand, payload: unknown): unknown {
+  const spec = piHostPayloadSpecs[command];
+  if (!spec) throw new Error(`Unsupported PiHost command: ${command}`);
+  if (payload === undefined) {
+    if (spec.allowUndefined || Object.keys(spec.fields).length === 0) return undefined;
+    throw new Error(`${command} payload is required`);
+  }
+  if (!isPlainRecord(payload)) throw new Error(`${command} payload must be an object`);
+  for (const key of Object.keys(payload)) {
+    if (!(key in spec.fields)) throw new Error(`${command} payload contains unknown field: ${key}`);
+    if (payload[key] === undefined) continue;
+    assertPiHostField(payload[key], key, spec.fields[key]);
+  }
+  for (const required of spec.required ?? []) {
+    if (!(required in payload) || payload[required] === undefined) throw new Error(`${command} requires ${required}`);
+  }
+  return payload;
+}

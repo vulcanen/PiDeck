@@ -17,6 +17,16 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
   const [error, setError] = useState<string | null>(null);
   useDialogFocus(dialogRef, onClose);
 
+  async function loadSettings() {
+    setError(null);
+    try {
+      const value = await window.pideck.settings.get(cwd || undefined);
+      setSettings(value);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   useEffect(() => {
     let active = true;
     setError(null);
@@ -40,10 +50,10 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
 
   const modelValue = settings?.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : "";
   return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={dialogRef} className="settings-sheet pi-settings" role="dialog" aria-modal="true" aria-labelledby="pi-settings-title">
+    <section ref={dialogRef} className="settings-sheet pi-settings" role="dialog" aria-modal="true" aria-labelledby="pi-settings-title" data-testid="pi-settings-dialog">
       <div className="settings-header"><div><span className="eyebrow">Pi</span><h2 id="pi-settings-title">{t.piSettingsTitle}</h2><p>{t.piSettingsDescription}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label={t.closeSettings}><Icon name="x" /></button></div>
       {!settings && !error && <div className="provider-list-empty">{t.loading}</div>}
-      {error && <div className="auth-error" role="alert">{error}</div>}
+      {error && <div className="auth-error" role="alert"><span>{error}</span><button type="button" className="button ghost" onClick={() => void loadSettings()}>{t.retry}</button></div>}
       {settings && <div className="pi-settings-fields">
         <label><span>{t.piDefaultModel}</span><select value={modelValue} onChange={(event) => { const [defaultProvider, ...parts] = event.target.value.split("/"); setSettings((current) => current ? { ...current, defaultProvider, defaultModel: parts.join("/") } : current); }}><option value="" disabled>{t.chooseModel}</option>{models.map((model) => <option key={`${model.providerId}/${model.id}`} value={`${model.providerId}/${model.id}`}>{model.providerName} · {model.name}</option>)}</select></label>
         <label><span>{t.piDefaultThinking}</span><select value={settings.defaultThinkingLevel} onChange={(event) => setSettings({ ...settings, defaultThinkingLevel: event.target.value })}>{["off", "minimal", "low", "medium", "high", "xhigh"].map((level) => <option key={level} value={level}>{level}</option>)}</select></label>
@@ -53,7 +63,7 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
         <label className="pi-settings-check"><input type="checkbox" checked={settings.compactionEnabled} onChange={(event) => setSettings({ ...settings, compactionEnabled: event.target.checked })} /><span>{t.piAutoCompaction}</span></label>
         <p className="pi-settings-hint">{t.piSettingsReloadHint}</p>
       </div>}
-      <div className="settings-footer"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" disabled={busy || !settings || !modelValue} onClick={() => void save()}>{busy ? t.saving : t.save}</button></div>
+      <div className="settings-footer"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" data-testid="pi-settings-save" disabled={busy || !settings} onClick={() => void save()}>{busy ? t.saving : t.save}</button></div>
     </section>
   </div>;
 }

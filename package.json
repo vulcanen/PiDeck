@@ -33,7 +33,7 @@
     "build": "npm --workspace @pideck/desktop run build",
     "lint": "eslint .",
     "test:renderer": "npm --workspace @pideck/desktop run test:renderer",
-    "typecheck": "npm --workspace @pideck/domain run typecheck && npm --workspace @pideck/pi-adapter run typecheck && npm --workspace @pideck/permission-engine run typecheck && npm --workspace @pideck/pi-host run typecheck && npm --workspace @pideck/i18n run typecheck && npm --workspace @pideck/ui-system run typecheck && npm --workspace @pideck/desktop run typecheck",
+    "typecheck": "npm --workspace @pideck/contracts run typecheck && npm --workspace @pideck/domain run typecheck && npm --workspace @pideck/pi-adapter run typecheck && npm --workspace @pideck/permission-engine run typecheck && npm --workspace @pideck/pi-host run typecheck && npm --workspace @pideck/i18n run typecheck && npm --workspace @pideck/ui-system run typecheck && npm --workspace @pideck/desktop run typecheck",
     "package:win": "npm run package:win:x64",
     "package:win:x64": "npm run notices:check && npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --win nsis --x64 && npm run verify:package -- release/win-unpacked && npm run smoke:package -- release/win-unpacked",
     "package:mac": "npm run notices:check && npm run build && npm exec -- electron-builder --config electron-builder.config.cjs --mac dmg && npm run verify:package -- release && npm run smoke:package -- release",

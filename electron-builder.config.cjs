@@ -4,6 +4,8 @@ const commonFiles = [
   "apps/desktop/dist/**/*",
   "apps/desktop/assets/**/*",
   "dist-renderer/**/*",
+  "packages/contracts/dist/**/*",
+  "packages/contracts/package.json",
   "packages/domain/dist/**/*",
   "packages/domain/package.json",
   "packages/pi-adapter/dist/**/*",

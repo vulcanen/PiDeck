@@ -1,4 +1,4 @@
-import type { PermissionMode, PiHostRequest, PiHostResponse, SessionChangeReview, SessionChangeReviewCollection, SessionRunRecord } from "@pideck/contracts";
+import { validatePiHostPayload, type PermissionMode, type PiHostRequest, type PiHostResponse, type PiSettingsUpdate, type SessionChangeReview, type SessionChangeReviewCollection, type SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
@@ -19,6 +19,7 @@ import {
   waitForReservedAgentRun,
   type AgentRunReservation,
 } from "./agent-prompt-coordination.js";
+import { summarizePiSettings, updatePiSettings } from "./settings-command-handler.js";
 import { buildSessionChangeReview, inspectGitWorkspaceAvailability, inspectWorkspaceChangeState, type WorkspaceChangeInspection } from "./session-change-review.js";
 import {
   copySessionChangeReviewStore,
@@ -883,19 +884,6 @@ async function settingsManagerFor(cwd: string): Promise<any> {
   return sdk.SettingsManager.create(cwd, agentDir);
 }
 
-function settingsSummary(manager: any) {
-  const compaction = manager.getCompactionSettings();
-  return {
-    defaultProvider: manager.getDefaultProvider(),
-    defaultModel: manager.getDefaultModel(),
-    defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
-    transport: manager.getTransport() ?? "auto",
-    compactionEnabled: compaction?.enabled !== false,
-    steeringMode: manager.getSteeringMode(),
-    followUpMode: manager.getFollowUpMode(),
-  };
-}
-
 function packageSourceString(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (value && typeof value === "object" && "source" in value && typeof value.source === "string") return value.source;
@@ -1251,6 +1239,7 @@ async function ensureCapabilitySession(cwd: string): Promise<any> {
 
 async function handle(request: PiHostRequest): Promise<void> {
   try {
+    validatePiHostPayload(request.command, request.payload);
     await httpNetworkingReady;
     switch (request.command) {
       case "runtime.status":
@@ -1769,11 +1758,11 @@ async function handle(request: PiHostRequest): Promise<void> {
         const session = await ensureAgentSession(payload.taskId, cwd);
         if (session.isStreaming || session.isCompacting || agentRunReservations.has(stateKey)) throw new Error("Wait for the current agent run or compaction to finish before running a shell command");
         const bashId = randomUUID();
-        emit(payload.taskId, { type: "bash_execution_start", id: bashId, command: payload.command.trim(), excludeFromContext: Boolean(payload.excludeFromContext) });
+        emit(payload.taskId, { type: "bash_execution_start", id: bashId, command: payload.command.trim(), excludeFromContext: payload.excludeFromContext === true });
         let result: any;
         try {
           result = await session.executeBash(payload.command.trim(), undefined, {
-            excludeFromContext: Boolean(payload.excludeFromContext),
+            excludeFromContext: payload.excludeFromContext === true,
             id: bashId,
           });
           emit(payload.taskId, { type: "bash_execution_end", id: bashId, result: jsonSafe(result) });
@@ -2121,43 +2110,14 @@ async function handle(request: PiHostRequest): Promise<void> {
       case "settings.get": {
         const payload = request.payload as { cwd?: string } | undefined;
         const manager = await settingsManagerFor(payload?.cwd ?? resolveWorkspaceCwd());
-        send({ id: request.id, ok: true, result: settingsSummary(manager) });
+        send({ id: request.id, ok: true, result: summarizePiSettings(manager) });
         return;
       }
       case "settings.update": {
-        const payload = request.payload as Record<string, unknown> | undefined;
+        const payload = request.payload as (PiSettingsUpdate & { cwd?: string }) | undefined;
         const manager = await settingsManagerFor(typeof payload?.cwd === "string" ? payload.cwd : resolveWorkspaceCwd());
-        const provider = typeof payload?.defaultProvider === "string" ? payload.defaultProvider.trim() : undefined;
-        const model = typeof payload?.defaultModel === "string" ? payload.defaultModel.trim() : undefined;
-        if (provider || model) {
-          if (!provider || !model) throw new Error("defaultProvider and defaultModel must be updated together");
-          const runtime = await getModelRuntime();
-          if (!runtime.getModel(provider, model)) throw new Error(`Unknown model: ${provider}/${model}`);
-          manager.setDefaultModelAndProvider(provider, model);
-        }
-        if (payload?.defaultThinkingLevel !== undefined) {
-          const level = String(payload.defaultThinkingLevel);
-          if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh"]).has(level)) throw new Error(`Unsupported default thinking level: ${level}`);
-          manager.setDefaultThinkingLevel(level);
-        }
-        if (payload?.transport !== undefined) {
-          const transport = String(payload.transport);
-          if (!new Set(["auto", "sse", "websocket"]).has(transport)) throw new Error(`Unsupported transport: ${transport}`);
-          manager.setTransport(transport);
-        }
-        if (payload?.compactionEnabled !== undefined) manager.setCompactionEnabled(Boolean(payload.compactionEnabled));
-        if (payload?.steeringMode !== undefined) {
-          const mode = String(payload.steeringMode);
-          if (!new Set(["all", "one-at-a-time"]).has(mode)) throw new Error(`Unsupported steering mode: ${mode}`);
-          manager.setSteeringMode(mode);
-        }
-        if (payload?.followUpMode !== undefined) {
-          const mode = String(payload.followUpMode);
-          if (!new Set(["all", "one-at-a-time"]).has(mode)) throw new Error(`Unsupported follow-up mode: ${mode}`);
-          manager.setFollowUpMode(mode);
-        }
-        await manager.flush();
-        send({ id: request.id, ok: true, result: settingsSummary(manager) });
+        const runtime = await getModelRuntime();
+        send({ id: request.id, ok: true, result: await updatePiSettings(manager, runtime, payload ?? {}) });
         return;
       }
       case "extension.ui.resolve": {
@@ -2188,7 +2148,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.source?.trim()) throw new Error("source is required");
         const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
         const source = normalizePackageInstallSource(payload.source);
-        await manager.installAndPersist(source, { local: Boolean(payload.local) });
+        await manager.installAndPersist(source, { local: payload.local === true });
         invalidatePackageSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -2197,7 +2157,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { source?: string; local?: boolean; cwd?: string } | undefined;
         if (!payload?.source?.trim()) throw new Error("source is required");
         const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
-        await manager.removeAndPersist(payload.source.trim(), { local: Boolean(payload.local) });
+        await manager.removeAndPersist(payload.source.trim(), { local: payload.local === true });
         invalidatePackageSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
@@ -2214,7 +2174,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { source?: string; enabled?: boolean; local?: boolean; cwd?: string } | undefined;
         if (!payload?.source?.trim()) throw new Error("source is required");
         const { settingsManager } = await createPackageManagerContext(payload.cwd ?? resolveWorkspaceCwd());
-        const changed = configurePackageSource(settingsManager, payload.source.trim(), Boolean(payload.enabled), Boolean(payload.local));
+        const changed = configurePackageSource(settingsManager, payload.source.trim(), payload.enabled === true, payload.local === true);
         if (changed) invalidatePackageSessions();
         send({ id: request.id, ok: true, result: { changed } });
         return;

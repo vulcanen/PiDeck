@@ -10,13 +10,47 @@ const { assertKnownProjectCwd, assertTrustedIpcSender } = require("../dist/main/
 const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
+const { validatePiHostPayload } = require("../../../packages/contracts/dist/index.js");
 const { PermissionEngine } = require("../../../packages/permission-engine/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
 const { buildSessionChangeReview, captureWorkspaceChangeState, inspectGitWorkspaceAvailability, MAX_REVIEW_CAPTURE_PATHS } = require("../../../packages/pi-host/dist/session-change-review.js");
 const { createAgentRunReservation, isExtensionCommand, ManualCompactionPromptQueue, queuePromptDuringCompaction, waitForReservedAgentRun } = require("../../../packages/pi-host/dist/agent-prompt-coordination.js");
+const { updatePiSettings } = require("../../../packages/pi-host/dist/settings-command-handler.js");
 const { copySessionChangeReviewStore, deleteSessionChangeReviewStore, flushSessionChangeReviewStore, loadSessionChangeReviews, persistSessionChangeReview, sanitizeSessionChangeReview, sessionChangeReviewStorePath, summarizeSessionChangeReview } = require("../../../packages/pi-host/dist/session-change-review-store.js");
 const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/session-transcript.js");
 const { buildChangeFileTree, parseUnifiedPatch, reviewTreeKeyboardAction, sideBySideRows } = require("../dist/renderer/change-review-model.js");
+
+test("PiHost DTO validation rejects coercible booleans and unknown fields", () => {
+  assert.throws(() => validatePiHostPayload("settings.update", { compactionEnabled: "false" }), /compactionEnabled must be a boolean/);
+  assert.throws(() => validatePiHostPayload("packages.configure", { source: "demo", enabled: true, unexpected: true }), /unknown field/);
+  assert.doesNotThrow(() => validatePiHostPayload("settings.update", { compactionEnabled: false, transport: "auto" }));
+  assert.doesNotThrow(() => validatePiHostPayload("agent.prompt", { taskId: "task", text: "hello", images: undefined, delivery: undefined }));
+});
+
+test("Pi settings handler persists partial defaults without requiring a model", async () => {
+  const calls = [];
+  let compaction = true;
+  let transport = "auto";
+  const manager = {
+    getDefaultProvider: () => undefined,
+    getDefaultModel: () => undefined,
+    getDefaultThinkingLevel: () => "off",
+    getTransport: () => transport,
+    getCompactionSettings: () => ({ enabled: compaction }),
+    getSteeringMode: () => "one-at-a-time",
+    getFollowUpMode: () => "one-at-a-time",
+    setDefaultModelAndProvider: () => calls.push("model"),
+    setDefaultThinkingLevel: (value) => calls.push(["thinking", value]),
+    setTransport: (value) => { transport = value; calls.push(["transport", value]); },
+    setCompactionEnabled: (value) => { compaction = value; calls.push(["compaction", value]); },
+    setSteeringMode: (value) => calls.push(["steering", value]),
+    setFollowUpMode: (value) => calls.push(["follow-up", value]),
+    flush: async () => calls.push("flush"),
+  };
+  const result = await updatePiSettings(manager, { getModel: () => undefined }, { compactionEnabled: false, transport: "websocket" });
+  assert.equal(result.compactionEnabled, false);
+  assert.deepEqual(calls, [["transport", "websocket"], ["compaction", false], "flush"]);
+});
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
@@ -114,11 +148,13 @@ test("manual compaction queue preserves ordering and supports queue mutations", 
 
   const root = path.join(__dirname, "../../..");
   const hostSource = readText(path.join(root, "packages/pi-host/src/index.ts"));
+  const settingsHandlerSource = readText(path.join(root, "packages/pi-host/src/settings-command-handler.ts"));
   assert.match(hostSource, /case "sessions\.compact"[\s\S]*?manualCompactionQueues\.begin/);
   assert.match(hostSource, /resumeManualCompactionQueue/);
   assert.match(hostSource, /case "sessions\.reload"[\s\S]*?await session\.reload\(\{[\s\S]*?beforeSessionStart:[\s\S]*?permissionEngine\.resetUi/);
   assert.match(hostSource, /case "agent\.executeBash"[\s\S]*?session\.executeBash/);
-  assert.match(hostSource, /case "settings\.update"[\s\S]*?setDefaultModelAndProvider/);
+  assert.match(hostSource, /case "settings\.update"[\s\S]*?updatePiSettings/);
+  assert.match(settingsHandlerSource, /setDefaultModelAndProvider/);
 });
 
 test("Extension UI maps serializable presentation APIs and reports TUI-only capabilities", () => {
@@ -732,6 +768,11 @@ test("inactive conversation panes suspend observers and modal overlays isolate t
   assert.match(conversation, /if \(!active\) return;[\s\S]*?\}, \[active\]\);/);
   assert.match(view, /inert=\{modalOverlayOpen\}/);
   assert.match(view, /aria-hidden=\{modalOverlayOpen \|\| undefined\}/);
+  assert.match(view, /settingsOpen, piSettingsOpen/);
+  assert.match(view, /settingsOpen \|\| piSettingsOpen/);
+  const shortcuts = fs.readFileSync(path.join(__dirname, "../src/renderer/use-global-shortcuts.ts"), "utf8");
+  assert.match(shortcuts, /settingsOpen: boolean;\s*piSettingsOpen: boolean;/);
+  assert.match(shortcuts, /settingsOpen \|\| piSettingsOpen/);
   assert.match(view, /backgroundInert=\{mobileSidebarOpen\}/);
   assert.match(overlays, /className=\{`overlay-root \$\{theme\}\$\{isMac \? " platform-macos" : " platform-overlay"\}`\}/);
   assert.match(styles, /\.app-shell, \.overlay-root \{[\s\S]*?--layer-modal: 40;/);
@@ -809,6 +850,7 @@ test("package manifest validation rejects developer state and source trees", asy
   const runtimePaths = [
     "/apps/desktop/dist/main/index.js",
     "/apps/desktop/dist/preload/index.js",
+    "/packages/contracts/dist/index.js",
     "/packages/pi-host/dist/index.js",
     "/dist-renderer/index.html",
     "/LICENSE",
@@ -816,7 +858,7 @@ test("package manifest validation rejects developer state and source trees", asy
     "/node_modules/react/index.js",
   ];
 
-  assert.deepEqual(validatePackagePaths(runtimePaths), { fileCount: 7, requiredCount: 6 });
+  assert.deepEqual(validatePackagePaths(runtimePaths), { fileCount: 8, requiredCount: 7 });
   assert.throws(() => validatePackagePaths([...runtimePaths, "/.codex/session.json"]), /Forbidden development files/);
   assert.throws(() => validatePackagePaths([...runtimePaths, "/apps/desktop/src/main/index.ts"]), /Forbidden development files/);
   assert.throws(() => validatePackagePaths([...runtimePaths, "/node_modules/@pideck/pi-adapter/src/index.ts"]), /Forbidden development files/);
@@ -846,6 +888,7 @@ test("each platform package target inherits the runtime whitelist", () => {
   assert.equal(config.afterExtract, copyElectronRuntimeLicenses);
   for (const target of [config.win.files, config.mac.files]) {
     assert.ok(target.includes("apps/desktop/dist/**/*"));
+    assert.ok(target.includes("packages/contracts/dist/**/*"));
     assert.ok(target.includes("packages/pi-host/dist/**/*"));
     assert.ok(target.includes("LICENSE"));
     assert.ok(target.includes("THIRD_PARTY_NOTICES.txt"));

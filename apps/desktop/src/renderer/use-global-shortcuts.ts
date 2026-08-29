@@ -4,6 +4,7 @@ interface GlobalShortcutsOptions {
   searchInputRef: RefObject<HTMLInputElement | null>;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  piSettingsOpen: boolean;
   commandDialogOpen: boolean;
   renameOpen: boolean;
   resumeOpen: boolean;
@@ -25,14 +26,14 @@ interface GlobalShortcutsOptions {
 }
 
 export function useGlobalShortcuts({
-  searchInputRef, paletteOpen, settingsOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
+  searchInputRef, paletteOpen, settingsOpen, piSettingsOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
   thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, projectContextMenu, imageContextMenu,
   onCommandPalette, onProviderSettings, onCreateTask, onCloseMenus,
 }: GlobalShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
-      const modalOpen = paletteOpen || settingsOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
+      const modalOpen = paletteOpen || settingsOpen || piSettingsOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
       if (modalOpen) return;
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); onCommandPalette(); return; }
       if (modifier && event.key.toLowerCase() === "n") { event.preventDefault(); void onCreateTask(); return; }
@@ -46,5 +47,5 @@ export function useGlobalShortcuts({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandDialogOpen, contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCommandPalette, onCreateTask, onProviderSettings, paletteOpen, pendingDelete, pendingProjectRemove, previewImage, projectContextMenu, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
+  }, [commandDialogOpen, contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCommandPalette, onCreateTask, onProviderSettings, paletteOpen, pendingDelete, pendingProjectRemove, piSettingsOpen, previewImage, projectContextMenu, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
 }

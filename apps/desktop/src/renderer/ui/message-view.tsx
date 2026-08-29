@@ -5,6 +5,7 @@ import { copyText, Icon } from "@pideck/ui-system";
 import type { PreviewImage } from "../types";
 import { bashExecutionDetails, formatMessageTime, messageErrorText, textFromMessage } from "../message-utils";
 import { MarkdownContent } from "./markdown";
+import { ShellOutput } from "./shell-output";
 
 const LONG_SHELL_OUTPUT_LINES = 8;
 const LONG_SHELL_OUTPUT_CHARS = 1_200;
@@ -13,8 +14,14 @@ function BashExecutionMessage({ message, language }: { message: any; language: L
   const execution = bashExecutionDetails(message)!;
   const t = copy[language];
   const outputId = useId();
-  const lineCount = execution.output ? execution.output.split("\n").length : 0;
-  const longOutput = lineCount > LONG_SHELL_OUTPUT_LINES || execution.output.length > LONG_SHELL_OUTPUT_CHARS;
+  // Keep the raw value for copying, but normalize terminal line endings and
+  // discard trailing blank rows in the visual presentation. Windows commands
+  // commonly end in CRLF, which otherwise creates an unexplained empty line
+  // at the bottom of every result card.
+  const displayOutput = execution.output.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  const hasDisplayOutput = displayOutput.length > 0;
+  const lineCount = hasDisplayOutput ? displayOutput.split("\n").length : 0;
+  const longOutput = lineCount > LONG_SHELL_OUTPUT_LINES || displayOutput.length > LONG_SHELL_OUTPUT_CHARS;
   const [expanded, setExpanded] = useState(!longOutput);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const prefix = execution.excludeFromContext ? "!!" : "!";
@@ -44,8 +51,8 @@ function BashExecutionMessage({ message, language }: { message: any; language: L
       <button type="button" className="shell-command-copy" disabled={!execution.output} onClick={() => void copyOutput()} aria-label={copyLabel} title={copyLabel}><Icon name={copyState === "copied" ? "check" : "copy"} size={13} /><span aria-live="polite">{copyLabel}</span></button>
     </header>
     <div className={`shell-command-output-wrap ${longOutput && !expanded ? "collapsed" : ""}`}>
-      {execution.output
-        ? <pre id={outputId} className="shell-command-output" tabIndex={longOutput ? 0 : undefined} aria-label={t.shellOutput}>{execution.output}</pre>
+      {hasDisplayOutput
+        ? <ShellOutput output={displayOutput} lineCount={lineCount} collapsed={longOutput && !expanded} outputId={outputId} label={t.shellOutput} focusable={longOutput} />
         : <div id={outputId} className="shell-command-empty">{t.shellNoOutput}</div>}
     </div>
     {longOutput && <footer className="shell-command-footer"><button type="button" aria-expanded={expanded} aria-controls={outputId} onClick={() => setExpanded((current) => !current)}><span>{expanded ? t.collapseShellOutput : t.expandShellOutput}</span><Icon name="chevron" size={12} /></button></footer>}

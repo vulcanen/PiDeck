@@ -494,7 +494,7 @@ export function useAppController() {
   }, [activeTaskId, projectCwd, showNotice]);
 
   const modelOptions = useMemo(() => [...models].filter((model) => model.authConfigured).sort((a, b) => a.providerName.localeCompare(b.providerName) || a.name.localeCompare(b.name)), [models]);
-  const hiddenSlashCommandNames = useMemo(() => new Set(["fork", "clone", "tree", "settings"]), []);
+  const hiddenSlashCommandNames = useMemo(() => new Set(["fork", "clone", "tree"]), []);
   const suggestions = useMemo(() => {
     if (suggestionMode === "mention") return (workspace?.files ?? []).filter((file) => file.kind === "file" && file.path.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
@@ -578,6 +578,7 @@ export function useAppController() {
     searchInputRef,
     paletteOpen,
     settingsOpen,
+    piSettingsOpen,
     commandDialogOpen: Boolean(commandDialog),
     renameOpen,
     resumeOpen,
