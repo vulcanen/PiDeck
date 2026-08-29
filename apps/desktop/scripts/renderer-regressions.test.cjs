@@ -32,6 +32,28 @@ const rendererSource = (relativePath) => fs.readFileSync(
   "utf8",
 );
 
+test("expanded Skill messages keep a collapsed reference card with source and content", () => {
+  const domainSource = fs.readFileSync(path.join(__dirname, "../../../packages/domain/src/index.ts"), "utf8");
+  const messageView = rendererSource("ui/message-view.tsx");
+  const styles = rendererSource("styles.css");
+  const i18n = fs.readFileSync(path.join(__dirname, "../../../packages/i18n/src/index.ts"), "utf8");
+
+  assert.match(domainSource, /location\?: string;/);
+  assert.match(domainSource, /content\?: string;/);
+  assert.match(domainSource, /location: expanded\[2\]/);
+  assert.match(domainSource, /content: expanded\[3\]/);
+  assert.match(messageView, /<details className="skill-reference-card">/);
+  assert.match(messageView, /skillInvocation && !skillInvocation\.expanded/);
+  assert.match(messageView, /t\.skillReferenceLocation/);
+  assert.match(messageView, /t\.skillReferenceExpand/);
+  assert.match(messageView, /MarkdownContent text=\{skillInvocation\.content\}/);
+  assert.match(styles, /\.skill-reference-card > summary/);
+  assert.match(styles, /\.skill-reference-card\[open\] > summary::after/);
+  assert.match(i18n, /skillReference:/);
+  assert.match(i18n, /skillReferenceLocation:/);
+  assert.match(i18n, /skillReferenceExpand:/);
+});
+
 function message(id, role, text, timestamp) {
   return { id, role, content: text, timestamp };
 }
@@ -361,6 +383,10 @@ test("agent_end messages and auth cancellation stay on the bridge", () => {
     path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
     "utf8",
   );
+  const eventAdapter = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/agent-event-adapter.ts"),
+    "utf8",
+  );
   const contracts = fs.readFileSync(
     path.join(__dirname, "../../../packages/contracts/src/index.ts"),
     "utf8",
@@ -370,13 +396,35 @@ test("agent_end messages and auth cancellation stay on the bridge", () => {
     "utf8",
   );
 
-  assert.match(host, /type: event\.type, willRetry: event\.willRetry, messages: jsonSafe\(event\.messages\)/);
+  assert.match(eventAdapter, /type: event\.type, willRetry: event\.willRetry, messages: jsonSafe\(event\.messages\)/);
   assert.match(runtimeEvents, /Array\.isArray\(event\.messages\)/);
   assert.match(host, /cancelled\?: boolean/);
   assert.match(contracts, /resolveAuth\(requestId: string, value: string, cancelled\?: boolean\)/);
   assert.match(host, /waiter\.reject\(new Error\("Authentication cancelled"\)\)/);
   assert.match(host, /await persistProviderApiKey\(runtime, payload\.providerId/);
   assert.doesNotMatch(host, /void runtime\.setRuntimeApiKey/);
+});
+
+test("PiHost keeps mutable state and Agent event adaptation outside the orchestrator", () => {
+  const host = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/index.ts"),
+    "utf8",
+  );
+  const state = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/host-state.ts"),
+    "utf8",
+  );
+  const adapter = fs.readFileSync(
+    path.join(__dirname, "../../../packages/pi-host/src/agent-event-adapter.ts"),
+    "utf8",
+  );
+
+  assert.match(host, /from "\.\/host-state\.js"/);
+  assert.match(host, /from "\.\/agent-event-adapter\.js"/);
+  assert.doesNotMatch(host, /const (?:sessionManagers|agentSessions|activeChangeReviews) = new Map/);
+  assert.match(state, /export const sessionManagers = new Map/);
+  assert.match(state, /export const activeChangeReviews = new Map/);
+  assert.match(adapter, /export function normalizeAgentEvent/);
 });
 
 test("OpenAI Codex OAuth prefers the loopback callback and restores the desktop window", () => {

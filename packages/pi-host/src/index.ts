@@ -14,11 +14,34 @@ import { pathToFileURL } from "node:url";
 import {
   createAgentRunReservation,
   isExtensionCommand,
-  ManualCompactionPromptQueue,
   queuePromptDuringCompaction,
   waitForReservedAgentRun,
-  type AgentRunReservation,
 } from "./agent-prompt-coordination.js";
+import { normalizeAgentEvent } from "./agent-event-adapter.js";
+import {
+  activeChangeReviews,
+  activeProviderLoginByProvider,
+  activeProviderLogins,
+  agentRunReservations,
+  agentSessionPackageRevisions,
+  agentSessionPromises,
+  agentSessionRevisions,
+  agentSessions,
+  authWaiters,
+  capabilitySessions,
+  executionGroupStarts,
+  manualCompactionQueues,
+  pendingChangeReviewWrites,
+  pendingChangeReviewWritesBySession,
+  sessionFiles,
+  sessionManagers,
+  SESSION_RUN_METADATA_TYPE,
+  titledSessions,
+  type ActiveChangeReviewSegment,
+  type ActiveChangeReviewTracker,
+  type AuthWaiter,
+  type ActiveProviderLogin,
+} from "./host-state.js";
 import { summarizePiSettings, updatePiSettings } from "./settings-command-handler.js";
 import { buildSessionChangeReview, inspectGitWorkspaceAvailability, inspectWorkspaceChangeState, type WorkspaceChangeInspection } from "./session-change-review.js";
 import {
@@ -87,30 +110,9 @@ function publicRuntimeError(error: unknown): string {
 }
 
 const httpNetworkingReady = configurePiHttpNetworking({ resolveSystemProxy });
-const sessionManagers = new Map<string, any>();
-const sessionFiles = new Map<string, string>();
-const titledSessions = new Set<string>();
-const agentSessions = new Map<string, any>();
-const agentSessionPromises = new Map<string, Promise<any>>();
-const agentSessionPackageRevisions = new Map<string, number>();
-const executionGroupStarts = new Map<string, number>();
-const SESSION_RUN_METADATA_TYPE = "pideck.execution-run";
-type ActiveChangeReviewSegment = { startedAt: number; baseline: Promise<WorkspaceChangeInspection>; outcome?: SessionChangeReview["outcome"] };
-type ActiveChangeReviewTracker = {
-  current: ActiveChangeReviewSegment;
-  persistence: Promise<void>;
-  previewRevision: number;
-  previewTimer?: ReturnType<typeof setTimeout>;
-  previewController?: AbortController;
-};
-const activeChangeReviews = new Map<string, ActiveChangeReviewTracker>();
-const pendingChangeReviewWrites = new Set<Promise<void>>();
-const pendingChangeReviewWritesBySession = new Map<string, Set<Promise<void>>>();
 // AgentSession can enter automatic-compaction preflight before Pi reports
 // `isStreaming`. Track both the start and finish boundary so another renderer
 // request cannot mistake that preflight window for an idle Agent.
-const agentRunReservations = new Map<string, AgentRunReservation>();
-const manualCompactionQueues = new ManualCompactionPromptQueue();
 
 function clearAgentRunReservation(stateKey: string): void {
   const reservation = agentRunReservations.get(stateKey);
@@ -136,22 +138,7 @@ const SESSION_TITLE_SYSTEM_PROMPT = [
   "- Output ONLY the title. No quotes, no trailing punctuation, no markdown, no explanation.",
   "- Match the user's language.",
 ].join("\n");
-const capabilitySessions = new Map<string, any>();
 let packageConfigRevision = 0;
-type AuthWaiter = {
-  resolve: (value: string) => void;
-  reject: (reason?: unknown) => void;
-  beforeResolve?: (value: string) => Promise<void>;
-};
-const authWaiters = new Map<string, AuthWaiter>();
-type ActiveProviderLogin = {
-  operationId: string;
-  providerId: string;
-  controller: AbortController;
-};
-const activeProviderLogins = new Map<string, ActiveProviderLogin>();
-const activeProviderLoginByProvider = new Map<string, ActiveProviderLogin>();
-const agentSessionRevisions = new Map<string, number>();
 
 /**
  * Pi session IDs are normally UUIDs, but imported JSONL files can preserve an
@@ -1017,55 +1004,6 @@ function sdkVersion(): string | null {
   } catch {
     return null;
   }
-}
-
-function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "followUp"): unknown {
-  if (event.type === "message_update") {
-    const streamEvent = event.assistantMessageEvent ?? {};
-    return {
-      type: event.type,
-      stream: {
-        type: streamEvent.type,
-        delta: streamEvent.delta,
-        content: streamEvent.content,
-        reason: streamEvent.reason,
-      },
-    };
-  }
-  if (event.type === "message_start" || event.type === "message_end") {
-    return { type: event.type, message: jsonSafe(event.message), ...(queueDelivery ? { queueDelivery } : {}) };
-  }
-  if (event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") {
-    return {
-      type: event.type,
-      toolCallId: event.toolCallId,
-      toolName: event.toolName,
-      args: jsonSafe(event.args),
-      partialResult: jsonSafe(event.partialResult),
-      result: jsonSafe(event.result),
-      isError: event.isError,
-    };
-  }
-  if (event.type === "compaction_start") {
-    return { type: event.type, reason: event.reason };
-  }
-  if (event.type === "compaction_end") {
-    return {
-      type: event.type,
-      reason: event.reason,
-      result: jsonSafe(event.result),
-      aborted: event.aborted,
-      willRetry: event.willRetry,
-      errorMessage: event.errorMessage,
-    };
-  }
-  if (event.type === "agent_end") {
-    return { type: event.type, willRetry: event.willRetry, messages: jsonSafe(event.messages) };
-  }
-  if (event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
-    return { type: event.type, willRetry: event.willRetry };
-  }
-  return jsonSafe(event);
 }
 
 async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {

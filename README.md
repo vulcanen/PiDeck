@@ -97,7 +97,9 @@ Select-String -Path .\SHA256SUMS.txt -Pattern 'PiDeck-VERSION-windows-x64-setup.
 - 暂无应用内自动更新；新版本通过 GitHub Releases 获取。
 - 本地终端面板未接入；Shell 仍由 Pi Agent 的真实工具能力执行。
 - `/fork`、`/clone`、`/tree` 和完整 Session Tree 导航尚未接入桌面 UI。
-- Diff 预览、任务基线 Diff 和逐块审阅尚未实现。
+- 任务基线 Diff 审查已经接入，支持统一/拆分视图、筛选、语法高亮和变更块导航；变更块接受/撤销以及可编辑合并仍未实现。
+- Pi Print、JSON、RPC、stdin 和 Auth Print 兼容通道当前未暴露到桌面端。
+- Extension 的 TUI 专属 custom 组件、组件 Widget、Footer/Header 钩子、终端输入、同步编辑器组件、自动补全和主题组件仍不支持跨桌面桥接。
 - 显式覆盖的外部 Pi SDK 可能改变 API 行为；非 `0.84.3` 版本不在当前兼容保证内。
 
 ## 从源码运行

@@ -97,7 +97,9 @@ Use `x64` instead of `arm64` in the macOS example for an Intel Mac.
 - There is no in-app auto-update yet; new versions are published through GitHub Releases.
 - The local terminal panel is not integrated; shell execution remains available through Pi Agent's real tools.
 - `/fork`, `/clone`, `/tree`, and complete Session Tree navigation are not yet mapped to the desktop UI.
-- Diff preview, task-baseline diff, and hunk-by-hunk review are not implemented.
+- Task-baseline diff review is integrated, including unified/split views, filtering, syntax highlighting, and hunk navigation; chunk accept/revert and editable merge remain unimplemented.
+- Pi Print, JSON, RPC, stdin, and Auth Print compatibility channels are not currently exposed.
+- Extension TUI-only custom components, component Widgets, Footer/Header hooks, terminal input, synchronous editor components, autocomplete, and theme components remain unsupported across the desktop bridge.
 - An explicitly overridden external Pi SDK may change API behavior; versions other than `0.84.3` are outside the current compatibility guarantee.
 
 ## Run from source

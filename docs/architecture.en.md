@@ -70,7 +70,7 @@ PiHost is responsible for:
 
 - Orchestrating `@pideck/pi-adapter`, SessionManager, AgentSession, and ModelRuntime.
 - Reading/restoring Pi Sessions, projecting the complete active `SessionManager.getBranch()` as the desktop transcript while leaving `AgentSession.messages` as Pi's compacted model context, and writing `pideck.execution-run` run metadata via `SessionManager.appendCustomEntry()`.
-- Forwarding Agent events, Approval events, Auth events, and Extension UI requests.
+- Forwarding Agent events, Approval events, Auth events, and Extension UI requests. The orchestration entry remains in `index.ts`; process-local registries are isolated in `host-state.ts`, and Pi Agent event-to-bridge normalization is isolated in `agent-event-adapter.ts` so later domain splits can preserve the current IPC contract.
 - Executing Pi built-in tools, Bash, Provider login, Pi package management, permission-mode reads/writes, and session operations.
 - Initializing Pi's own proxy-aware HTTP dispatcher before reporting `runtime.status=connected`, so OAuth token exchange, model requests, and Provider HTTP calls share the same PiHost route. Package-manager subprocesses such as npm, pnpm, and git retain their own proxy configuration.
 - Converting cross-process data into JSON-serializable responses (`jsonSafe`) and keeping stable IDs plus queued image attachments in a PiHost sidecar so queue thumbnails, `promoteQueue`, `editQueue`, and `deleteQueue` can rebuild Pi's queue without dropping attachments.
@@ -150,6 +150,9 @@ PiDeck/
 │  ├─ domain/                             # Task, Project types and shared runtime helpers
 │  ├─ pi-adapter/                         # Pi SDK resolution, loading, model/Session adaptation
 │  ├─ pi-host/                            # PiHost process entry and Host command orchestration
+│  │  ├─ src/index.ts                     # Host lifecycle, IPC dispatch, and capability orchestration
+│  │  ├─ src/host-state.ts                # Process-local Session/Agent/queue/auth registries
+│  │  └─ src/agent-event-adapter.ts       # Pi Agent event normalization for the bridge
 │  ├─ permission-engine/                  # Pi permission config, Extension UI, approval waiting
 │  ├─ ui-system/                          # Shared Renderer Icon, focus, clipboard primitives
 │  └─ i18n/                               # zh/en copy and command descriptions
