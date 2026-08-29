@@ -2,7 +2,7 @@
 
 > Document status: aligned with the current code baseline; unimplemented items are explicitly marked as planned.
 >
-> Last updated: 2026-08-25
+> Last updated: 2026-08-29
 >
 > Target platforms: Windows, macOS
 
@@ -19,7 +19,7 @@ Provider API keys, OAuth, token refresh, and session files remain managed by the
 
 ## 2. Current Implementation Baseline
 
-Pi SDK baseline: `@earendil-works/pi-coding-agent@0.84.3`. PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.3 applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes persist through Pi's user settings because PiDeck calls `setModel()` / `setThinkingLevel()` with `{ persist: true }`; `/thinking [level]` maps to the desktop thinking selector. The `/settings` sheet edits the same user-wide defaults through `SettingsManager`.
+Pi SDK baseline: `@earendil-works/pi-coding-agent@0.84.4`. PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.4 applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes persist through Pi's user settings because PiDeck calls `setModel()` / `setThinkingLevel()` with `{ persist: true }`; `/thinking [level]` maps to the desktop thinking selector. The `/settings` sheet edits the same user-wide defaults through `SettingsManager`. Pi 0.84.4's additive `ui_prompt_start` / `ui_prompt_end` events are normalized as serializable Agent events, while PiDeck's richer queue mutations continue to use the direct `AgentSession` queue API (the SDK's RPC `clear_queue` remains outside the desktop's direct-host transport).
 
 Current runnable topology:
 
@@ -172,7 +172,7 @@ PiHost currently adapts via `AgentSession.agent.beforeToolCall`:
 
 ### 7.2 `@gotgenes/pi-permission-system` Status
 
-PiDeck has `@gotgenes/pi-permission-system@25.2.2` as an Extension dependency of the desktop PiHost, loaded via Pi `DefaultResourceLoader.additionalExtensionPaths`. This version resolves `$HOME`, `${HOME}`, and `$PWD` paths in bash before applying the `external_directory` gate, and improves subagent approval forwarding, Authorizer Chain records, and nested-command checks in redirects and heredocs. The desktop offers these modes:
+PiDeck has `@gotgenes/pi-permission-system@25.4.0` as an Extension dependency of the desktop PiHost, loaded via Pi `DefaultResourceLoader.additionalExtensionPaths`. This version resolves `$HOME`, `${HOME}`, and `$PWD` paths in bash before applying the `external_directory` gate, and improves subagent approval forwarding, Authorizer Chain records, and nested-command checks in redirects and heredocs. The desktop offers these modes:
 
 - `allow`: silently allow tool execution.
 - `ask`: Pi's permission system requests approval before execution.

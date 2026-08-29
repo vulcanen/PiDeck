@@ -2,7 +2,7 @@
 
 > 文档状态：与当前代码基线对齐；未实现项单独标记为计划。
 >
-> 更新日期：2026-08-25
+> 更新日期：2026-08-29
 >
 > 目标平台：Windows、macOS
 
@@ -19,7 +19,7 @@ Provider API Key、OAuth、Token 刷新和 Session 文件仍由 Pi Runtime 管�
 
 ## 2. 当前实现基线
 
-Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.3`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.3 会应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时不传入 Pi 的显式 `persist` 选项，所以模型和思考等级变更保持 Session 级；`/thinking [level]` 映射到桌面思考等级选择器。
+Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.4`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.4 会应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时传入 `{ persist: true }`，因此模型和思考等级变更会写入 Pi 的用户级设置；`/thinking [level]` 映射到桌面思考等级选择器，`/settings` 编辑同一份 SettingsManager 默认值。Pi 0.84.4 新增的 `ui_prompt_start` / `ui_prompt_end` 会在 PiHost 边界归一化为可序列化 Agent 事件；桌面更丰富的队列编辑仍使用直接 AgentSession 队列 API，SDK 的 RPC `clear_queue` 不属于当前直连 Host 传输。
 
 当前可运行结构：
 
@@ -171,7 +171,7 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 
 ### 7.2 `@gotgenes/pi-permission-system` 现状
 
-PiDeck 已将 `@gotgenes/pi-permission-system@25.2.2` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。该版本会将 bash 中的 `$HOME`、`${HOME}` 与 `$PWD` 路径解析后纳入 `external_directory` 检查，并改进子 Agent 审批转发、Authorizer Chain 记录以及重定向和 heredoc 内嵌套命令的权限判断。桌面端提供以下模式：
+PiDeck 已将 `@gotgenes/pi-permission-system@25.4.0` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。该版本会将 bash 中的 `$HOME`、`${HOME}` 与 `$PWD` 路径解析后纳入 `external_directory` 检查，并改进子 Agent 审批转发、Authorizer Chain 记录以及重定向和 heredoc 内嵌套命令的权限判断。桌面端提供以下模式：
 
 - `allow`：静默允许工具执行。
 - `ask`：执行前由 Pi 权限系统请求审批。

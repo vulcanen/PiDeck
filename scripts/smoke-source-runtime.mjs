@@ -156,6 +156,18 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Unexpected agent.queue response: ${JSON.stringify(message)}`));
         return;
       }
+      // Pi 0.84.4 added the RPC clear_queue surface while PiDeck's direct
+      // AgentSession bridge already exposes the same queue-clearing contract.
+      // Exercise the bridge against the real SDK before testing stale-ID
+      // validation below.
+      child.send({ id: "agent-clear-queue", command: "agent.clearQueue", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "agent-clear-queue") {
+      if (!message.ok || !Array.isArray(message.result?.steering) || !Array.isArray(message.result?.followUp)) {
+        finish(new Error(`Unexpected agent.clearQueue response: ${JSON.stringify(message)}`));
+        return;
+      }
       // A successful arbitrary deletion requires a live queued prompt and would
       // trigger Provider side effects. Exercise the command safely with a stale
       // stable ID and require the actionable validation error instead.

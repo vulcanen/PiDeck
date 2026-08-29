@@ -257,9 +257,9 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 `runtime.status` 由 Main 统一发布：PiHost 上报 `connected`，进程启动阶段为 `starting`，进程退出时为 `disconnected` 并拒绝所有挂起请求。
 
-认证提示通过 `providers.resolveAuth`（IPC `providers:auth-response`）回传文本、选择项或取消状态；取消会结束 Pi 的等待，不会遗留挂起的登录请求，PiHost 也会传播 Pi 的逐提示中止信号，避免 SDK 已取消的兜底提示残留 waiter。对于带版本保护的 Pi 0.84.2–0.84.3 OpenAI Codex 浏览器流程，PiHost 在确认浏览器登录方式前预检 SDK 的固定本地回调端点。预检失败时保留当前选择提示，由 Renderer 显示可操作错误，用户仍可选择 Pi 的设备码方式。SDK 并行给出的手动认证地址输入在本地回调等待期间仅作为次要兜底；`providers.login` 成功后 Main 会恢复并聚焦 PiDeck 窗口。
+认证提示通过 `providers.resolveAuth`（IPC `providers:auth-response`）回传文本、选择项或取消状态；取消会结束 Pi 的等待，不会遗留挂起的登录请求，PiHost 也会传播 Pi 的逐提示中止信号，避免 SDK 已取消的兜底提示残留 waiter。对于带版本保护的 Pi 0.84.2–0.84.4 OpenAI Codex 浏览器流程，PiHost 在确认浏览器登录方式前预检 SDK 的固定本地回调端点。预检失败时保留当前选择提示，由 Renderer 显示可操作错误，用户仍可选择 Pi 的设备码方式。SDK 并行给出的手动认证地址输入在本地回调等待期间仅作为次要兜底；`providers.login` 成功后 Main 会恢复并聚焦 PiDeck 窗口。
 
-`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update 等事件。`agent_end` 的 `messages` 来自 Pi SDK，Renderer 在后续自动重试或队列续接前即可合并本轮消息；`agent_settled` 再读取最终 Session 快照。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
+`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update，以及 Pi 0.84.4 新增的 `ui_prompt_start` / `ui_prompt_end`。新的 Extension UI 生命周期事件会在边界处明确归一化为可序列化的 `{ type, reason, kind, title? }` payload；实际桌面提示输入仍由现有 `extension.ui.request` 桥负责。`agent_end` 的 `messages` 来自 Pi SDK，Renderer 在后续自动重试或队列续接前即可合并本轮消息；`agent_settled` 再读取最终 Session 快照。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
 
 ## 7. Pi 能力映射
 

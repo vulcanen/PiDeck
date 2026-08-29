@@ -49,6 +49,17 @@ export function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "follo
   if (event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
     return { type: event.type, willRetry: event.willRetry };
   }
+  // Pi 0.84.4 exposes the lifecycle of blocking Extension UI prompts. Keep
+  // the event shape explicit at the bridge boundary so future consumers do
+  // not depend on arbitrary SDK objects leaking through the fallback path.
+  if (event.type === "ui_prompt_start" || event.type === "ui_prompt_end") {
+    return {
+      type: event.type,
+      reason: event.reason,
+      kind: event.kind,
+      ...(typeof event.title === "string" ? { title: event.title } : {}),
+    };
+  }
   return jsonSafe(event);
 }
 
