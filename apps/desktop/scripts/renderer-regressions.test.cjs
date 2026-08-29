@@ -32,28 +32,6 @@ const rendererSource = (relativePath) => fs.readFileSync(
   "utf8",
 );
 
-test("expanded Skill messages keep a collapsed reference card with source and content", () => {
-  const domainSource = fs.readFileSync(path.join(__dirname, "../../../packages/domain/src/index.ts"), "utf8");
-  const messageView = rendererSource("ui/message-view.tsx");
-  const styles = rendererSource("styles.css");
-  const i18n = fs.readFileSync(path.join(__dirname, "../../../packages/i18n/src/index.ts"), "utf8");
-
-  assert.match(domainSource, /location\?: string;/);
-  assert.match(domainSource, /content\?: string;/);
-  assert.match(domainSource, /location: expanded\[2\]/);
-  assert.match(domainSource, /content: expanded\[3\]/);
-  assert.match(messageView, /<details className="skill-reference-card">/);
-  assert.match(messageView, /skillInvocation && !skillInvocation\.expanded/);
-  assert.match(messageView, /t\.skillReferenceLocation/);
-  assert.match(messageView, /t\.skillReferenceExpand/);
-  assert.match(messageView, /MarkdownContent text=\{skillInvocation\.content\}/);
-  assert.match(styles, /\.skill-reference-card > summary/);
-  assert.match(styles, /\.skill-reference-card\[open\] > summary::after/);
-  assert.match(i18n, /skillReference:/);
-  assert.match(i18n, /skillReferenceLocation:/);
-  assert.match(i18n, /skillReferenceExpand:/);
-});
-
 function message(id, role, text, timestamp) {
   return { id, role, content: text, timestamp };
 }
@@ -523,6 +501,14 @@ test("incremental snapshots replace optimistic messages without reordering", () 
   const merged = mergeMessageSnapshot([optimistic, assistant], [persisted]);
 
   assert.deepEqual(merged, [persisted, assistant]);
+});
+
+test("expanded Skill snapshots replace the original optimistic command", () => {
+  const optimistic = message("local-skill", "user", "/skill:ui-ux-pro-max\n\nshow the dashboard", 1);
+  const expanded = message("persisted-skill", "user", '<skill name="ui-ux-pro-max" location="C:\\skills\\ui-ux-pro-max\\SKILL.md">\n# UI guidance\n</skill>\n\nshow the dashboard', 2);
+
+  assert.deepEqual(mergeMessageSnapshot([optimistic], [expanded], true), [expanded]);
+  assert.deepEqual(mergeMessageSnapshot([optimistic], [expanded]), [expanded]);
 });
 
 test("authoritative snapshots preserve Pi order instead of timestamp order", () => {

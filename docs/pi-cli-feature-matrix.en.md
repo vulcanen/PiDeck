@@ -42,7 +42,7 @@ The Composer reads Pi's real slash command catalog and suggests commands. Final 
 
 - Commands with a clear Bridge should call the corresponding PiHost capability, e.g. `/compact`, `/export`, `/model`, `/login`, `/logout`.
 - Commands with a catalog entry but no Bridge must not be faked as executed.
-- `/skill:name` expansion is handled by Pi `AgentSession.prompt()`; PiDeck shows a compact, collapsed Skill reference card with the source and Markdown body plus the user's actual input per Pi TUI's `parseSkillBlock()` rules, never re-displaying the injected Skill body as a user message.
+- `/skill:name` expansion is handled by Pi `AgentSession.prompt()`; PiDeck shows only a compact Skill reference plus the user's actual input per Pi TUI's `parseSkillBlock()` rules, never re-displaying the injected Skill body as a user message.
 - The authoritative source of Extension commands is the current Pi `ResourceLoader`, not a static fallback.
 
 Desktop commands currently integrated include `/settings`, `/reload`, `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`. These map to desktop actions through PiHost, Electron system capabilities, or the existing session list. `/settings` is available from Composer suggestions and the command palette, edits Pi's own user settings, `/reload` calls the live session reload API, `/import` opens Electron's native JSONL picker and does not accept a Renderer-supplied path, and `/share` still requires a local, logged-in `gh` CLI.

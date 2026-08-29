@@ -1,4 +1,4 @@
-import type { TaskSummary } from "@pideck/domain";
+import { parseSkillInvocation, type TaskSummary } from "@pideck/domain";
 import type { Language } from "@pideck/i18n";
 import type { TaskUiState } from "./types";
 
@@ -81,6 +81,23 @@ export function messageIdentity(message: any): string | undefined {
   return `message:${role}|${String(timestamp)}|${text}|${images}`;
 }
 
+function sameUserPrompt(left: any, right: any): boolean {
+  if (left?.role !== "user" || right?.role !== "user") return false;
+  if (textFromMessage(left) === textFromMessage(right)) return true;
+  const leftSkill = parseSkillInvocation(textFromMessage(left));
+  const rightSkill = parseSkillInvocation(textFromMessage(right));
+  if (!leftSkill || !rightSkill || leftSkill.name !== rightSkill.name) return false;
+  return (leftSkill.userMessage ?? "") === (rightSkill.userMessage ?? "");
+}
+
+function findLocalUserPrompt(messages: any[], target: any): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (typeof candidate?.id === "string" && candidate.id.startsWith("local-") && sameUserPrompt(candidate, target)) return index;
+  }
+  return -1;
+}
+
 export function mergeMessageSnapshot(previous: any[], snapshot: any[], authoritativeOrder = false): any[] {
   if (!snapshot.length) return previous;
   // Full session snapshots are already in Pi's canonical turn order. Sorting
@@ -97,7 +114,8 @@ export function mergeMessageSnapshot(previous: any[], snapshot: any[], authorita
         : -1;
       // Replace the optimistic local user message with Pi's persisted message.
       if (index < 0 && message?.role === "user") {
-        index = previous.findIndex((item, itemIndex) => !usedPrevious.has(itemIndex) && typeof item?.id === "string" && item.id.startsWith("local-") && textFromMessage(item) === textFromMessage(message));
+        index = findLocalUserPrompt(previous, message);
+        while (index >= 0 && usedPrevious.has(index)) index = findLocalUserPrompt(previous.slice(0, index), message);
       }
       if (index >= 0) usedPrevious.add(index);
       return message;
@@ -112,9 +130,7 @@ export function mergeMessageSnapshot(previous: any[], snapshot: any[], authorita
   for (const message of snapshot) {
     const identity = messageIdentity(message);
     let index = identity ? merged.findIndex((item) => messageIdentity(item) === identity) : -1;
-    if (index < 0 && message?.role === "user") {
-      index = merged.findIndex((item) => typeof item?.id === "string" && item.id.startsWith("local-") && textFromMessage(item) === textFromMessage(message));
-    }
+    if (index < 0 && message?.role === "user") index = findLocalUserPrompt(merged, message);
     if (index >= 0) merged[index] = message;
     else merged.push(message);
   }

@@ -41,7 +41,7 @@
 
 - 已有明确 Bridge 的命令应调用对应 PiHost 能力，例如 `/compact`、`/export`、`/model`、`/login`、`/logout`。
 - 只有展示 catalog、但没有对应 Bridge 的命令不能伪装成已执行。
-- `/skill:name` 由 Pi `AgentSession.prompt()` 负责展开；PiDeck 按 Pi TUI 的 `parseSkillBlock()` 规则显示默认折叠的紧凑 Skill 引用卡片（含来源和 Markdown 正文）及用户实际输入，不把注入正文重复显示为用户消息。
+- `/skill:name` 由 Pi `AgentSession.prompt()` 负责展开；PiDeck 按 Pi TUI 的 `parseSkillBlock()` 规则仅显示紧凑 Skill 引用和用户实际输入，不把注入正文重复显示为用户消息。
 - Extension command 的权威来源是当前 Pi `ResourceLoader`，不是静态 fallback。
 
 当前已接入的桌面命令包括 `/settings`、`/reload`、`/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。`/settings` 写入 Pi 自己的用户级设置，`/reload` 调用当前 AgentSession 的真实 reload API；`/import` 会打开 Electron 原生 JSONL 选择器，不接受 Renderer 提供的路径；`/share` 仍要求本机安装并登录 `gh` CLI。

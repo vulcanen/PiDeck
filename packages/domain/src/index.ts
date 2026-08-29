@@ -32,8 +32,6 @@ export interface PiDeckEvent {
 
 export interface SkillInvocation {
   name: string;
-  location?: string;
-  content?: string;
   userMessage?: string;
   expanded: boolean;
 }
@@ -46,13 +44,11 @@ const DEFAULT_SESSION_TITLES = new Set(["", "新建任务", "未命名任务", "
  */
 export function parseSkillInvocation(value: string): SkillInvocation | null {
   const text = value.trim();
-  const expanded = /^<skill name="([^"]+)" location="([^"]+)">\r?\n([\s\S]*?)\r?\n<\/skill>(?:\r?\n\r?\n([\s\S]+))?$/.exec(text);
+  const expanded = /^<skill name="([^"]+)" location="[^"]+">\r?\n[\s\S]*?\r?\n<\/skill>(?:\r?\n\r?\n([\s\S]+))?$/.exec(text);
   if (expanded) {
     return {
       name: expanded[1],
-      location: expanded[2],
-      content: expanded[3],
-      userMessage: expanded[4]?.trim() || undefined,
+      userMessage: expanded[2]?.trim() || undefined,
       expanded: true,
     };
   }
