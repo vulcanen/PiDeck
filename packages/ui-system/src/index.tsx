@@ -1,3 +1,4 @@
+import { createFocusTrap, type FocusTrap } from "focus-trap";
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 export const icons: Record<string, string> = {
@@ -38,7 +39,7 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round"><path d={icons[name] ?? icons.file} /></svg>;
 }
 
-const dialogFocusStack: symbol[] = [];
+const dialogFocusStack: FocusTrap[] = [];
 
 export function useDialogFocus(
   ref: RefObject<HTMLElement | null>,
@@ -50,35 +51,25 @@ export function useDialogFocus(
   useEffect(() => { escapeRef.current = onEscape; }, [onEscape]);
   useLayoutEffect(() => {
     if (!enabled) return;
-    const layer = Symbol("dialog-focus-layer");
-    dialogFocusStack.push(layer);
     const previous = returnFocusRef?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const root = ref.current;
-    const focusable = () => Array.from(root?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex='-1'])") ?? []);
-    focusable()[0]?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (dialogFocusStack.at(-1) !== layer) return;
-      if (event.key === "Escape") {
-        if (event.target instanceof Element && event.target.closest("[data-dialog-escape-boundary]")) return;
+    if (!root) return;
+    const trap = createFocusTrap(root, {
+      allowOutsideClick: true,
+      delayInitialFocus: false,
+      escapeDeactivates(event) {
+        if (event.target instanceof Element && event.target.closest("[data-dialog-escape-boundary]")) return false;
         event.preventDefault();
         event.stopPropagation();
         escapeRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable();
-      if (!items.length) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    };
-    document.addEventListener("keydown", onKeyDown, true);
+        return false;
+      },
+      setReturnFocus: () => returnFocusRef?.current ?? previous ?? false,
+      trapStack: dialogFocusStack,
+    });
+    trap.activate();
     return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      const layerIndex = dialogFocusStack.lastIndexOf(layer);
-      if (layerIndex >= 0) dialogFocusStack.splice(layerIndex, 1);
-      queueMicrotask(() => (returnFocusRef?.current ?? previous)?.focus());
+      trap.deactivate({ returnFocus: true });
     };
   }, [enabled, ref, returnFocusRef]);
 }

@@ -503,8 +503,8 @@ export function useAppController() {
     const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const slashItems = [
       ...visibleSlashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
-      ...prompts.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
-      ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...prompts.map((item) => ({ name: item.name, description: item.description ?? "" })),
+      ...skills.map((item) => ({ name: item.name, description: item.description ?? "" })),
     ];
     return slashItems.filter((item) => item.name.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
   }, [capabilities, hiddenSlashCommandNames, language, suggestionMode, suggestionQuery, workspace]);
@@ -515,8 +515,8 @@ export function useAppController() {
     const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const commands = [
       ...visibleSlashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
-      ...prompts.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language), source: "prompt" })),
-      ...skills.map((item) => ({ name: item.name, description: localizeCommandDescription(item.name, item.description, language), source: "skill" })),
+      ...prompts.map((item) => ({ name: item.name, description: item.description ?? "", source: "prompt" })),
+      ...skills.map((item) => ({ name: item.name, description: item.description ?? "", source: "skill" })),
     ];
     return Array.from(new Map(commands.map((command) => [command.name, command])).values());
   }, [capabilities, hiddenSlashCommandNames, language]);
@@ -647,9 +647,7 @@ export function useAppController() {
     const taskCwd = task.projectId || projectCwd;
     setDeletingTaskId(task.id);
     try {
-      const removeSession = window.pideck.sessions.remove ?? window.pideck.sessions.delete;
-      if (typeof removeSession !== "function") throw new Error(t.sessionBridgeError);
-      await removeSession(task.id, taskCwd);
+      await window.pideck.sessions.delete(task.id, taskCwd);
       const optimisticIds = optimisticTaskIdsRef.current[taskCwd];
       optimisticIds?.delete(task.id);
       if (optimisticIds && optimisticIds.size === 0) delete optimisticTaskIdsRef.current[taskCwd];

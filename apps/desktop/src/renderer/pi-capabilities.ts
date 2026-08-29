@@ -22,5 +22,10 @@ export const fallbackSlashCommands: FallbackCommand[] = [
   { name: "resume", description: "Resume another session" },
   { name: "reload", description: "Reload Pi resources" },
   { name: "settings", description: "Configure Pi defaults" },
+  { name: "share", description: "Share the current session" },
+  { name: "copy", description: "Copy the last assistant message" },
+  { name: "changelog", description: "View the Pi changelog" },
+  { name: "hotkeys", description: "View keyboard shortcuts" },
+  { name: "trust", description: "Manage workspace trust" },
   { name: "quit", description: "Quit PiDeck" },
 ];

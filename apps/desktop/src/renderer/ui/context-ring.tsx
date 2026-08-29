@@ -8,17 +8,6 @@ function formatTokenCount(value: number | null | undefined): string {
   return String(value);
 }
 
-function ContextRing({ usage, language }: { usage?: ContextUsage; language: Language }) {
-  const t = copy[language];
-  const percent = usage?.percent === null || usage?.percent === undefined ? 0 : Math.max(0, Math.min(100, usage.percent));
-  const circumference = 2 * Math.PI * 8;
-  const dash = circumference * percent / 100;
-  return <span className="context-ring-wrap" tabIndex={0} aria-label={t.contextUsage}>
-    <span className="context-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle className="context-ring-track" cx="10" cy="10" r="8" /><circle className="context-ring-progress" cx="10" cy="10" r="8" strokeDasharray={`${dash} ${circumference - dash}`} /></svg><span>{usage?.percent === null || usage?.percent === undefined ? "—" : `${Math.round(percent)}%`}</span></span>
-    <span className="context-tooltip" role="tooltip"><strong>{t.contextUsage}</strong><span className="context-total">{formatTokenCount(usage?.tokens)} / {formatTokenCount(usage?.contextWindow)} {t.tokenUnit}</span><span>{t.contextUsed}: {formatTokenCount(usage?.tokens)} {t.tokenUnit}</span><span>{t.contextWindow}: {formatTokenCount(usage?.contextWindow)} {t.tokenUnit}</span></span>
-  </span>;
-}
-
 function ContextRingPopover({ usage, language }: { usage?: ContextUsage; language: Language }) {
   const t = copy[language];
   const percent = usage?.percent === null || usage?.percent === undefined ? 0 : Math.max(0, Math.min(100, usage.percent));
@@ -34,4 +23,4 @@ function ContextRingPopover({ usage, language }: { usage?: ContextUsage; languag
   </span>;
 }
 
-export { ContextRing, ContextRingPopover };
+export { ContextRingPopover };

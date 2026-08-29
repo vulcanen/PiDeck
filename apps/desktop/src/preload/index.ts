@@ -35,7 +35,6 @@ const bridge: PideckBridge = {
     list: (projectId?: string) => ipcRenderer.invoke("sessions:list", projectId),
     create: (input?: { cwd?: string; name?: string }) => ipcRenderer.invoke("sessions:create", input),
     delete: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:delete", taskId, cwd),
-    remove: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:delete", taskId, cwd),
     messages: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:messages", taskId, cwd),
     runMetadata: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:run-metadata", taskId, cwd),
     changeReviews: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:change-reviews", taskId, cwd),

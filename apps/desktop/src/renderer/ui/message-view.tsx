@@ -81,4 +81,4 @@ function MessageView({ message, language, onPreviewImage, onContextMenuImage }: 
 
 const MemoMessageView = memo(MessageView, (previous, next) => previous.message === next.message && previous.language === next.language && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage);
 
-export { MessageView, MemoMessageView };
+export { MemoMessageView };

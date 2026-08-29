@@ -1,6 +1,5 @@
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
-
-export const IPC_VERSION = 1 as const;
+import { z } from "zod";
 
 export type AuthMethod = "api-key" | "oauth";
 export type PermissionMode = "ask" | "allow" | "deny" | "yolo";
@@ -232,7 +231,6 @@ export interface PideckBridge {
     list(projectId?: string): Promise<TaskSummary[]>;
     create(input?: { cwd?: string; name?: string }): Promise<TaskSummary>;
     delete(taskId: string, cwd?: string): Promise<void>;
-    remove(taskId: string, cwd?: string): Promise<void>;
     messages(taskId: string, cwd?: string): Promise<unknown[]>;
     runMetadata(taskId: string, cwd?: string): Promise<SessionRunRecord[]>;
     changeReviews(taskId: string, cwd?: string): Promise<SessionChangeReviewCollection>;
@@ -379,125 +377,83 @@ export interface PiHostResponse {
   error?: string;
 }
 
-type PiHostPayloadField =
-  | "string"
-  | "boolean"
-  | "number"
-  | "string[]"
-  | "string[]|null"
-  | "images"
-  | "object"
-  | "model"
-  | "ui-value"
-  | `enum:${string}`;
+const stringList = z.array(z.string());
+const promptImages = z.array(z.object({ data: z.string(), mimeType: z.string() }).passthrough());
+const modelReference = z.object({ providerId: z.string(), modelId: z.string() }).passthrough();
+const emptyPayload = z.object({}).strict().optional();
+const payload = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 
-type PiHostPayloadSpec = {
-  fields: Record<string, PiHostPayloadField>;
-  required?: readonly string[];
-  allowUndefined?: boolean;
-};
+const piHostPayloadSchemas = {
+  "runtime.status": emptyPayload,
+  "runtime.shutdown": emptyPayload,
+  "app.changelog": emptyPayload,
+  "app.info": emptyPayload,
+  "projects.list": payload({ knownCwds: stringList.optional() }),
+  "projects.setTrust": payload({ cwd: z.string(), trusted: z.boolean() }),
+  "sessions.list": payload({ cwd: z.string().optional() }),
+  "sessions.create": payload({ cwd: z.string().optional(), name: z.string().optional() }),
+  "sessions.delete": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.messages": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.runMetadata": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.changeReviews": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.changeReview": payload({ taskId: z.string(), reviewId: z.string(), cwd: z.string().optional() }),
+  "sessions.capabilities": payload({ taskId: z.string().optional(), cwd: z.string().optional() }),
+  "sessions.compact": payload({ taskId: z.string(), instructions: z.string().optional(), cwd: z.string().optional() }),
+  "sessions.reload": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.export": payload({ taskId: z.string(), format: z.enum(["jsonl", "html"]), cwd: z.string().optional() }),
+  "sessions.import": payload({ taskId: z.string().optional(), inputPath: z.string(), cwd: z.string().optional() }),
+  "sessions.rename": payload({ taskId: z.string(), name: z.string(), cwd: z.string().optional() }),
+  "sessions.generateTitle": payload({ taskId: z.string(), message: z.string(), cwd: z.string().optional(), model: modelReference.optional() }),
+  "sessions.stats": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.share": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "models.list": emptyPayload,
+  "workspace.snapshot": payload({ cwd: z.string() }),
+  "providers.list": emptyPayload,
+  "providers.login": payload({ providerId: z.string(), method: z.enum(["api-key", "oauth"]), secret: z.string().optional(), authOperationId: z.string().optional() }),
+  "providers.cancelLogin": payload({ authOperationId: z.string() }),
+  "providers.setApiKey": payload({ providerId: z.string(), secret: z.string() }),
+  "providers.logout": payload({ providerId: z.string() }),
+  "providers.auth-response": payload({ requestId: z.string(), value: z.string(), cancelled: z.boolean().optional() }),
+  "agent.prompt": payload({ taskId: z.string(), text: z.string().optional(), cwd: z.string().optional(), images: promptImages.optional(), delivery: z.enum(["steer", "followUp"]).optional() }),
+  "agent.executeBash": payload({ taskId: z.string(), command: z.string(), excludeFromContext: z.boolean().optional(), cwd: z.string().optional() }),
+  "agent.abort": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "agent.setThinkingLevel": payload({ taskId: z.string(), level: z.string(), cwd: z.string().optional() }),
+  "agent.setModel": payload({ taskId: z.string(), providerId: z.string(), modelId: z.string(), cwd: z.string().optional() }),
+  "agent.setScopedModels": payload({ taskId: z.string(), modelIds: stringList.nullable(), persist: z.boolean().optional(), cwd: z.string().optional() }),
+  "agent.queue": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "agent.setQueueModes": payload({ taskId: z.string(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), cwd: z.string().optional() }),
+  "agent.clearQueue": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "agent.promoteQueue": payload({ taskId: z.string(), followUpIndex: z.number().finite(), cwd: z.string().optional() }),
+  "agent.editQueue": payload({ taskId: z.string(), messageId: z.string(), text: z.string(), images: promptImages.optional(), cwd: z.string().optional() }),
+  "agent.deleteQueue": payload({ taskId: z.string(), messageId: z.string(), cwd: z.string().optional() }),
+  "settings.get": payload({ cwd: z.string().optional() }),
+  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional() }),
+  "extension.ui.resolve": payload({ requestId: z.string(), value: z.union([z.string(), z.boolean()]).optional() }),
+  "packages.list": payload({ cwd: z.string().optional() }),
+  "packages.install": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),
+  "packages.remove": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),
+  "packages.update": payload({ source: z.string().optional(), cwd: z.string().optional() }),
+  "packages.configure": payload({ source: z.string(), enabled: z.boolean(), local: z.boolean().optional(), cwd: z.string().optional() }),
+  "permissions.status": emptyPayload,
+  "permissions.setMode": payload({ mode: z.enum(["ask", "allow", "deny", "yolo"]) }),
+  "approval.resolve": payload({ requestId: z.string(), decision: z.enum(["allow-once", "deny"]) }),
+} satisfies Record<PiHostCommand, z.ZodType>;
 
-const piHostPayloadSpecs: Partial<Record<PiHostCommand, PiHostPayloadSpec>> = {
-  "runtime.status": { fields: {}, allowUndefined: true },
-  "runtime.shutdown": { fields: {}, allowUndefined: true },
-  "app.changelog": { fields: {}, allowUndefined: true },
-  "app.info": { fields: {}, allowUndefined: true },
-  "projects.list": { fields: { knownCwds: "string[]" } },
-  "projects.setTrust": { fields: { cwd: "string", trusted: "boolean" }, required: ["cwd", "trusted"] },
-  "sessions.list": { fields: { cwd: "string" } },
-  "sessions.create": { fields: { cwd: "string", name: "string" } },
-  "sessions.delete": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.messages": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.runMetadata": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.changeReviews": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.changeReview": { fields: { taskId: "string", reviewId: "string", cwd: "string" }, required: ["taskId", "reviewId"] },
-  "sessions.capabilities": { fields: { taskId: "string", cwd: "string" } },
-  "sessions.compact": { fields: { taskId: "string", instructions: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.reload": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.export": { fields: { taskId: "string", format: "enum:jsonl|html", cwd: "string" }, required: ["taskId", "format"] },
-  "sessions.import": { fields: { taskId: "string", inputPath: "string", cwd: "string" }, required: ["inputPath"] },
-  "sessions.rename": { fields: { taskId: "string", name: "string", cwd: "string" }, required: ["taskId", "name"] },
-  "sessions.generateTitle": { fields: { taskId: "string", message: "string", cwd: "string", model: "model" }, required: ["taskId", "message"] },
-  "sessions.stats": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "sessions.share": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "models.list": { fields: {}, allowUndefined: true },
-  "workspace.snapshot": { fields: { cwd: "string" }, required: ["cwd"] },
-  "providers.list": { fields: {}, allowUndefined: true },
-  "providers.login": { fields: { providerId: "string", method: "enum:api-key|oauth", secret: "string", authOperationId: "string" }, required: ["providerId", "method"] },
-  "providers.cancelLogin": { fields: { authOperationId: "string" }, required: ["authOperationId"] },
-  "providers.setApiKey": { fields: { providerId: "string", secret: "string" }, required: ["providerId", "secret"] },
-  "providers.logout": { fields: { providerId: "string" }, required: ["providerId"] },
-  "providers.auth-response": { fields: { requestId: "string", value: "string", cancelled: "boolean" }, required: ["requestId", "value"] },
-  "agent.prompt": { fields: { taskId: "string", text: "string", cwd: "string", images: "images", delivery: "enum:steer|followUp" }, required: ["taskId"] },
-  "agent.executeBash": { fields: { taskId: "string", command: "string", excludeFromContext: "boolean", cwd: "string" }, required: ["taskId", "command"] },
-  "agent.abort": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "agent.setThinkingLevel": { fields: { taskId: "string", level: "string", cwd: "string" }, required: ["taskId", "level"] },
-  "agent.setModel": { fields: { taskId: "string", providerId: "string", modelId: "string", cwd: "string" }, required: ["taskId", "providerId", "modelId"] },
-  "agent.setScopedModels": { fields: { taskId: "string", modelIds: "string[]|null", persist: "boolean", cwd: "string" }, required: ["taskId", "modelIds"] },
-  "agent.queue": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "agent.setQueueModes": { fields: { taskId: "string", steeringMode: "enum:all|one-at-a-time", followUpMode: "enum:all|one-at-a-time", cwd: "string" }, required: ["taskId"] },
-  "agent.clearQueue": { fields: { taskId: "string", cwd: "string" }, required: ["taskId"] },
-  "agent.promoteQueue": { fields: { taskId: "string", followUpIndex: "number", cwd: "string" }, required: ["taskId", "followUpIndex"] },
-  "agent.editQueue": { fields: { taskId: "string", messageId: "string", text: "string", images: "images", cwd: "string" }, required: ["taskId", "messageId", "text"] },
-  "agent.deleteQueue": { fields: { taskId: "string", messageId: "string", cwd: "string" }, required: ["taskId", "messageId"] },
-  "settings.get": { fields: { cwd: "string" } },
-  "settings.update": { fields: { cwd: "string", defaultProvider: "string", defaultModel: "string", defaultThinkingLevel: "string", transport: "enum:auto|sse|websocket", compactionEnabled: "boolean", steeringMode: "enum:all|one-at-a-time", followUpMode: "enum:all|one-at-a-time" } },
-  "extension.ui.resolve": { fields: { requestId: "string", value: "ui-value" }, required: ["requestId"] },
-  "packages.list": { fields: { cwd: "string" } },
-  "packages.install": { fields: { source: "string", local: "boolean", cwd: "string" }, required: ["source"] },
-  "packages.remove": { fields: { source: "string", local: "boolean", cwd: "string" }, required: ["source"] },
-  "packages.update": { fields: { source: "string", cwd: "string" } },
-  "packages.configure": { fields: { source: "string", enabled: "boolean", local: "boolean", cwd: "string" }, required: ["source", "enabled"] },
-  "permissions.status": { fields: {}, allowUndefined: true },
-  "permissions.setMode": { fields: { mode: "enum:ask|allow|deny|yolo" }, required: ["mode"] },
-  "approval.resolve": { fields: { requestId: "string", decision: "enum:allow-once|deny" }, required: ["requestId", "decision"] },
-};
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function assertPiHostField(value: unknown, field: string, kind: PiHostPayloadField): void {
-  if (kind === "string") {
-    if (typeof value !== "string") throw new Error(`${field} must be a string`);
-    return;
+function payloadValidationMessage(command: PiHostCommand, value: unknown, error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (issue?.code === "unrecognized_keys") return `${command} payload contains unknown field: ${issue.keys[0]}`;
+  const field = typeof issue?.path[0] === "string" ? issue.path[0] : undefined;
+  if (field && (!value || typeof value !== "object" || !(field in value) || (value as Record<string, unknown>)[field] === undefined)) {
+    return `${command} requires ${field}`;
   }
-  if (kind === "boolean") {
-    if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
-    return;
+  if (field && issue?.code === "invalid_type") {
+    const expected = issue.expected === "boolean" ? "a boolean"
+      : issue.expected === "string" ? "a string"
+        : issue.expected === "number" ? "a finite number"
+          : issue.expected;
+    return `${field} must be ${expected}`;
   }
-  if (kind === "number") {
-    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${field} must be a finite number`);
-    return;
-  }
-  if (kind === "string[]") {
-    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`${field} must be an array of strings`);
-    return;
-  }
-  if (kind === "string[]|null") {
-    if (value !== null && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) throw new Error(`${field} must be an array of strings or null`);
-    return;
-  }
-  if (kind === "images") {
-    if (!Array.isArray(value) || value.some((item) => !isPlainRecord(item) || typeof item.data !== "string" || typeof item.mimeType !== "string")) {
-      throw new Error(`${field} must be an array of image DTOs`);
-    }
-    return;
-  }
-  if (kind === "object") {
-    if (!isPlainRecord(value) && typeof value !== "string" && typeof value !== "boolean" && value !== undefined) throw new Error(`${field} must be serializable`);
-    return;
-  }
-  if (kind === "model") {
-    if (!isPlainRecord(value) || typeof value.providerId !== "string" || typeof value.modelId !== "string") throw new Error(`${field} must be a model DTO`);
-    return;
-  }
-  if (kind === "ui-value") {
-    if (value !== undefined && typeof value !== "string" && typeof value !== "boolean") throw new Error(`${field} must be a string, boolean, or undefined`);
-    return;
-  }
-  const allowed = kind.slice("enum:".length).split("|");
-  if (typeof value !== "string" || !allowed.includes(value)) throw new Error(`${field} has an unsupported value`);
+  return `${command} payload is invalid: ${z.prettifyError(error)}`;
 }
 
 /**
@@ -506,20 +462,9 @@ function assertPiHostField(value: unknown, field: string, kind: PiHostPayloadFie
  * Electron IPC and must reject coercible or unknown shapes explicitly.
  */
 export function validatePiHostPayload(command: PiHostCommand, payload: unknown): unknown {
-  const spec = piHostPayloadSpecs[command];
-  if (!spec) throw new Error(`Unsupported PiHost command: ${command}`);
-  if (payload === undefined) {
-    if (spec.allowUndefined || Object.keys(spec.fields).length === 0) return undefined;
-    throw new Error(`${command} payload is required`);
-  }
-  if (!isPlainRecord(payload)) throw new Error(`${command} payload must be an object`);
-  for (const key of Object.keys(payload)) {
-    if (!(key in spec.fields)) throw new Error(`${command} payload contains unknown field: ${key}`);
-    if (payload[key] === undefined) continue;
-    assertPiHostField(payload[key], key, spec.fields[key]);
-  }
-  for (const required of spec.required ?? []) {
-    if (!(required in payload) || payload[required] === undefined) throw new Error(`${command} requires ${required}`);
-  }
+  const schema = piHostPayloadSchemas[command] as z.ZodType | undefined;
+  if (!schema) throw new Error(`Unsupported PiHost command: ${command}`);
+  const result = schema.safeParse(payload);
+  if (!result.success) throw new Error(payloadValidationMessage(command, payload, result.error));
   return payload;
 }

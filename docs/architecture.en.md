@@ -119,7 +119,7 @@ PiDeck/
 │        ├─ use-sent-images-cache.ts      # Pending-send image cache
 │        ├─ timeline-utils.ts             # Turn grouping, execution summaries, stable timeline items
 │        ├─ message-utils.ts              # Message identity, snapshot merging, time formatting
-│        ├─ image-cache.ts                # Image preview cache
+│        ├─ image-cache.ts                # IndexedDB image preview cache via idb
 │        ├─ pi-capabilities.ts            # Slash command fallback when Pi resources are unavailable
 │        ├─ types.ts                      # Renderer state and message helper types
 │        ├─ styles.css                    # Current UI tokens and layout styles
@@ -146,7 +146,7 @@ PiDeck/
 │           ├─ markdown.tsx               # Markdown, code blocks, math, Mermaid rendering
 │           └─ shared.ts                  # Clipboard and menu keyboard-navigation helpers
 ├─ packages/
-│  ├─ contracts/                          # Bridge, IPC command, runtime event types (type-only, no build output)
+│  ├─ contracts/                          # Bridge/IPC types and Zod runtime payload validation
 │  ├─ domain/                             # Task, Project types and shared runtime helpers
 │  ├─ pi-adapter/                         # Pi SDK resolution, loading, model/Session adaptation
 │  ├─ pi-host/                            # PiHost process entry and Host command orchestration
@@ -154,7 +154,7 @@ PiDeck/
 │  │  ├─ src/host-state.ts                # Process-local Session/Agent/queue/auth registries
 │  │  └─ src/agent-event-adapter.ts       # Pi Agent event normalization for the bridge
 │  ├─ permission-engine/                  # Pi permission config, Extension UI, approval waiting
-│  ├─ ui-system/                          # Shared Renderer Icon, focus, clipboard primitives
+│  ├─ ui-system/                          # Shared Icon/clipboard primitives and focus-trap adapter
 │  └─ i18n/                               # zh/en copy and command descriptions
 ├─ docs/                                  # Architecture, product plan, Pi capability matrix, release guide
 ├─ rules/                                 # Development and documentation sync rules
@@ -186,11 +186,13 @@ renderer → contracts + domain + i18n + ui-system
 preload  → contracts
 main     → contracts + i18n (menu copy); forks packages/pi-host/dist/index.js by path, never imports its modules
 pi-host  → contracts + domain + pi-adapter + permission-engine
+contracts → zod (strict runtime validation at the PiHost IPC boundary)
 pi-adapter → Pi SDK (dynamic resolution, loading, public API adaptation only)
 permission-engine → contracts + @gotgenes/pi-permission-system config
+ui-system → React + focus-trap
 ```
 
-`packages/contracts` is a type-only package whose `exports` point directly at `src/index.ts`; it does not participate in builds and is not executed separately in the `typecheck` script. The other workspace packages keep type entries in `src/index.ts` / `src/index.tsx`, with runtime entries pointing at the built `dist/index.js`; desktop development (`predev`) and production builds (`prebuild`) compile in the order `domain → pi-adapter → permission-engine → pi-host → i18n → ui-system` so neither the PiHost Node process nor the Renderer loads uncompiled TypeScript.
+`packages/contracts` provides both TypeScript declarations and executable validation. Its public types point at `src/index.ts`, while PiHost loads the compiled `dist/index.js`; the complete `PiHostCommand` schema map is implemented with strict Zod objects so unknown or coercible IPC values are rejected without maintaining a second handwritten schema language. Workspace typechecks and desktop development/production builds compile in the order `contracts → domain → pi-adapter → permission-engine → pi-host → i18n → ui-system`, so neither PiHost nor the Renderer loads uncompiled TypeScript.
 
 Must be observed:
 
@@ -200,6 +202,8 @@ Must be observed:
 - Cross-process messages carry only JSON/structured-clone serializable data.
 - New IPC must update `packages/contracts` first, then Main, Preload, and Renderer.
 - Pi fallback capabilities must live outside UI components and state that the Pi CLI/SDK remains the authoritative source.
+
+Renderer image previews remain a non-authoritative cache. `image-cache.ts` uses the small `idb` Promise wrapper while preserving the existing `pideck-cache` database, `snapshots` object store, structured-clone values, and `localStorage` fallback. Shared modal focus behavior is implemented once in `ui-system` over `focus-trap`; PiDeck retains its own dialog markup and inert application-shell boundary, while the library owns nested trap stacking, dynamic tabbable discovery, Escape routing, and focus restoration.
 
 PiHost restores the desktop transcript by projecting every entry on Pi's complete active `SessionManager.getBranch()`. It deliberately does not expose `AgentSession.messages` as history because that array is the compaction-aware model context and omits the summarized prefix after a restart. Context compaction therefore remains effective for subsequent model requests without hiding persisted pre-compaction turns from the user.
 

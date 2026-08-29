@@ -184,4 +184,4 @@ const MemoComposer = memo(Composer, (previous, next) =>
   && previous.queueEdit?.messageId === next.queueEdit?.messageId
 );
 
-export { Composer, MemoComposer };
+export { MemoComposer };

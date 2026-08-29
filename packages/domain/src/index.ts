@@ -24,12 +24,6 @@ export interface TaskSummary {
   unread?: boolean;
 }
 
-export interface PiDeckEvent {
-  type: "runtime.status" | "task.state" | "message.delta" | "approval.requested";
-  taskId?: string;
-  payload: unknown;
-}
-
 export interface SkillInvocation {
   name: string;
   userMessage?: string;

@@ -11,6 +11,7 @@ const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
 const { validatePiHostPayload } = require("../../../packages/contracts/dist/index.js");
+const { localizeCommandDescription } = require("../../../packages/i18n/dist/index.js");
 const { PermissionEngine } = require("../../../packages/permission-engine/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
 const { buildSessionChangeReview, captureWorkspaceChangeState, inspectGitWorkspaceAvailability, MAX_REVIEW_CAPTURE_PATHS } = require("../../../packages/pi-host/dist/session-change-review.js");
@@ -25,6 +26,12 @@ test("PiHost DTO validation rejects coercible booleans and unknown fields", () =
   assert.throws(() => validatePiHostPayload("packages.configure", { source: "demo", enabled: true, unexpected: true }), /unknown field/);
   assert.doesNotThrow(() => validatePiHostPayload("settings.update", { compactionEnabled: false, transport: "auto" }));
   assert.doesNotThrow(() => validatePiHostPayload("agent.prompt", { taskId: "task", text: "hello", images: undefined, delivery: undefined }));
+});
+
+test("built-in slash command descriptions are localized without rewriting custom resources", () => {
+  assert.equal(localizeCommandDescription("settings", "Theme, message delivery, transport, and other preferences", "zh"), "配置主题、消息投递、传输方式及其他偏好");
+  assert.equal(localizeCommandDescription("llama", "Download, load, and unload llama.cpp router models", "zh"), "下载、加载或卸载 llama.cpp 路由模型");
+  assert.equal(localizeCommandDescription("custom-command", "Project-owned description", "zh"), "Project-owned description");
 });
 
 test("Pi settings handler persists partial defaults without requiring a model", async () => {

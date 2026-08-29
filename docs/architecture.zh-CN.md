@@ -119,7 +119,7 @@ PiDeck/
 │        ├─ use-sent-images-cache.ts      # 待发送图片缓存
 │        ├─ timeline-utils.ts             # 回合分组、执行摘要和稳定时间线项
 │        ├─ message-utils.ts              # 消息 identity、快照合并和时间格式化
-│        ├─ image-cache.ts                # 图片预览缓存
+│        ├─ image-cache.ts                # 通过 idb 封装的 IndexedDB 图片预览缓存
 │        ├─ pi-capabilities.ts            # Pi 资源不可用时的 slash 命令 fallback
 │        ├─ types.ts                      # Renderer 状态与消息辅助类型
 │        ├─ styles.css                    # 当前 UI token 与布局样式
@@ -146,12 +146,12 @@ PiDeck/
 │           ├─ markdown.tsx               # Markdown、代码块、数学公式与 Mermaid 图表渲染
 │           └─ shared.ts                  # 剪贴板与菜单键盘导航 helper
 ├─ packages/
-│  ├─ contracts/                          # Bridge、IPC command、runtime event 类型（纯类型包，无构建产物）
+│  ├─ contracts/                          # Bridge/IPC 类型与 Zod 运行时 payload 校验
 │  ├─ domain/                             # Task、Project 类型及共享运行时 helper
 │  ├─ pi-adapter/                         # Pi SDK 定位、加载及模型/Session 适配
 │  ├─ pi-host/                            # PiHost 进程入口和 Host command 编排
 │  ├─ permission-engine/                  # Pi 权限配置、Extension UI 和审批等待
-│  ├─ ui-system/                          # Renderer 共享 Icon、焦点和剪贴板基元
+│  ├─ ui-system/                          # 共享 Icon/剪贴板基元与 focus-trap 适配层
 │  └─ i18n/                               # zh/en 文案和命令描述
 ├─ docs/                                  # 架构、产品方案、Pi 能力矩阵与发布指南
 ├─ rules/                                 # 开发与文档同步规则
@@ -183,11 +183,13 @@ renderer → contracts + domain + i18n + ui-system
 preload  → contracts
 main     → contracts + i18n（菜单文案）；按路径 fork packages/pi-host/dist/index.js，不 import 其模块
 pi-host  → contracts + domain + pi-adapter + permission-engine
+contracts → zod（PiHost IPC 边界的严格运行时校验）
 pi-adapter → Pi SDK（仅动态定位、加载和公开 API 适配）
 permission-engine → contracts + @gotgenes/pi-permission-system 配置
+ui-system → React + focus-trap
 ```
 
-`packages/contracts` 是纯类型包，`exports` 直接指向 `src/index.ts`，不参与构建也不在 `typecheck` 脚本里单独执行。其余 workspace 包的类型入口保留在 `src/index.ts` / `src/index.tsx`，运行时入口指向构建生成的 `dist/index.js`；桌面开发（`predev`）和生产构建（`prebuild`）按 `domain → pi-adapter → permission-engine → pi-host → i18n → ui-system` 顺序编译，避免 PiHost Node 进程或 Renderer 直接加载未编译的 TypeScript。
+`packages/contracts` 同时提供 TypeScript 声明和可执行校验。公开类型指向 `src/index.ts`，PiHost 运行时加载编译后的 `dist/index.js`；完整的 `PiHostCommand` schema map 使用严格 Zod object 实现，拒绝未知字段和可强制转换的 IPC 值，不再维护第二套手写 schema 语言。workspace typecheck、桌面开发（`predev`）和生产构建（`prebuild`）按 `contracts → domain → pi-adapter → permission-engine → pi-host → i18n → ui-system` 顺序编译，避免 PiHost 或 Renderer 加载未编译的 TypeScript。
 
 必须遵守：
 
@@ -197,6 +199,8 @@ permission-engine → contracts + @gotgenes/pi-permission-system 配置
 - 跨进程消息只能传 JSON/structured-clone 可序列化数据。
 - 新增 IPC 必须先更新 `packages/contracts`，再实现 Main、Preload 和 Renderer。
 - Pi fallback 能力必须独立于 UI 组件，并标明权威来源仍为 Pi CLI/SDK。
+
+Renderer 图片预览仍只是非权威缓存。`image-cache.ts` 使用轻量 `idb` Promise 封装，同时保留现有 `pideck-cache` 数据库、`snapshots` object store、structured-clone 数据和值写入失败后的 `localStorage` fallback。Modal 焦点行为在 `ui-system` 中基于 `focus-trap` 统一实现；PiDeck 保留自己的对话框结构和应用壳层 inert 边界，由库负责嵌套 trap 栈、动态 tabbable 发现、Escape 路由与关闭后的焦点恢复。
 
 Renderer 的会话时间线由 `app-conversation.tsx` 与 `ui/message-timeline.tsx` 组合，采用**普通文档流列表 + 早期消息折叠**，不使用虚拟列表。原因是 Mermaid、KaTeX、语法高亮都是异步定高，虚拟列表的测量-定位循环与之根本冲突（跳动、重叠、回弹）；改为只挂载最近 `FOLD_WINDOW = 200` 条消息，更早的消息折叠在"显示更早消息"按钮后，每次展开 `FOLD_STEP = 200` 条。防跳动依赖浏览器原生 scroll anchoring：`.conversation-scroll` 必须保持 `overflow-anchor: auto`（虚拟列表时代的 `none` 会关闭该机制）。
 
