@@ -18,3 +18,5 @@ export { ImagePreview, CommandResultDialog, RenameSessionDialog, ResumeSessionDi
 export { PackageSettings } from "./package-settings";
 export { ProviderSettings } from "./provider-settings";
 export { PiSettings } from "./pi-settings";
+export { QuickSettings } from "./quick-settings";
+export { ApplicationMenu } from "./application-menu";

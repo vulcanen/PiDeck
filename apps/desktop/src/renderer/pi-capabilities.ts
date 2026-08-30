@@ -1,6 +1,7 @@
 export interface FallbackCommand {
   name: string;
   description: string;
+  source?: "extension";
 }
 
 /**

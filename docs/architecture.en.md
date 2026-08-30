@@ -50,7 +50,8 @@ Main is only responsible for:
 - Opening protocol-validated HTTP(S) URLs in the system browser and rejecting in-window navigation.
 - Recording project directory references, hidden references, and their display order in Electron `userData/projects.json`.
 - Building the application menu and switching menu language via `app:set-language`; copy comes from `@pideck/i18n`.
-- On Windows, using Electron Window Controls Overlay and hiding the native menu bar so the themed Renderer surface continues behind the system window controls; `app:set-window-theme` synchronizes the native background and control-symbol colors with the Renderer theme. Renderer title-bar colors match that native overlay exactly, while right-side settings/package drawers start below the 48px caption strip so their header controls never enter the minimize/maximize/close hit area.
+- On Windows, Electron Window Controls Overlay keeps the themed Renderer surface behind the system controls. Edit/View/Help triggers follow the Workspace label and reuse the native application menu; below 1100px they collapse into one Menu button. At 560px and below, actions move to a second toolbar row to preserve the native 48px caption-control hit area. Settings drawers start below the complete toolbar (normally 48px, 96px in the narrow Windows layout). macOS keeps its system menu bar. `app:set-window-theme` synchronizes the native background/control-symbol colors with the Renderer theme.
+- `app:popup-menu` is a trusted Main-only IPC endpoint, exposed as `PideckBridge.app.popupMenu({ menu, x, y })`. Its strict contract allows only all/edit/view/help and finite bounded CSS-pixel anchors. Main resolves the existing native menu by stable ID, scales/clamps coordinates to content bounds, and resolves after dismissal; Renderer never sends menu actions or executable templates. Pointer activation preserves edit selection; keyboard activation restores the previous content focus before opening and returns to the trigger on dismissal. Failures surface a localized retry/restart notice.
 - Opening native dialogs for directory picking, session import, etc.
 - Setting the Dock icon on macOS and attempting to load `pideck-miniwindow.node` for the minimized-window icon; failures degrade to a warning.
 
@@ -98,6 +99,7 @@ PiDeck/
 │  │  └─ renderer-regressions.test.cjs    # Renderer behavior and structural guards
 │  └─ src/
 │     ├─ main/index.ts                    # Electron Main, app menu, and IPC orchestration
+│     ├─ main/application-menu.ts         # Native menu template, validated popup and lifecycle
 │     ├─ preload/index.ts                 # contextBridge
 │     └─ renderer/
 │        ├─ App.tsx                       # Entry and Controller/View composition only
@@ -121,6 +123,7 @@ PiDeck/
 │        ├─ message-utils.ts              # Message identity, snapshot merging, time formatting
 │        ├─ image-cache.ts                # IndexedDB image preview cache via idb
 │        ├─ pi-capabilities.ts            # Slash command fallback when Pi resources are unavailable
+│        ├─ palette-command.ts            # Direct command vs editable template activation
 │        ├─ types.ts                      # Renderer state and message helper types
 │        ├─ styles.css                    # Current UI tokens and layout styles
 │        ├─ vite-env.d.ts
@@ -134,6 +137,8 @@ PiDeck/
 │           ├─ pane-resize-handle.tsx     # Accessible pointer/keyboard pane separator
 │           ├─ composer.tsx               # Input, suggestions, queue thumbnails/editing
 │           ├─ command-palette.tsx        # Command palette
+│           ├─ quick-settings.tsx         # Unified settings launcher
+│           ├─ application-menu.tsx       # Windows title-bar native-menu triggers
 │           ├─ dialogs.tsx                # Rename/trust/resume/extension dialogs
 │           ├─ approval-card.tsx          # Tool approval card
 │           ├─ provider-settings.tsx      # Provider auth settings
@@ -192,7 +197,7 @@ permission-engine → contracts + @gotgenes/pi-permission-system config
 ui-system → React + focus-trap
 ```
 
-`packages/contracts` provides both TypeScript declarations and executable validation. Its public types point at `src/index.ts`, while PiHost loads the compiled `dist/index.js`; the complete `PiHostCommand` schema map is implemented with strict Zod objects so unknown or coercible IPC values are rejected without maintaining a second handwritten schema language. Workspace typechecks and desktop development/production builds compile in the order `contracts → domain → pi-adapter → permission-engine → pi-host → i18n → ui-system`, so neither PiHost nor the Renderer loads uncompiled TypeScript.
+`packages/contracts` provides both TypeScript declarations and executable validation. Its public types point at `src/index.ts`, while PiHost loads the compiled `dist/index.js`; the complete `PiHostCommand` schema map is implemented with strict Zod objects so unknown or coercible IPC values are rejected without maintaining a second handwritten schema language. Workspace typechecks and desktop development/production builds compile in the order `contracts → domain → pi-adapter → permission-engine → pi-host → i18n → ui-system`. Vite resolves `@pideck/ui-system` and `@pideck/i18n` directly to source and excludes them from dependency prebundling, so shared icon/component/label changes hot-reload without a stale `dist` or browser prebundle. Vite still transforms this source into JavaScript for development and production; PiHost loads compiled workspace packages.
 
 Must be observed:
 
@@ -279,6 +284,8 @@ Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-resp
 - Pi Session export/compact → session operations and command palette entries; Session Tree `/fork`, `/clone`, `/tree` remain on the to-support list.
 - Pi Agent steering/follow-up queue → compact Composer-attached queue stack, delivery mode, batch mode, images, promotion, editing, and deletion. Automatic compaction routes input through Pi's native queues; manual compaction uses a scoped Host staging queue because it ends without an active Agent run, then starts the first staged prompt and transfers the rest back to Pi in order. The same stable-ID mutation surface covers both queues, and preflight reservations prevent competing direct prompts.
 - Pi Package management → Pi packages settings panel in the command palette.
+- The header gear / `Ctrl/Cmd + ,` → Quick settings, reusing the existing Pi settings, Provider, package, scoped-model, trust, and shortcut surfaces. Provider authentication uses a distinct brain icon. All settings drawers are anchored below `--titlebar-height` on macOS and Windows.
+- Palette click/Enter dispatches through `palette-command.ts`: built-ins call existing desktop handlers, runtime-tagged `source: "extension"` commands call Pi's prompt bridge, and Prompt/Skill resources remain editable templates. The optional source metadata is additive to `SessionCapabilities`; no new IPC endpoint is introduced. Dialog focus restoration uses a shared workspace-origin context when a palette/launcher trigger has already unmounted.
 - Pi permission system modes → permission-level control below the input.
 - Pi workspace file list → `@file` reference candidates in the Composer. `workspace.snapshot` also returns git `changes`, but the current UI has no standalone Files/Changes panel, so the field is not yet consumed.
 
@@ -294,6 +301,8 @@ The native packaging jobs run through the protected `release-signing` Environmen
 
 ## 9. Runtime Verification
 
+For Windows menu changes, verify `app:popup-menu` through the Preload bridge: all three groups and the compact menu, pointer/keyboard dismissal, copy/paste with an existing text selection, zoom-adjusted anchors, localization, packaged-only restrictions, and rejection of unknown groups or malformed coordinates. Check 375/560/760/1024/1440px layouts and caption-button clearance; macOS must not render duplicate title-bar menus. These desktop menus do not call PiHost.
+
 After changing PiHost, contracts, Main, Preload, or Provider/Session-related capabilities, at minimum execute:
 
 ```text
@@ -306,6 +315,7 @@ sessions.runMetadata
 sessions.changeReviews
 sessions.changeReview (missing ID returns null)
 sessions.capabilities
+  # Verify registered Extension commands carry source: "extension".
 agent.queue
 agent.deleteQueue (missing stable ID must fail without mutation)
 workspace.snapshot

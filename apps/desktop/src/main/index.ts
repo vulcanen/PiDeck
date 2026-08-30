@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session as electronSession, shell, Tray, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session as electronSession, shell, Tray } from "electron";
 import { fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -8,6 +8,7 @@ import type { AppLanguage, PiHostRequest, PiHostResponse, WindowTheme } from "@p
 import { appMenuCopy, copy } from "@pideck/i18n";
 import { assertKnownProjectCwd, assertTrustedIpcSender } from "./ipc-security";
 import { windowThemeColors } from "./window-theme";
+import { buildApplicationMenuTemplate, popupApplicationMenu } from "./application-menu";
 
 app.setName("PiDeck");
 
@@ -110,58 +111,7 @@ function hideProjectCwd(cwd: string): void {
 }
 
 function buildApplicationMenu(language: AppLanguage) {
-  const t = appMenuCopy[language];
-  const template: MenuItemConstructorOptions[] = [
-    {
-      label: t.file,
-      submenu: [
-        { role: "close", label: t.close },
-        { type: "separator" },
-        { role: "quit", label: t.quit },
-      ],
-    },
-    {
-      label: t.edit,
-      submenu: [
-        { role: "undo", label: t.undo },
-        { role: "redo", label: t.redo },
-        { type: "separator" },
-        { role: "cut", label: t.cut },
-        { role: "copy", label: t.copy },
-        { role: "paste", label: t.paste },
-        { role: "selectAll", label: t.selectAll },
-      ],
-    },
-    {
-      label: t.view,
-      submenu: [
-        // Reload and DevTools are development aids; keep them off the menu in
-        // packaged builds where they only invite support requests.
-        ...(!app.isPackaged ? ([
-          { role: "reload", label: t.reload },
-          { role: "forceReload", label: t.forceReload },
-          { type: "separator" },
-          { role: "toggleDevTools", label: t.toggleDevTools },
-          { type: "separator" },
-        ] satisfies MenuItemConstructorOptions[]) : []),
-        { role: "resetZoom", label: t.resetZoom },
-        { role: "zoomIn", label: t.zoomIn },
-        { role: "zoomOut", label: t.zoomOut },
-        { type: "separator" },
-        { role: "togglefullscreen", label: t.toggleFullscreen },
-      ],
-    },
-    {
-      label: t.help,
-      submenu: [
-        {
-          label: t.about,
-          click: () => { void showAboutDialog(); },
-        },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildApplicationMenuTemplate(language, app.isPackaged, () => { void showAboutDialog(); })));
 }
 
 async function showAboutDialog() {
@@ -368,6 +318,10 @@ function registerTrustedIpcHandler(channel: string, listener: Parameters<typeof 
 }
 
 function registerIpcHandlers() {
+  registerTrustedIpcHandler("app:popup-menu", (_event, request: unknown) => {
+    if (process.platform !== "win32" || !hostWindow) throw new Error("The title-bar application menu is available on Windows only");
+    return popupApplicationMenu(hostWindow, Menu.getApplicationMenu(), request);
+  });
   registerTrustedIpcHandler("app:set-language", (_event, language: AppLanguage) => {
     currentLanguage = language === "en" ? "en" : "zh";
     buildApplicationMenu(currentLanguage);

@@ -9,7 +9,7 @@ async function copyImageToClipboard(src: string): Promise<boolean> {
 
 function handleRovingMenuKeyDown(event: React.KeyboardEvent<HTMLElement>) {
   if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-  const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem'], [role='menuitemradio']"));
+  const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled)"));
   if (!items.length) return;
   const currentIndex = items.findIndex((item) => item === document.activeElement);
   const nextIndex = event.key === "Home"

@@ -1,5 +1,5 @@
 import { createFocusTrap, type FocusTrap } from "focus-trap";
-import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 export const icons: Record<string, string> = {
   plus: "M8 3v10M3 8h10",
@@ -11,8 +11,9 @@ export const icons: Record<string, string> = {
   diff: "M5 2.5v8M3 4.5l2-2 2 2M11 13.5v-8M9 11.5l2 2 2-2",
   send: "m3 8 10-5-3 10-2-4-5-1Z",
   stop: "M4 4h8v8H4z",
-  settings: "M8 3.2 9.1 4.1l1.4-.4.7 1.3 1.4.4-.1 1.5 1 1-.9 1.2.4 1.4-1.3.7-.4 1.4-1.5-.1-1 1-1.2-.9-1.4.4-.7-1.3-1.4-.4.1-1.5-1-1 .9-1.2-.4-1.4 1.3-.7.4-1.4 1.5.1zM6.4 8a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 0 0-3.2 0Z",
-  key: "M10.5 3.5a2.5 2.5 0 1 0 1.7 4.3L14 10v1.5h-1.5V13H11v-1.5H9.5L8 10l2.2-2.2a2.5 2.5 0 0 0 .3-4.3Z",
+  settings: "M7 3.3V1.8h2v1.5l1.6.7 1.1-1.1 1.4 1.4L12 5.4l.7 1.6h1.5v2h-1.5l-.7 1.6 1.1 1.1-1.4 1.4-1.1-1.1-1.6.7v1.5H7v-1.5L5.4 12l-1.1 1.1-1.4-1.4L4 10.6 3.3 9H1.8V7h1.5L4 5.4 2.9 4.3l1.4-1.4L5.4 4 7 3.3ZM5.75 8a2.25 2.25 0 1 0 4.5 0 2.25 2.25 0 1 0-4.5 0Z",
+  key: "M9.5 8.5a3.5 3.5 0 1 0-2-2L2 12v2h2v-2h2v-2l1.5-1.5M11 5h.01",
+  brain: "M8 3.5c0-2-3-2.4-3.7-.5C2.2 2.8 1.1 5.2 2.4 6.8c-1.6 1.5-.8 4 1.2 4.4-.2 2.3 3 3.5 4.4 1.5 1.4 2 4.6.8 4.4-1.5 2-.4 2.8-2.9 1.2-4.4C14.9 5.2 13.8 2.8 11.7 3 11 1.1 8 1.5 8 3.5Zm0 0v9.2M4.3 3c-.2 1 .3 1.8 1.2 2.2M11.7 3c.2 1-.3 1.8-1.2 2.2M2.4 6.8c.8-.2 1.6.1 2 1M13.6 6.8c-.8-.2-1.6.1-2 1M3.6 11.2c.1-1 .8-1.5 1.8-1.5M12.4 11.2c-.1-1-.8-1.5-1.8-1.5",
   shield: "M8 2.5 13 4v3.7c0 2.7-1.8 4.8-5 5.8-3.2-1-5-3.1-5-5.8V4zM5.5 8l1.6 1.6L10.7 6",
   moon: "M11.5 10.5A4.5 4.5 0 0 1 5.5 4.1 5 5 0 1 0 11.5 10.5Z",
   sun: "M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.4 3.4l.7.7M11.9 11.9l.7.7M12.6 3.4l-.7.7M4.1 11.9l-.7.7",
@@ -40,6 +41,9 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
 }
 
 const dialogFocusStack: FocusTrap[] = [];
+// A palette/launcher can disappear while opening another dialog. Keep the
+// workspace focus origin available when that intermediate trigger is detached.
+export const DialogFocusReturnContext = createContext<RefObject<HTMLElement | null> | null>(null);
 
 export function useDialogFocus(
   ref: RefObject<HTMLElement | null>,
@@ -47,6 +51,7 @@ export function useDialogFocus(
   enabled = true,
   returnFocusRef?: RefObject<HTMLElement | null>,
 ) {
+  const workspaceFocusRef = useContext(DialogFocusReturnContext);
   const escapeRef = useRef(onEscape);
   useEffect(() => { escapeRef.current = onEscape; }, [onEscape]);
   useLayoutEffect(() => {
@@ -64,14 +69,17 @@ export function useDialogFocus(
         escapeRef.current();
         return false;
       },
-      setReturnFocus: () => returnFocusRef?.current ?? previous ?? false,
+      setReturnFocus: () => {
+        const target = returnFocusRef?.current ?? previous;
+        return target?.isConnected && target !== document.body ? target : workspaceFocusRef?.current ?? false;
+      },
       trapStack: dialogFocusStack,
     });
     trap.activate();
     return () => {
       trap.deactivate({ returnFocus: true });
     };
-  }, [enabled, ref, returnFocusRef]);
+  }, [enabled, ref, returnFocusRef, workspaceFocusRef]);
 }
 
 export async function copyText(value: string): Promise<boolean> {

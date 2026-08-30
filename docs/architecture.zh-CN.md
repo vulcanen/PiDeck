@@ -51,7 +51,8 @@ Main 只负责：
 - 在 Electron `userData/projects.json` 中记录项目目录引用、隐藏引用及其显示顺序。
 - 构建应用菜单并按 `app:set-language` 切换菜单语言，文案取自 `@pideck/i18n`。
 - 打开目录选择、会话导入等原生对话框。
-- Windows 使用 Electron Window Controls Overlay 并隐藏原生菜单栏，让主题化 Renderer 表面延伸到系统窗口按钮下方；`app:set-window-theme` 会把原生背景和控制按钮符号颜色同步到 Renderer 主题。Renderer 标题栏颜色与原生覆盖区保持完全一致，Provider/包管理等右侧抽屉从 48px 系统标题栏下方开始，头部操作不会进入最小化、最大化和关闭按钮的命中区域。
+- Windows 使用 Electron Window Controls Overlay 保留主题化顶栏。“工作台”右侧提供编辑/查看/帮助入口，复用原生应用菜单；1100px 及以下收为“菜单”按钮。560px 及以下将操作按钮移至第二行，避开原生 48px 窗口控制区；设置抽屉位于完整工具栏下方，常规为 48px，极窄 Windows 布局为 96px。macOS 继续使用系统菜单栏。`app:set-window-theme` 同步原生背景和控制按钮颜色。
+- `app:popup-menu` 是经发送方校验的 Main 专用 IPC，由 `PideckBridge.app.popupMenu({ menu, x, y })` 暴露。严格契约仅允许 all/edit/view/help 和有界有限 CSS 像素坐标；Main 按稳定 ID 复用现有原生菜单，按缩放比例换算并限制坐标，关闭后返回。Renderer 不传可执行动作或菜单模板。鼠标打开保留编辑选区；键盘打开前恢复原内容焦点，关闭后返回触发按钮；失败显示本地化重试/重启提示。
 - macOS 上设置 Dock 图标，并尝试加载 `pideck-miniwindow.node` 定制最小化窗口图标；加载失败只降级告警。
 
 项目目录清单只保存 `cwd`，不保存 Session 或工作区内容。Renderer 单击项目时通过 `sessions.list(cwd)` 按需展开会话列表，并以独立展开状态保留其它项目，不改变当前中央会话；只有单击具体会话才切换工作区。项目右键“移除”只把 `cwd` 加入隐藏引用，不删除项目文件或 Pi Session。Main 不创建 `AgentSession`，不保存 Provider 凭据，也不执行用户 Shell 命令。
@@ -98,6 +99,7 @@ PiDeck/
 │  │  └─ renderer-regressions.test.cjs    # Renderer 行为与结构守卫
 │  └─ src/
 │     ├─ main/index.ts                    # Electron Main、应用菜单与 IPC 编排
+│     ├─ main/application-menu.ts         # 原生菜单模板、弹出校验与生命周期
 │     ├─ preload/index.ts                 # contextBridge
 │     └─ renderer/
 │        ├─ App.tsx                       # 仅入口与 Controller/View 组合
@@ -121,6 +123,7 @@ PiDeck/
 │        ├─ message-utils.ts              # 消息 identity、快照合并和时间格式化
 │        ├─ image-cache.ts                # 通过 idb 封装的 IndexedDB 图片预览缓存
 │        ├─ pi-capabilities.ts            # Pi 资源不可用时的 slash 命令 fallback
+│        ├─ palette-command.ts            # 直接执行命令与可编辑模板分流
 │        ├─ types.ts                      # Renderer 状态与消息辅助类型
 │        ├─ styles.css                    # 当前 UI token 与布局样式
 │        ├─ vite-env.d.ts
@@ -134,6 +137,8 @@ PiDeck/
 │           ├─ pane-resize-handle.tsx     # 指针/键盘无障碍分栏手柄
 │           ├─ composer.tsx               # 输入区、建议与队列投递
 │           ├─ command-palette.tsx        # 命令面板
+│           ├─ quick-settings.tsx         # 统一快捷设置入口
+│           ├─ application-menu.tsx       # Windows 顶栏原生菜单入口
 │           ├─ dialogs.tsx                # 重命名/信任/恢复/扩展 UI 等对话框
 │           ├─ approval-card.tsx          # 工具审批卡
 │           ├─ provider-settings.tsx      # Provider 认证设置
@@ -189,7 +194,7 @@ permission-engine → contracts + @gotgenes/pi-permission-system 配置
 ui-system → React + focus-trap
 ```
 
-`packages/contracts` 同时提供 TypeScript 声明和可执行校验。公开类型指向 `src/index.ts`，PiHost 运行时加载编译后的 `dist/index.js`；完整的 `PiHostCommand` schema map 使用严格 Zod object 实现，拒绝未知字段和可强制转换的 IPC 值，不再维护第二套手写 schema 语言。workspace typecheck、桌面开发（`predev`）和生产构建（`prebuild`）按 `contracts → domain → pi-adapter → permission-engine → pi-host → i18n → ui-system` 顺序编译，避免 PiHost 或 Renderer 加载未编译的 TypeScript。
+`packages/contracts` 同时提供 TypeScript 声明和可执行校验。公开类型指向 `src/index.ts`，PiHost 运行时加载编译后的 `dist/index.js`；完整的 `PiHostCommand` schema map 使用严格 Zod object 实现，拒绝未知字段和可强制转换的 IPC 值，不再维护第二套手写 schema 语言。workspace typecheck、桌面开发（`predev`）和生产构建（`prebuild`）按 `contracts → domain → pi-adapter → permission-engine → pi-host → i18n → ui-system` 顺序编译。Vite 将 `@pideck/ui-system` 和 `@pideck/i18n` 直接解析到源码并排除依赖预打包，使共享图标/组件/文案改动可直接热更新，不再使用旧 `dist` 或浏览器预打包缓存；开发与生产环境仍由 Vite 将源码转换为 JavaScript，PiHost 则加载编译后的 workspace 包。
 
 必须遵守：
 
@@ -274,6 +279,8 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - Pi Session export/compact → 会话操作和命令面板入口；Session Tree 的 `/fork`、`/clone`、`/tree` 仍列入待支持。
 - Pi Agent steering/follow-up queue → Composer 队列面板、投递方式、图片、提升、编辑、删除和批处理模式。自动压缩期间输入进入 Pi 原生队列；手动压缩结束时没有活跃 Agent run，因此 PiHost 使用按 Session 隔离的暂存队列，压缩后启动第一条并将其余消息按序交回 Pi。两条路径共用稳定 ID 的队列操作，预检门闩继续阻止并发直接 prompt。
 - Pi Package 管理 → 命令面板中的 Pi packages 设置面板。
+- 顶栏齿轮 / `Ctrl/Cmd + ,` → 快捷设置，复用已有 Pi 设置、Provider、包管理、模型范围、信任和快捷键界面；Provider 认证使用独立大脑图标。所有设置抽屉在 macOS 与 Windows 上均从 `--titlebar-height` 下方展开。
+- 命令面板点击/回车通过 `renderer/palette-command.ts` 分流：内置命令调用已有桌面处理器，运行时标记 `source: "extension"` 的命令调用 Pi prompt 桥，Prompt/Skill 保留为可编辑模板。可选来源元数据仅为 `SessionCapabilities` 增加字段，不新增 IPC 端点。命令面板/快捷入口卸载后，后续弹层通过共享的工作区焦点上下文恢复到原入口。
 - Pi 权限系统模式 → 输入框下方的权限等级控件。
 - Pi workspace 文件列表 → Composer 的 `@file` 引用候选。`workspace.snapshot` 同时返回 git `changes`，但当前 UI 没有独立的 Files / Changes 面板，该字段暂未消费。
 
@@ -289,6 +296,8 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 ## 9. 运行时验证
 
+Windows 菜单改动需通过 Preload 桥验证 `app:popup-menu`：三组菜单和折叠入口、鼠标/键盘关闭、已有选区的复制/粘贴、缩放后定位、本地化、正式构建限制，以及未知分组/非法坐标拒绝。检查 375/560/760/1024/1440px 布局与系统窗口按钮避让，macOS 不应出现重复顶栏菜单。桌面菜单不调用 PiHost。
+
 修改 PiHost、contracts、Main、Preload 或 Provider/Session 相关能力后，至少执行：
 
 ```text
@@ -301,6 +310,7 @@ sessions.runMetadata
 sessions.changeReviews
 sessions.changeReview（不存在的 ID 返回 null）
 sessions.capabilities
+  # 检查注册的扩展命令携带 source: "extension"。
 workspace.snapshot
 ```
 

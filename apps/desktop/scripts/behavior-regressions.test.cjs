@@ -28,10 +28,80 @@ test("PiHost DTO validation rejects coercible booleans and unknown fields", () =
   assert.doesNotThrow(() => validatePiHostPayload("agent.prompt", { taskId: "task", text: "hello", images: undefined, delivery: undefined }));
 });
 
+test("application menu requests allow only fixed groups and finite bounded anchors", () => {
+  const { applicationMenuRequestSchema } = require("../../../packages/contracts/dist/index.js");
+  for (const menu of ["all", "edit", "view", "help"]) assert.equal(applicationMenuRequestSchema.parse({ menu, x: 12.5, y: 40 }).menu, menu);
+  assert.throws(() => applicationMenuRequestSchema.parse({ menu: "file", x: 0, y: 0 }));
+  for (const value of [{ menu: "quit", x: 0, y: 0 }, { menu: "edit", x: -1, y: 0 }, { menu: "edit", x: NaN, y: 0 }, { menu: "edit", x: Infinity, y: 0 }, { menu: "edit", x: "1", y: 0 }, { menu: "edit", x: 0, y: 0, command: "copy" }]) assert.throws(() => applicationMenuRequestSchema.parse(value));
+});
+
+test("title-bar menus reuse localized native roles and preserve packaged restrictions", () => {
+  const { buildApplicationMenuTemplate } = require("../dist/main/application-menu.js");
+  const { appMenuCopy } = require("../../../packages/i18n/dist/index.js");
+  let about = 0;
+  for (const language of ["zh", "en"]) {
+    const menu = buildApplicationMenuTemplate(language, true, () => about++, "win32");
+    assert.deepEqual(menu.map(({ id }) => id), ["edit", "view", "help"]);
+    assert.deepEqual(menu.map(({ label }) => label), menu.map(({ id }) => appMenuCopy[language][id]));
+    assert.deepEqual(menu[0].submenu.filter(({ role }) => role).map(({ role }) => role), ["undo", "redo", "cut", "copy", "paste", "selectAll"]);
+    assert.deepEqual(menu[1].submenu.filter(({ role }) => role).map(({ role }) => role), ["resetZoom", "zoomIn", "zoomOut", "togglefullscreen"]);
+    menu[2].submenu[0].click();
+    const macMenu = buildApplicationMenuTemplate(language, true, () => {}, "darwin");
+    assert.deepEqual(macMenu.map(({ id }) => id), ["file", "edit", "view", "help"]);
+    assert.deepEqual(macMenu[0].submenu.filter(({ role }) => role).map(({ role }) => role), ["close", "quit"]);
+  }
+  assert.equal(about, 2);
+  assert.ok(buildApplicationMenuTemplate("en", false, () => {}, "win32").find(({ id }) => id === "view").submenu.some(({ role }) => role === "toggleDevTools"));
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
+  const preload = fs.readFileSync(path.join(__dirname, "../src/preload/index.ts"), "utf8");
+  assert.match(main, /registerTrustedIpcHandler\("app:popup-menu"/);
+  assert.match(main, /process\.platform !== "win32" \|\| !hostWindow/);
+  assert.match(preload, /popupMenu:.*ipcRenderer\.invoke\("app:popup-menu", request\)/);
+});
+
+test("native menu popup scales anchors, rejects reentry, and releases on close/error", async () => {
+  const { EventEmitter } = require("node:events");
+  const { popupApplicationMenu } = require("../dist/main/application-menu.js");
+  const window = Object.assign(new EventEmitter(), { isDestroyed: () => false, getContentSize: () => [500, 300], webContents: { getZoomFactor: () => 1.5 } });
+  let popup;
+  const edit = { popup: (options) => { popup = options; } };
+  const menu = { getMenuItemById: (id) => id === "edit" ? { submenu: edit } : null, popup: edit.popup };
+  const pending = popupApplicationMenu(window, menu, { menu: "edit", x: 10.5, y: 40 });
+  assert.equal(popup.x, 16);
+  assert.equal(popup.y, 60);
+  assert.equal(popup.window, window);
+  await assert.rejects(popupApplicationMenu(window, menu, { menu: "all", x: 0, y: 0 }), /already open/);
+  popup.callback();
+  await pending;
+  assert.equal(window.listenerCount("closed"), 0);
+  const all = popupApplicationMenu(window, menu, { menu: "all", x: 10_000, y: 10_000 });
+  assert.equal(popup.x, 499);
+  assert.equal(popup.y, 299);
+  window.emit("closed");
+  await all;
+  await assert.rejects(popupApplicationMenu(window, menu, { menu: "help", x: 0, y: 0 }), /unavailable/);
+  await assert.rejects(popupApplicationMenu(window, { popup: () => { throw new Error("native failure"); } }, { menu: "all", x: 0, y: 0 }), /native failure/);
+  assert.equal(window.listenerCount("closed"), 0);
+  const retry = popupApplicationMenu(window, menu, { menu: "all", x: 0, y: 0 });
+  popup.callback();
+  await retry;
+});
+
 test("built-in slash command descriptions are localized without rewriting custom resources", () => {
   assert.equal(localizeCommandDescription("settings", "Theme, message delivery, transport, and other preferences", "zh"), "配置主题、消息投递、传输方式及其他偏好");
   assert.equal(localizeCommandDescription("llama", "Download, load, and unload llama.cpp router models", "zh"), "下载、加载或卸载 llama.cpp 路由模型");
   assert.equal(localizeCommandDescription("custom-command", "Project-owned description", "zh"), "Project-owned description");
+});
+
+test("Vite watches shared UI source instead of a stale prebundled icon catalog", async () => {
+  const configPath = path.resolve(__dirname, "../vite.config.mts");
+  const { default: config } = await import(pathToFileURL(configPath).href);
+  assert.equal(config.resolve.alias["@pideck/ui-system"], path.resolve(__dirname, "../../../packages/ui-system/src/index.tsx"));
+  assert.ok(config.optimizeDeps.exclude.includes("@pideck/ui-system"));
+  assert.ok(!config.optimizeDeps.include.includes("@pideck/ui-system"));
+  assert.equal(config.resolve.alias["@pideck/i18n"], path.resolve(__dirname, "../../../packages/i18n/src/index.ts"));
+  assert.ok(config.optimizeDeps.exclude.includes("@pideck/i18n"));
+  assert.ok(!config.optimizeDeps.include.includes("@pideck/i18n"));
 });
 
 test("Pi settings handler persists partial defaults without requiring a model", async () => {
@@ -785,7 +855,7 @@ test("inactive conversation panes suspend observers and modal overlays isolate t
   assert.match(styles, /\.app-shell, \.overlay-root \{[\s\S]*?--layer-modal: 40;/);
   assert.match(styles, /\.overlay-root \{\s*color: var\(--text\);\s*\}/);
   assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark \{/);
-  assert.match(styles, /\.overlay-root\.platform-overlay \.settings-backdrop \{[\s\S]*?top: var\(--titlebar-height\);/);
+  assert.match(styles, /\.settings-backdrop \{[\s\S]*?top: var\(--titlebar-height\);/);
   assert.match(styles, /\.titlebar \{[\s\S]*?background: var\(--canvas\);/);
 });
 

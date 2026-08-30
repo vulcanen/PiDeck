@@ -975,6 +975,7 @@ async function listSlashCommands(session: any) {
   const extensionCommands = session.extensionRunner?.getRegisteredCommands?.().map((command: any) => ({
     name: command.invocationName ?? command.name,
     description: command.description,
+    source: "extension",
   })) ?? [];
   return { builtins: jsonSafe([...builtins, ...extensionCommands]), prompts: jsonSafe(prompts), skills: jsonSafe(skills) };
 }

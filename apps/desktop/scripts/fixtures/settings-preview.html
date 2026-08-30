@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><base href="/"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>PiDeck settings interaction fixture</title></head>
+<body><div id="root"></div>
+<script type="module">
+  // Dev-only renderer fixture. No credential storage, model requests, or real mutations.
+  // Start the desktop Vite server and open /scripts/fixtures/settings-preview.html.
+  const params = new URLSearchParams(location.search);
+  localStorage.setItem("pideck.language", params.get("language") ?? "zh");
+  localStorage.setItem("pideck.theme", params.get("theme") ?? "light");
+  Object.defineProperty(navigator, "platform", { value: params.get("platform") === "windows" ? "Win32" : "MacIntel" });
+  const noop = async () => undefined;
+  const project = { id: "fixture", name: "PiDeck", cwd: "/fixture/PiDeck", taskCount: 1 };
+  const task = { id: "fixture-session", projectId: project.id, title: "Settings interaction preview", state: "idle", createdAt: "2026-08-30T00:00:00Z", updatedAt: "2026-08-30T00:00:00Z" };
+  const model = { id: "fixture-model", name: "Preview model", providerId: "fixture-provider", providerName: "Preview provider", authConfigured: true, thinkingLevels: ["off", "medium"], contextWindow: 100000, reasoning: true };
+  const { fallbackSlashCommands } = await import("/src/renderer/pi-capabilities.ts");
+  const capabilities = { model, thinkingLevel: "medium", thinkingLevels: model.thinkingLevels, slashCommands: [...fallbackSlashCommands, { name: "fixture-extension", source: "extension", description: "Test extension dialog" }], prompts: [{ name: "review-template", description: "Review with a prompt template" }], skills: [{ name: "skill:review", description: "Review skill" }] };
+  const settings = { defaultProvider: model.providerId, defaultModel: model.id, defaultThinkingLevel: "medium", transport: "auto", compactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" };
+  window.pideck = {
+    app: { setLanguage: noop, setWindowTheme: noop, setConfirmClose: noop, popupMenu: async ({ menu }) => {
+      if (params.has("menuError")) throw new Error("Native menu unavailable in fixture");
+      // Show the requested native menu ID without emulating Electron menu roles.
+      const result = document.getElementById("fixture-menu-result") ?? document.body.appendChild(Object.assign(document.createElement("output"), { id: "fixture-menu-result" }));
+      result.style.cssText = "position:fixed;bottom:0;right:0;z-index:9999";
+      result.textContent = `Native menu request: ${menu}`;
+    } },
+    runtime: { status: async () => "connected" },
+    projects: { list: async () => params.has("empty") ? [] : [project] },
+    sessions: { list: async () => [task], capabilities: async () => capabilities, messages: async () => [], runMetadata: async () => [], changeReviews: async () => ({ reviews: [], availability: "available" }), changelog: async () => "Preview changelog" },
+    workspace: { snapshot: async () => ({ files: [], changes: [] }) },
+    models: { list: async () => [model] },
+    settings: { get: async () => { if (params.has("error")) throw new Error("Fixture: PiHost unavailable. Retry loading settings."); return settings; }, update: async (value) => value },
+    permissions: { status: async () => ({ mode: "ask", source: "pi-permission-system" }) },
+    agent: { queue: async () => ({ steering: [], followUp: [], steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" }) },
+    providers: { list: async () => ["OpenAI Codex", "Amazon Bedrock", "Anthropic", "Azure OpenAI", "Google", "Mistral", "OpenRouter"].map((name, index) => ({ id: `fixture-${index}`, name, modelCount: 7 + index, authState: index === 0 ? "configured" : "missing", authMethods: ["api-key", "oauth"] })) },
+    packages: { list: async () => [] },
+    events: { subscribe: () => () => undefined },
+  };
+  await import("/src/renderer/main.tsx");
+</script></body></html>

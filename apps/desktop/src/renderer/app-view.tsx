@@ -1,5 +1,6 @@
-import { useEffect, useState, type CSSProperties } from "react";
-import { Icon } from "@pideck/ui-system";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { DialogFocusReturnContext, Icon } from "@pideck/ui-system";
+import { ApplicationMenu } from "./ui/application-menu";
 import { AppConversation } from "./app-conversation";
 import { AppOverlays } from "./app-overlays";
 import { AppSidebar } from "./app-sidebar";
@@ -11,6 +12,7 @@ const MAXIMUM_SIDEBAR_WIDTH = 420;
 const COLLAPSED_SIDEBAR_WIDTH = 64;
 
 export function AppView({ controller }: { controller: AppController }) {
+  const overlayReturnFocusRef = useRef<HTMLElement>(null);
   const [sidebarMaximumWidth, setSidebarMaximumWidth] = useState(() => Math.max(MINIMUM_SIDEBAR_WIDTH, Math.min(MAXIMUM_SIDEBAR_WIDTH, window.innerWidth - 360)));
   const [reviewDrawer, setReviewDrawer] = useState(() => window.matchMedia("(max-width: 1280px)").matches);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -51,14 +53,14 @@ export function AppView({ controller }: { controller: AppController }) {
     loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, changeReview,
     composerProps, jumpToLatest,
-    setMessageReload, showNotice, handlePermissionStatus, openProviderSettings,
+    setMessageReload, showNotice, handlePermissionStatus, openProviderSettings, openQuickSettings, quickSettingsOpen,
     patchTaskUi, updateTaskLists, restartHost,
     paletteOpen, pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen,
     commandDialog, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, previewImage,
   } = controller;
   const reviewDrawerOpen = changeReview.reviewOpen && reviewDrawer;
   const modalOverlayOpen = Boolean(
-    paletteOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen || piSettingsOpen
+    paletteOpen || quickSettingsOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen || piSettingsOpen
     || commandDialog || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || previewImage,
   );
   return <>
@@ -66,17 +68,20 @@ export function AppView({ controller }: { controller: AppController }) {
     className={`app-shell ${theme}${isMac ? " platform-macos" : " platform-overlay"}`}
     inert={modalOverlayOpen}
     aria-hidden={modalOverlayOpen || undefined}
+    onFocusCapture={(event) => { overlayReturnFocusRef.current = event.target; }}
   >
     <a className="skip-link" href="#main-content" tabIndex={reviewDrawerOpen ? -1 : undefined} aria-hidden={reviewDrawerOpen || undefined}>{t.skipToContent}</a>
     <header className="titlebar" inert={mobileSidebarOpen || reviewDrawerOpen} aria-hidden={mobileSidebarOpen || reviewDrawerOpen || undefined}>
       <div className="brand-lockup"><img className="brand-mark" src="./pideck-icon.png" alt="" aria-hidden="true" draggable={false} /><span className="brand-name">PiDeck</span><span className="brand-divider" /><span className="eyebrow">{t.workspace}</span></div>
+      {navigator.platform.startsWith("Win") && <ApplicationMenu language={language} onError={(message) => showNotice(message, "error")} />}
       <div className="window-drag" />
       <div className="titlebar-actions">
         <button className="icon-button mobile-nav-trigger" type="button" title={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-label={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-expanded={mobileSidebarOpen} aria-controls="workspace-sidebar" onClick={() => setMobileSidebarOpen((current) => !current)}><Icon name="folder" /></button>
         <button className="quiet-button" onClick={openCommandPalette}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
-        <button className="icon-button" title={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} aria-label={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} onClick={cycleTheme}><Icon name={themePreference === "system" ? "auto" : theme === "light" ? "moon" : "sun"} /></button>
         <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
-        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="settings" /></button>
+        <button className="icon-button" title={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} aria-label={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} onClick={cycleTheme}><Icon name={themePreference === "system" ? "auto" : theme === "light" ? "moon" : "sun"} /></button>
+        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="brain" /></button>
+        <button className="icon-button" title={`${t.quickSettings} (${shortcut(",")})`} aria-label={t.quickSettings} aria-haspopup="dialog" aria-expanded={quickSettingsOpen} aria-controls={quickSettingsOpen ? "quick-settings-panel" : undefined} onClick={openQuickSettings}><Icon name="settings" /></button>
       </div>
     </header>
 
@@ -201,6 +206,6 @@ export function AppView({ controller }: { controller: AppController }) {
 
     </div>
   </div>
-  <AppOverlays controller={controller} />
+  <DialogFocusReturnContext.Provider value={overlayReturnFocusRef}><AppOverlays controller={controller} /></DialogFocusReturnContext.Provider>
   </>;
 }

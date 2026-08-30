@@ -6,6 +6,14 @@ export type PermissionMode = "ask" | "allow" | "deny" | "yolo";
 export type AppLanguage = "zh" | "en";
 export type WindowTheme = "light" | "dark";
 
+// Main-only native application menu; coordinates are Renderer CSS pixels.
+export const applicationMenuRequestSchema = z.object({
+  menu: z.enum(["all", "edit", "view", "help"]),
+  x: z.number().finite().min(0).max(100_000),
+  y: z.number().finite().min(0).max(100_000),
+}).strict();
+export type ApplicationMenuRequest = z.infer<typeof applicationMenuRequestSchema>;
+
 export interface PermissionStatus {
   mode: PermissionMode;
   source: "pi-permission-system" | "pideck-fallback";
@@ -46,7 +54,7 @@ export interface SessionCapabilities {
   model?: ModelSummary;
   thinkingLevel: string;
   thinkingLevels: string[];
-  slashCommands: Array<{ name: string; description?: string; argumentHint?: string }>;
+  slashCommands: Array<{ name: string; description?: string; argumentHint?: string; source?: "extension" }>;
   prompts: Array<{ name: string; description?: string }>;
   skills: Array<{ name: string; description?: string }>;
   contextUsage?: ContextUsage;
@@ -210,6 +218,7 @@ export interface WorkspaceSnapshot {
 
 export interface PideckBridge {
   app: {
+    popupMenu(request: ApplicationMenuRequest): Promise<void>;
     setLanguage(language: AppLanguage): Promise<void>;
     setWindowTheme(theme: WindowTheme): Promise<void>;
     quit(): Promise<void>;

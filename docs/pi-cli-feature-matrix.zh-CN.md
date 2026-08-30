@@ -15,7 +15,7 @@
 | 会话命名 | 会话列表与对话标题 | 首条用户消息后：先用 `deriveSessionTitle` 生成去前缀短标题并经由 `sessions.rename`（对应 Pi `AgentSession.setSessionName()`）持久化作为重载安全的回退；随后异步调用新增的 `sessions.generateTitle` 桥（PiHost 用 `ModelRuntime.complete` 对首条消息做 3–8 词摘要），成功后将标题升级为 LLM 摘要并再次 `sessions.rename` 持久化。仅当标题仍是截断/占位名时才升级，手动改名不被覆盖；LLM 失败回退到截断标题 |
 | 会话删除 | 会话更多菜单 | `sessions.delete(taskId, cwd)`；PiHost 以规范化项目路径 + 会话 ID 标识运行时状态，不会影响其它项目导入的同 ID 会话 |
 | 会话位置与长会话 | 中央对话线程（普通文档流 + 早期消息折叠） | 不使用虚拟列表；只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后。防跳动依赖 `overflow-anchor: auto` 原生 scroll anchoring；非活动 pane 用 `visibility: hidden` 天然保留 `scrollTop` 并暂停 DOM observer；follow 仅由真实 wheel/touch 上滑事件退出，程序化滚动期间 latch 住 |
-| Provider 列表 | Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
+| Provider 列表 | 顶栏大脑图标或快捷设置 → Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
 | API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；关闭设置会通过 `AuthInteraction.signal` 中止未完成的登录，新尝试会先替换同一 Provider 的遗留认证再重新打开浏览器；OpenAI Codex 浏览器登录会预检 Pi 0.84.2–0.84.4 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
 | 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
 | 思考等级 | Composer Thinking 菜单；`/thinking [level]`；`/settings` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel(..., { persist: true })`；模型选择同样使用 `setModel(..., { persist: true })`，Pi 设置面板写入同一份用户级 SettingsManager 默认值 |
@@ -36,6 +36,14 @@
 | 浅色/深色 | 顶部主题按钮 | Renderer theme preference |
 
 ## Slash 命令状态
+
+桌面壳菜单不属于 Pi slash 命令：Windows 在“工作台”右侧提供编辑/查看/帮助，窄窗口合并为“菜单”；macOS 使用系统菜单栏。经校验的 `app:popup-menu` 桥打开现有 Electron 菜单，不增加 Pi 能力，也不重复实现原生编辑、缩放、全屏等操作。正式构建仍不显示重新加载和开发者工具。
+
+命令面板搜索同时支持带斜杠和不带斜杠的命令名称，例如 `/settings` 或 `settings`。
+
+顶栏齿轮和 `Ctrl/Cmd + ,` 打开快捷设置，统一提供 Pi 设置、Provider 认证、Pi 包管理、模型轮换范围、工作区信任和快捷键入口。缺少项目或 Session 时，相应入口禁用。macOS 与 Windows 的 Provider、Pi 设置和包管理抽屉均紧贴共享顶栏下方展开，使用紧凑头部；Composer 中的模型、思考与权限控件以及顶栏语言、主题控件仍然保留。
+
+在命令面板点击或按回车选择内置命令，会立即调用已有桌面处理逻辑，不修改 Composer 草稿与附件；需要选择参数的命令直接打开已有选择器或对话框。Prompt/Skill 标明“插入模板”，仍可编辑后再提交。`SessionCapabilities.slashCommands[].source = "extension"` 标识运行时注册的扩展命令，通过 Pi 的 `agent.prompt` 命令通道直接执行；未知内置命令会显示未支持错误，不作为模型提示发送。连续打开的弹层关闭后会恢复到原工作区入口的焦点。
 
 当前 Composer 会读取 Pi 的真实 slash command catalog，并为命令提供建议。命令的最终执行仍必须遵循 Pi CLI 语义：
 
@@ -66,7 +74,7 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 以下能力已经完成基础桌面映射：
 
 - Extension UI 的 select、confirm、input、editor、notify，以及可序列化的状态、工作文案/可见性/动画、隐藏思考标签、文本 Widget、标题与编辑器文本；TUI 组件工厂无法映射时会明确提示，不再静默失效。
-- Pi Package install/remove/update/config 管理器；入口位于命令面板中的 Pi packages。
+- Pi Package install/remove/update/config 管理器；快捷设置与命令面板均提供入口。
 当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 完成。
 
 任务基线统一 diff 审查已经接入。逐块接受/撤销及 Monaco 可编辑合并流程仍未实现；在获得安全的 Pi/桌面映射前，PiDeck 不会把这些操作声明为已支持。

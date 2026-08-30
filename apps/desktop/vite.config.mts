@@ -1,16 +1,23 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   root: ".",
   plugins: [react()],
   base: "./",
+  resolve: {
+    // Keep shared icons and localized labels in sync with an already-open window.
+    alias: {
+      "@pideck/ui-system": fileURLToPath(new URL("../../packages/ui-system/src/index.tsx", import.meta.url)),
+      "@pideck/i18n": fileURLToPath(new URL("../../packages/i18n/src/index.ts", import.meta.url)),
+    },
+  },
   optimizeDeps: {
-    // Workspace packages are rebuilt by predev. Always invalidate Vite's
-    // dependency cache so newly added i18n keys are not served from an older
-    // prebundle (which otherwise renders labels as empty strings).
+    // The domain package is still rebuilt by predev.
     force: true,
-    include: ["@pideck/domain", "@pideck/i18n", "@pideck/ui-system"],
+    include: ["@pideck/domain"],
+    exclude: ["@pideck/ui-system", "@pideck/i18n"],
   },
   build: {
     outDir: "../../dist-renderer",

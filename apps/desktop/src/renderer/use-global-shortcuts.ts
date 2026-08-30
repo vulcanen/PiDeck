@@ -5,6 +5,9 @@ interface GlobalShortcutsOptions {
   paletteOpen: boolean;
   settingsOpen: boolean;
   piSettingsOpen: boolean;
+  quickSettingsOpen: boolean;
+  packagesOpen: boolean;
+  extensionUiOpen: boolean;
   commandDialogOpen: boolean;
   renameOpen: boolean;
   resumeOpen: boolean;
@@ -20,24 +23,24 @@ interface GlobalShortcutsOptions {
   projectContextMenu: boolean;
   imageContextMenu: boolean;
   onCommandPalette: () => void;
-  onProviderSettings: () => void;
+  onQuickSettings: () => void;
   onCreateTask: () => void | Promise<unknown>;
   onCloseMenus: () => void;
 }
 
 export function useGlobalShortcuts({
-  searchInputRef, paletteOpen, settingsOpen, piSettingsOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
+  searchInputRef, paletteOpen, settingsOpen, piSettingsOpen, quickSettingsOpen, packagesOpen, extensionUiOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
   thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, projectContextMenu, imageContextMenu,
-  onCommandPalette, onProviderSettings, onCreateTask, onCloseMenus,
+  onCommandPalette, onQuickSettings, onCreateTask, onCloseMenus,
 }: GlobalShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
-      const modalOpen = paletteOpen || settingsOpen || piSettingsOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
+      const modalOpen = paletteOpen || settingsOpen || piSettingsOpen || quickSettingsOpen || packagesOpen || extensionUiOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
       if (modalOpen) return;
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); onCommandPalette(); return; }
       if (modifier && event.key.toLowerCase() === "n") { event.preventDefault(); void onCreateTask(); return; }
-      if (modifier && event.key === ",") { event.preventDefault(); onProviderSettings(); return; }
+      if (modifier && event.key === ",") { event.preventDefault(); onQuickSettings(); return; }
       const target = event.target;
       const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
       if (event.key === "/" && !typing) { event.preventDefault(); searchInputRef.current?.focus(); return; }
@@ -47,5 +50,5 @@ export function useGlobalShortcuts({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandDialogOpen, contextMenu, imageContextMenu, modelMenuOpen, onCloseMenus, onCommandPalette, onCreateTask, onProviderSettings, paletteOpen, pendingDelete, pendingProjectRemove, piSettingsOpen, previewImage, projectContextMenu, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
+  }, [commandDialogOpen, contextMenu, extensionUiOpen, imageContextMenu, modelMenuOpen, onCloseMenus, onCommandPalette, onCreateTask, onQuickSettings, packagesOpen, paletteOpen, pendingDelete, pendingProjectRemove, piSettingsOpen, previewImage, projectContextMenu, quickSettingsOpen, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
 }

@@ -200,6 +200,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .eyebrow { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .11em; text-transform: uppercase; }
 .window-drag { flex: 1; height: 100%; -webkit-app-region: drag; }
 .titlebar-actions { display: flex; align-items: center; gap: 4px; }
+.application-menu { flex: 0 0 auto; margin-left: 16px; -webkit-app-region: no-drag; }
+.application-menu-items { display: flex; gap: 2px; }
+.application-menu button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: var(--control-height); padding: 0 9px; border-radius: var(--radius-sm); color: var(--muted); background: transparent; font-size: 12px; }
+.application-menu button:hover { color: var(--text); background: var(--surface-muted); }
+.application-menu button[aria-expanded="true"] { color: var(--text); background: var(--selection-bg-subtle); font-weight: 650; }
+.application-menu .application-menu-compact { display: none; }
+@media (max-width: 1100px) {
+  .application-menu { margin-left: 8px; }
+  .application-menu-items { display: none; }
+  .application-menu .application-menu-compact { display: inline-flex; }
+}
 .quiet-button, .icon-button, .lang-button {
   display: inline-flex;
   align-items: center;
@@ -926,17 +937,29 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .package-row small { color: var(--muted); font-size: 11px; }
 
 /* Provider settings */
-.settings-backdrop { z-index: var(--layer-drawer); display: flex; justify-content: flex-end; }
-.overlay-root.platform-overlay .settings-backdrop {
-  /* Electron's native caption buttons own this strip. Keep right-side drawers
-     below it so their headers and close buttons remain visible and clickable. */
+.settings-backdrop {
+  z-index: var(--layer-drawer); display: flex; justify-content: flex-end;
+  /* Anchor all settings surfaces below the shared toolbar on every platform. */
   top: var(--titlebar-height);
 }
-.overlay-root.platform-overlay .settings-sheet { border-top: 1px solid var(--line); }
-.settings-sheet { position: relative; display: flex; width: min(520px, 100vw); height: 100%; min-width: 0; flex-direction: column; border-left: 1px solid var(--line-strong); background: var(--surface); box-shadow: var(--shadow); animation: drawer-in 280ms var(--motion) both; }
-.settings-header { display: flex; justify-content: space-between; gap: 22px; padding: 30px 28px 22px; border-bottom: 1px solid var(--line); }
-.settings-header h2 { margin: 6px 0 6px; font: 26px/1.12 var(--font-serif); letter-spacing: -.025em; }
+.settings-sheet { position: relative; display: flex; width: min(520px, 100vw); height: 100%; min-width: 0; flex-direction: column; border-top: 1px solid var(--line); border-left: 1px solid var(--line-strong); background: var(--surface); box-shadow: var(--shadow); animation: drawer-in 280ms var(--motion) both; }
+.settings-header { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 28px; border-bottom: 1px solid var(--line); }
+.settings-header h2 { margin: 3px 0 0; font: 22px/1.2 var(--font-serif); letter-spacing: -.025em; }
+.settings-header h2 + p { margin-top: 6px; }
 .settings-header p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.quick-settings-backdrop { align-items: flex-start; }
+.quick-settings-panel { width: min(360px, 100vw); max-height: calc(100dvh - var(--titlebar-height)); overflow-y: auto; border: 1px solid var(--line-strong); border-top: 0; border-radius: 0 0 var(--radius-card) var(--radius-card); background: var(--surface); box-shadow: var(--shadow-popover); animation: dialog-in 180ms var(--motion) both; }
+.quick-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--line); }
+.quick-settings-header h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.quick-settings-items { display: grid; gap: 3px; padding: 8px; }
+.quick-settings-items > button { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: var(--control-height-touch); padding: 10px; border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left; }
+.quick-settings-items > button:hover:not(:disabled) { background: var(--surface-muted); }
+.quick-settings-items > button > svg { flex: 0 0 auto; color: var(--muted); }
+.quick-settings-items > button > svg:last-child { transform: rotate(-90deg); }
+.quick-settings-items > button > span { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.quick-settings-items strong { font-size: 13px; font-weight: 600; }
+.quick-settings-items small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.quick-settings-items > button:disabled { opacity: .5; cursor: not-allowed; }
 .locality-note, .auth-notice, .auth-error { margin: 14px 28px 0; padding: 10px 11px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .locality-note { display: flex; align-items: center; gap: 8px; border: 1px solid color-mix(in srgb, var(--green) 30%, var(--line)); background: color-mix(in srgb, var(--green) 8%, transparent); color: var(--muted); }
 .locality-note .status-dot { color: var(--green); }
@@ -1201,6 +1224,17 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 }
 
 @media (max-width: 560px) {
+  .app-shell:has(.application-menu), body:has(.application-menu) .overlay-root.platform-overlay { --titlebar-height: 96px; }
+  .app-shell.platform-overlay:has(.application-menu) .titlebar { flex-wrap: wrap; padding: 0 10px; }
+  .app-shell:has(.application-menu) .titlebar > .brand-lockup { flex: 1; height: 48px; -webkit-app-region: drag; }
+  .app-shell:has(.application-menu) .application-menu { margin-right: 130px; }
+  .app-shell:has(.application-menu) .application-menu button { min-height: var(--control-height-touch); }
+  .app-shell:has(.application-menu) .window-drag { display: none; }
+  .app-shell:has(.application-menu) .titlebar-actions { flex-basis: 100%; height: 48px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .titlebar-actions { gap: 1px; }
+  .titlebar-actions .icon-button { width: var(--control-height-touch); min-height: var(--control-height-touch); }
+  .titlebar-actions .lang-button { min-width: var(--control-height-touch); min-height: var(--control-height-touch); }
+  .brand-lockup { flex-shrink: 1; overflow: hidden; }
   .workspace-grid { grid-template-columns: minmax(0, 1fr); }
   .main-column { grid-column: 1; }
   .sidebar-resize-handle { display: none; }

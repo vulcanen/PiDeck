@@ -16,6 +16,7 @@ import { useNotice } from "./use-notice";
 import { usePreferences } from "./use-preferences";
 import { useStreamDeltas } from "./use-stream-deltas";
 import { loadQueueForCurrentTask } from "./queue-load";
+import { activatePaletteCommand, type PaletteCommand } from "./palette-command";
 
 export function useAppController() {
 
@@ -52,6 +53,7 @@ export function useAppController() {
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [piSettingsOpen, setPiSettingsOpen] = useState(false);
   const [providerFocus, setProviderFocus] = useState<string | null>(null);
@@ -184,6 +186,7 @@ export function useAppController() {
   }
 
   function openProviderSettings(providerId?: string) {
+    setQuickSettingsOpen(false);
     setPaletteOpen(false);
     setPreviewImage(null);
     setProviderFocus(providerId ?? null);
@@ -191,10 +194,16 @@ export function useAppController() {
   }
 
   function openCommandPalette() {
+    setQuickSettingsOpen(false);
     setSettingsOpen(false);
     setProviderFocus(null);
     setPreviewImage(null);
     setPaletteOpen(true);
+  }
+
+  function openQuickSettings() {
+    setPaletteOpen(false);
+    setQuickSettingsOpen(true);
   }
 
   function handlePermissionStatus(status: PermissionStatus) {
@@ -502,7 +511,7 @@ export function useAppController() {
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
     const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const slashItems = [
-      ...visibleSlashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...visibleSlashCommands.map((item) => ({ ...item, description: item.source === "extension" ? item.description : localizeCommandDescription(item.name, item.description, language) })),
       ...prompts.map((item) => ({ name: item.name, description: item.description ?? "" })),
       ...skills.map((item) => ({ name: item.name, description: item.description ?? "" })),
     ];
@@ -514,7 +523,7 @@ export function useAppController() {
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
     const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const commands = [
-      ...visibleSlashCommands.map((item) => ({ ...item, description: localizeCommandDescription(item.name, item.description, language) })),
+      ...visibleSlashCommands.map((item) => ({ ...item, description: item.source === "extension" ? item.description : localizeCommandDescription(item.name, item.description, language) })),
       ...prompts.map((item) => ({ name: item.name, description: item.description ?? "", source: "prompt" })),
       ...skills.map((item) => ({ name: item.name, description: item.description ?? "", source: "skill" })),
     ];
@@ -579,6 +588,9 @@ export function useAppController() {
     paletteOpen,
     settingsOpen,
     piSettingsOpen,
+    quickSettingsOpen,
+    packagesOpen,
+    extensionUiOpen: Boolean(extensionUiRequest),
     commandDialogOpen: Boolean(commandDialog),
     renameOpen,
     resumeOpen,
@@ -594,7 +606,7 @@ export function useAppController() {
     projectContextMenu: Boolean(projectContextMenu),
     imageContextMenu: Boolean(imageContextMenu),
     onCommandPalette: openCommandPalette,
-    onProviderSettings: () => openProviderSettings(),
+    onQuickSettings: openQuickSettings,
     onCreateTask: createTask,
     onCloseMenus: () => { setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); },
   });
@@ -691,7 +703,7 @@ export function useAppController() {
   function showHotkeys() {
     showCommandResult(t.hotkeysTitle, [
       `${shortcut("K")} — ${t.command}`,
-      `${shortcut(",")} — ${t.providerSettings}`,
+      `${shortcut(",")} — ${t.quickSettings}`,
       `${shortcut("N")} — ${t.newTask}`,
       `Esc — ${t.cancel}`,
       `Enter — ${t.send}`,
@@ -807,6 +819,27 @@ export function useAppController() {
     const knownUiCommands = new Set(["fork", "clone", "tree"]);
     if (knownUiCommands.has(command)) { showNotice(t.pendingPiCommands); return true; }
     return false;
+  }
+
+  async function selectPaletteCommand(command: PaletteCommand) {
+    setPaletteOpen(false);
+    setQuickSettingsOpen(false);
+    try {
+      await activatePaletteCommand(command, {
+        insertTemplate: (text) => {
+          if (queueEdit) { showNotice(t.finishQueueEditFirst); return; }
+          updateComposer(`${text}${composer}`);
+          requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-editor-input")?.focus());
+        },
+        executeBuiltin: handleBuiltinCommand,
+        executeExtension: async (text) => {
+          if (!activeTask) { showNotice(t.noSessions); return; }
+          await window.pideck.agent.prompt(activeTask.id, text, projectCwd, [], queueDelivery);
+          setMessageReload((current) => current + 1);
+        },
+        unsupported: () => showNotice(t.unsupportedDesktopCommand, "error"),
+      });
+    } catch (error) { showNotice(error instanceof Error ? error.message : String(error), "error"); }
   }
 
   function beginQueueEdit(message: AgentQueuedMessage, delivery: QueueDelivery) {
@@ -1204,7 +1237,8 @@ export function useAppController() {
     loadInitialData, restartHost, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities, changeReview,
     composerProps, jumpToLatest, sendPrompt, abortActive,
-    paletteOpen, paletteCommands, composer, updateComposer, compactSession, exportSession,
+    paletteOpen, paletteCommands, composer, updateComposer, compactSession, exportSession, selectPaletteCommand,
+    quickSettingsOpen, setQuickSettingsOpen, openQuickSettings,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,
     importSession, renameSession, resolveTrust, saveScopedModels,
     notices, dismissNotice, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,

@@ -144,8 +144,8 @@ await new Promise((resolve, reject) => {
     }
     if (message?.id === "session-capabilities") {
       const commands = Array.isArray(message.result?.slashCommands) ? message.result.slashCommands : [];
-      if (!message.ok || !commands.some((command) => command?.name === "permission-system")) {
-        finish(new Error(`Permission Extension did not load: ${JSON.stringify(message)}`));
+      if (!message.ok || !commands.some((command) => command?.name === "permission-system" && command.source === "extension")) {
+        finish(new Error(`Permission Extension did not load with its command source metadata: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "agent-queue", command: "agent.queue", payload: { taskId, cwd: root } });

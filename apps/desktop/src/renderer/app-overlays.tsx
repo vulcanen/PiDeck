@@ -1,5 +1,6 @@
 import { CommandPalette, CommandPaletteBoundary, CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, PiSettings, ProjectRemoveDialog, ProviderSettings, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
 import { Icon } from "@pideck/ui-system";
+import { QuickSettings } from "./ui";
 import type { AppController } from "./use-app-controller";
 
 // All floating layers (dialogs, palette, toast, context menus) render
@@ -8,7 +9,8 @@ import type { AppController } from "./use-app-controller";
 export function AppOverlays({ controller }: { controller: AppController }) {
   const {
     language, theme, t, shortcut, projectCwd, tasks, activeTask, activeProject, isMac,
-    paletteOpen, setPaletteOpen, paletteCommands, composer, updateComposer, createTask, openProviderSettings, setPackagesOpen, compactSession, exportSession,
+    paletteOpen, setPaletteOpen, paletteCommands, selectPaletteCommand, createTask, openProviderSettings, setPackagesOpen, compactSession, exportSession,
+    quickSettingsOpen, setQuickSettingsOpen, openQuickSettings,
     notices, contextMenu, setContextMenu, projectContextMenu, setProjectContextMenu,
     pendingDelete, setPendingDelete, deletingTaskId, deleteTask,
     pendingProjectRemove, setPendingProjectRemove, removingProjectCwd, removeProject,
@@ -20,7 +22,8 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     previewImage, setPreviewImage, imageContextMenu, setImageContextMenu, openImageContextMenu,
   } = controller;
   return <div className={`overlay-root ${theme}${isMac ? " platform-macos" : " platform-overlay"}`}>
-    {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => { updateComposer(`${composer}${composer && !composer.endsWith(" ") ? " " : ""}/${command.name} `); setPaletteOpen(false); }} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onSettings={() => { setPaletteOpen(false); openProviderSettings(); }} onPackages={() => { setPaletteOpen(false); setPackagesOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
+    {paletteOpen && <CommandPaletteBoundary language={language} onClose={() => setPaletteOpen(false)}><CommandPalette language={language} commands={paletteCommands} shortcut={shortcut} onCommand={(command) => void selectPaletteCommand(command)} onClose={() => setPaletteOpen(false)} onNewTask={() => { setPaletteOpen(false); void createTask(); }} onSettings={openQuickSettings} onProviders={() => openProviderSettings()} onPackages={() => { setPaletteOpen(false); setPackagesOpen(true); }} onCompact={activeTask ? () => { setPaletteOpen(false); void compactSession(); } : undefined} onExport={activeTask ? (format) => { setPaletteOpen(false); void exportSession(format); } : undefined} /></CommandPaletteBoundary>}
+    {quickSettingsOpen && <QuickSettings language={language} hasProject={Boolean(projectCwd)} hasSession={Boolean(activeTask)} onCommand={(command) => void selectPaletteCommand(command)} onProviders={() => openProviderSettings()} onPackages={() => { setQuickSettingsOpen(false); setPackagesOpen(true); }} onClose={() => setQuickSettingsOpen(false)} />}
     {notices.length > 0 && <div className="toast-stack">
       {notices.map((item) => <div key={item.id} className={`toast ${item.kind === "error" ? "toast-error" : ""} ${item.closing ? "closing" : ""}`} role={item.kind === "error" ? "alert" : "status"} aria-live="polite"><span className="toast-message">{item.message}</span>{item.kind === "error" && <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>}</div>)}
     </div>}

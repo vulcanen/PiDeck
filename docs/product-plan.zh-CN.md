@@ -93,8 +93,10 @@ packages/
 8. 通过 `@file` 引用工作区文件。
 9. 压缩上下文并导出 JSONL/HTML，导入 Pi JSONL 会话、重命名和查看会话统计。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
+    命令面板点击/回车直接执行已映射命令，模板明确标注并保留编辑流程。顶栏齿轮和 `Ctrl/Cmd + ,` 统一提供 Pi 设置、Provider 认证、Pi 包管理、模型范围、工作区信任和快捷键入口；Provider 认证使用独立大脑图标，设置抽屉从共享顶栏下方展开，头部紧凑，连续切换弹层后可恢复焦点。
 11. 使用 Provider API Key/OAuth 本地认证；OpenAI Codex 浏览器登录默认使用 Pi 的本地回调，手动输入回调地址仅作为兜底，成功后自动聚焦 PiDeck。PiHost 网络请求依次遵循显式代理环境变量、Pi 全局 `httpProxy` 和跨平台系统代理。
 12. 切换中文/英文和浅色/深色主题。
+    Windows 在“工作台”右侧显示原生编辑/查看/帮助菜单，窄窗口合并为“菜单”；macOS 保留系统菜单栏。复用现有原生动作，支持编辑选区保留、键盘访问与中英文文案。
 13. 使用 Steering / Follow-up 队列（包括运行中 prompt 自动压缩期间提交消息时进入 Pi 原生队列）、批处理模式和队列消息面板。
 14. 对长会话使用"普通文档流 + 早期消息折叠"（只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后），并按 Session 缓存消息 pane、滚动位置和 follow 状态。
 15. 使用 `/copy`、`/share`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models` 的桌面映射；`/share` 依赖本机 `gh` CLI。

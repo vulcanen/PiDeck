@@ -1,10 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppLanguage, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PiSettingsUpdate, PromptImage, QueueDelivery, QueueMode, WindowTheme } from "@pideck/contracts";
+import type { AppLanguage, ApplicationMenuRequest, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PiSettingsUpdate, PromptImage, QueueDelivery, QueueMode, WindowTheme } from "@pideck/contracts";
 
 const confirmCloseListeners = new Map<(enabled: boolean) => void, (event: Electron.IpcRendererEvent, enabled: boolean) => void>();
 
 const bridge: PideckBridge = {
   app: {
+    popupMenu: (request: ApplicationMenuRequest) => ipcRenderer.invoke("app:popup-menu", request),
     setLanguage: (language: AppLanguage) => ipcRenderer.invoke("app:set-language", language),
     setWindowTheme: (theme: WindowTheme) => ipcRenderer.invoke("app:set-window-theme", theme),
     quit: () => ipcRenderer.invoke("app:quit"),

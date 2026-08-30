@@ -15,7 +15,7 @@
 | Session naming | Session list and conversation title | After the first user message: first `deriveSessionTitle` produces a prefix-stripped short title persisted via `sessions.rename` (Pi `AgentSession.setSessionName()`) as the reload-safe fallback; then the `sessions.generateTitle` bridge (PiHost summarizes the first message into 3–8 words via `ModelRuntime.complete`) asynchronously upgrades the title and persists again via `sessions.rename`. Upgrade happens only while the title is still a truncated/placeholder name; manual renames are never overwritten; LLM failure falls back to the truncated title |
 | Session deletion | Session more menu | `sessions.delete(taskId, cwd)`; PiHost keys runtime state by normalized project path plus session ID, so same-ID imported sessions in other projects are untouched |
 | Session position and long sessions | Central conversation thread (plain document flow + earlier-message folding) | No virtual list; only the most recent 200 messages stay mounted, older ones fold behind a "show earlier" button. Anti-jump relies on native scroll anchoring via `overflow-anchor: auto`; inactive panes keep `scrollTop` naturally with `visibility: hidden` and suspend their DOM observers; follow exits only on real wheel/touch upward gestures and is latched during programmatic scrolling |
-| Provider list | Provider settings (search, auth-status filter) | `ModelRuntime.getProviders()`, `listCredentials()` |
+| Provider list | Header brain icon or Quick settings → Provider settings (search, auth-status filter) | `ModelRuntime.getProviders()`, `listCredentials()` |
 | API Key / OAuth | Provider settings (local credentials, removal confirmation) | `ModelRuntime.login()`, `ModelRuntime.logout()`, Pi auth callback; closing settings aborts an unfinished login through `AuthInteraction.signal`, and a new attempt supersedes stale same-Provider auth before reopening the browser; OpenAI Codex browser login preflights Pi 0.84.2–0.84.4's fixed loopback port, keeps manual callback entry as an explicit fallback, and refocuses the desktop window after success; PiHost initializes Pi's proxy-aware HTTP dispatcher with explicit environment → Pi `httpProxy` → Electron system-proxy precedence before token exchange |
 | Model list | Composer model selector | `ModelRuntime.getModels()` |
 | Thinking level | Composer Thinking menu; `/thinking [level]`; `/settings` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel(..., { persist: true })`; model selection uses `setModel(..., { persist: true })`, and the Pi settings sheet writes the same user-wide SettingsManager defaults |
@@ -37,6 +37,14 @@
 | Light/dark theme | Theme button in the header | Renderer theme preference |
 
 ## Slash Command Status
+
+Desktop shell menus are separate from Pi slash commands: Windows exposes Edit/View/Help after Workspace, with a compact Menu button on narrow windows; macOS uses the system menu bar. The validated `app:popup-menu` bridge opens existing Electron menus without adding Pi capabilities or duplicating native edit/zoom/fullscreen actions. Packaged builds still omit reload and developer tools.
+
+The command palette accepts searches with or without a leading slash (for example, `/settings` or `settings`).
+
+The header gear and `Ctrl/Cmd + ,` open Quick settings: Pi settings, Provider authentication, Pi packages, scoped models, workspace trust, and keyboard shortcuts. Project/session-specific entries are disabled without the corresponding scope. Provider, Pi settings, and package drawers start directly below the shared title bar on macOS and Windows, with compact headers. Existing Composer model/thinking/permission controls and header language/theme controls remain available.
+
+Selecting a built-in command in the command palette (click or Enter) executes its existing desktop handler immediately without modifying the Composer draft or attachments. Commands requiring choices open their existing selector/dialog. Prompt/Skill resources are labeled "Insert template" and remain editable before submission. `SessionCapabilities.slashCommands[].source = "extension"` identifies runtime-registered Extension commands, which go directly to Pi's `agent.prompt` command path; unknown built-ins report an unsupported error rather than being sent as model prompts. Chained dialogs restore focus to the original workspace trigger.
 
 The Composer reads Pi's real slash command catalog and suggests commands. Final execution must still follow Pi CLI semantics:
 
@@ -67,7 +75,7 @@ Approval events currently provide only the tool name and arguments, with no sepa
 The following capabilities have a basic desktop mapping:
 
 - Extension UI select, confirm, input, editor, and notify requests, plus serializable status, working message/visibility/indicator, hidden-thinking label, text Widget, title, and editor-text presentation. TUI component factories emit an explicit compatibility notice instead of silently doing nothing.
-- Pi Package install/remove/update/config manager; entry point in the Pi packages panel of the command palette.
+- Pi Package install/remove/update/config manager; entry points in Quick settings and the command palette.
 
 Remaining boundary: Extension TUI-only `custom`, Footer/Header, component Widget, terminal-input, live synchronous editor-component, autocomplete, and theme component APIs cannot pass component instances across PiHost and the Renderer. PiDeck reports this boundary explicitly and does not fake equivalence. PiDeck does not embed a standalone Pi CLI panel; commands always use the corresponding Pi Agent/Session API.
 
