@@ -879,6 +879,16 @@ test("review split compression keeps the queue delivery control on one line", ()
   assert.match(styles, /\.change-review-hunk-actions button:hover:not\(:disabled\) \{[^}]*box-shadow:/);
 });
 
+test("model menu hides its scrollbar without disabling overflow scrolling", () => {
+  const styles = rendererSource("styles.css");
+
+  assert.match(styles, /\.inline-menu, \.suggestion-popover \{[^}]*overflow:\s*auto/);
+  assert.match(styles, /\.inline-menu \{[^}]*max-height:\s*min\(360px, 52vh\)/);
+  assert.match(styles, /\.model-menu \{[^}]*scrollbar-width:\s*none/);
+  assert.match(styles, /\.model-menu::-webkit-scrollbar \{[^}]*display:\s*none/);
+  assert.doesNotMatch(styles, /\.model-menu\s*\{[^}]*overflow(?:-[xy])?:\s*(?:hidden|clip)/);
+});
+
 test("renderer controls share theme tokens across surfaces and modes", () => {
   const styles = rendererSource("styles.css");
 
