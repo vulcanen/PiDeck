@@ -24,6 +24,80 @@ const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/se
 const { createTrustAwareSettingsManager, readProjectTrustStatus } = require("../../../packages/pi-host/dist/project-trust.js");
 const { buildChangeFileTree, parseUnifiedPatch, reviewTreeKeyboardAction, sideBySideRows } = require("../dist/renderer/change-review-model.js");
 const { ComposerHistory } = require("../dist/renderer/composer-history.js");
+const { commandModel, exportArguments } = require("../dist/renderer/pi-command-arguments.js");
+const { ansiColorToHex, createExtensionTheme } = require("../../../packages/pi-host/dist/extension-theme.js");
+const { parseExtensionTheme, extensionThemeStyle } = require("../dist/renderer/extension-theme.js");
+
+test("slash arguments preserve provider/model IDs and export paths including spaces", () => {
+  const models = [{ providerId: "a", id: "org/model" }, { providerId: "b", id: "org/model" }];
+  assert.equal(commandModel(models, "a/org/model"), models[0]);
+  assert.equal(commandModel(models, "org/model"), undefined);
+  assert.equal(commandModel(models, "missing/model"), undefined);
+  assert.deepEqual(exportArguments('"reports/my session.html"'), { format: "html", outputPath: "reports/my session.html" });
+  assert.deepEqual(exportArguments("jsonl"), { format: "jsonl" });
+  assert.deepEqual(exportArguments("reports/session.jsonl"), { format: "jsonl", outputPath: "reports/session.jsonl" });
+  assert.deepEqual(exportArguments(""), { format: "html" });
+});
+
+test("extension editor mirror is scoped, live, supports paste, and is disposed", () => {
+  const engine = new PermissionEngine({ emitApproval() {}, emitEvent() {} });
+  const a = engine.createUi("same-id", "project-a");
+  const b = engine.createUi("same-id", "project-b");
+  engine.syncEditorText("project-a", "typed draft");
+  assert.equal(a.getEditorText(), "typed draft");
+  assert.equal(b.getEditorText(), "");
+  a.pasteToEditor(" + pasted");
+  assert.equal(a.getEditorText(), "typed draft + pasted");
+  a.setEditorText("replaced");
+  assert.equal(a.getEditorText(), "replaced");
+  engine.dispose("project-a");
+  assert.equal(engine.createUi("same-id", "project-a").getEditorText(), "");
+});
+
+test("Pi theme adaptation keeps objects in Host and sends only validated color tokens", () => {
+  const theme = name => ({ name, getFgAnsi: () => "\u001b[38;2;16;32;48m", getBgAnsi: () => "\u001b[48;5;255m" });
+  const events = [];
+  const api = { getThemeByName: name => ["dark", "light"].includes(name) ? theme(name) : undefined, getAvailableThemesWithPaths: () => [{ name: "light" }, { name: "dark" }] };
+  const a = createExtensionTheme(api, {}, value => events.push(value));
+  const b = createExtensionTheme(api, {}, () => {});
+  const copied = { ...a };
+  assert.equal(copied.setTheme("light").success, true);
+  assert.equal(copied.theme.name, "light");
+  assert.equal(b.theme.name, "dark");
+  assert.equal(copied.setTheme("missing").success, false);
+  assert.equal(events[0].colors.accent, "#102030");
+  assert.equal(ansiColorToHex("\u001b[38;5;196m"), "#ff0000");
+  assert.equal(ansiColorToHex("\u001b[38;2;999;0;0m"), undefined);
+  const parsed = parseExtensionTheme({ appearance: "light", colors: { text: "url(file:///secret)", accent: "#123456", evil: "#ffffff" } });
+  assert.deepEqual(extensionThemeStyle(parsed), { "--accent": "#123456" });
+});
+
+test("advanced Pi settings preserve nested unknowns and proxy credentials", async () => {
+  let stored = JSON.stringify({ compaction: { enabled: false, keepRecentTokens: 50 }, retry: { provider: { maxRetries: 7 } }, httpProxy: "http://user:password@localhost:8888", anotherSetting: true });
+  let current = JSON.parse(stored);
+  const manager = {
+    getDefaultProvider: () => undefined, getDefaultModel: () => undefined, getDefaultThinkingLevel: () => "off", getTransport: () => "auto",
+    getCompactionSettings: () => current.compaction, getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 2000, ...current.retry }),
+    getSteeringMode: () => "all", getFollowUpMode: () => "all", getGlobalSettings: () => current, getDefaultTools: () => current.defaultTools,
+    flush: async () => {}, reload: async () => { current = JSON.parse(stored); },
+  };
+  const storage = { withLock: (_scope, mutate) => { stored = mutate(stored); } };
+  const result = await updatePiSettings(manager, {}, { compactionReserveTokens: 8192, retryMaxRetries: 5, defaultTools: [] }, storage);
+  assert.equal(current.compaction.enabled, false);
+  assert.equal(current.compaction.keepRecentTokens, 50);
+  assert.equal(current.retry.provider.maxRetries, 7);
+  assert.equal(current.retry.maxRetries, 5);
+  assert.equal(current.anotherSetting, true);
+  assert.equal(current.httpProxy, "http://user:password@localhost:8888");
+  assert.equal(result.httpProxyHasCredentials, true);
+  assert.equal(result.httpProxy.includes("password"), false);
+  assert.deepEqual(current.defaultTools, []);
+  await updatePiSettings(manager, {}, { defaultTools: null, httpProxy: "" }, storage);
+  assert.equal(current.defaultTools, undefined);
+  assert.equal(current.httpProxy, undefined);
+  await assert.rejects(updatePiSettings(manager, {}, { retryMaxRetries: -1 }, storage), /retryMaxRetries/);
+  await assert.rejects(updatePiSettings(manager, {}, { httpProxy: "file:///tmp/a" }, storage), /HTTP/);
+});
 
 test("PiHost DTO validation rejects coercible booleans and unknown fields", () => {
   assert.throws(() => validatePiHostPayload("settings.update", { compactionEnabled: "false" }), /compactionEnabled must be a boolean/);
@@ -990,7 +1064,7 @@ test("inactive conversation panes suspend observers and modal overlays isolate t
   assert.match(shortcuts, /settingsOpen: boolean;\s*piSettingsOpen: boolean;/);
   assert.match(shortcuts, /settingsOpen \|\| piSettingsOpen/);
   assert.match(view, /backgroundInert=\{mobileSidebarOpen\}/);
-  assert.match(overlays, /className=\{`overlay-root \$\{theme\}\$\{isMac \? " platform-macos" : " platform-overlay"\}`\}/);
+  assert.match(overlays, /className=\{`overlay-root \$\{controller\.activeTaskUi\?\.extensionTheme\?\.appearance \?\? theme\}\$\{isMac \? " platform-macos" : " platform-overlay"\}`\}/);
   assert.match(styles, /\.app-shell, \.overlay-root \{[\s\S]*?--layer-modal: 40;/);
   assert.match(styles, /\.overlay-root \{\s*color: var\(--text\);\s*\}/);
   assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark \{/);

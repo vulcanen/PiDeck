@@ -267,7 +267,7 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
       // signaled by agent_settled, not by the RPC response, so a fixed timeout
       // would only ever misreport a long-but-healthy run as failed. Leave it
       // unbounded; a crashed PiHost still rejects via the exit handler.
-      : command === "agent.prompt" || command === "input.externalEdit"
+      : command === "agent.prompt" || command === "input.externalEdit" || command === "sessions.compact" || command === "extension.shortcut.invoke"
         ? 0
         : command.startsWith("packages.")
           ? 10 * 60_000
@@ -391,7 +391,17 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("sessions:capabilities", (_event, taskId?: string, cwd?: string) => requestHost("sessions.capabilities", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:compact", (_event, taskId: string, instructions?: string, cwd?: string) => requestHost("sessions.compact", { taskId, instructions, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:reload", (_event, taskId: string, cwd?: string) => requestHost("sessions.reload", { taskId, cwd: requireKnownProjectCwd(cwd) }));
-  registerTrustedIpcHandler("sessions:export", (_event, taskId: string, format: "jsonl" | "html", cwd?: string) => requestHost("sessions.export", { taskId, format, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:export", async (_event, taskId: string, format: "jsonl" | "html", cwd?: string, outputPath?: string) => {
+    const projectCwd = requireKnownProjectCwd(cwd);
+    if (outputPath !== undefined) {
+      if (typeof outputPath !== "string" || !outputPath.trim() || outputPath.length > 4096 || /[\0\r\n]/.test(outputPath)) throw new Error("Invalid export path");
+      const requested = outputPath.startsWith("~/") ? path.join(app.getPath("home"), outputPath.slice(2)) : path.resolve(projectCwd, outputPath);
+      const chosen = await dialog.showSaveDialog({ defaultPath: requested, filters: [{ name: format.toUpperCase(), extensions: [format] }], properties: ["showOverwriteConfirmation", "createDirectory"] });
+      if (chosen.canceled || !chosen.filePath) return null;
+      outputPath = chosen.filePath;
+    }
+    return requestHost("sessions.export", { taskId, format, cwd: projectCwd, outputPath });
+  });
   registerTrustedIpcHandler("sessions:import", async (_event, taskId?: string, cwd?: string) => {
     const trustedCwd = requireKnownProjectCwd(cwd);
     if (!hostWindow) return null;
@@ -412,6 +422,8 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("models:refresh", () => requestHost("models.refresh"));
   registerTrustedIpcHandler("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("input:keybindings", (_event, cwd?: string) => requestHost("input.keybindings", { cwd: optionalKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("extensions:sync-editor", (_event, taskId: string, text: string, cwd?: string) => requestHost("extension.editor.sync", { taskId, text, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("extensions:invoke-shortcut", (_event, taskId: string, key: string, text: string, cwd?: string) => requestHost("extension.shortcut.invoke", { taskId, key, text, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("input:external-edit", (_event, content: string, cwd?: string) => requestHost("input.externalEdit", { content, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("providers:list", () => requestHost("providers.list"));
   registerTrustedIpcHandler("providers:login", async (_event, providerId: string, method: "api-key" | "oauth", secret?: string, authOperationId?: string) => {

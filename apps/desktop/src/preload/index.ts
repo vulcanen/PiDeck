@@ -44,7 +44,7 @@ const bridge: PideckBridge = {
     capabilities: (taskId?: string, cwd?: string) => ipcRenderer.invoke("sessions:capabilities", taskId, cwd),
     compact: (taskId: string, instructions?: string, cwd?: string) => ipcRenderer.invoke("sessions:compact", taskId, instructions, cwd),
     reload: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:reload", taskId, cwd),
-    export: (taskId: string, format: "jsonl" | "html", cwd?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd),
+    export: (taskId: string, format: "jsonl" | "html", cwd?: string, outputPath?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd, outputPath),
     import: (taskId: string | undefined, cwd?: string) => ipcRenderer.invoke("sessions:import", taskId, cwd),
     rename: (taskId: string, name: string, cwd?: string) => ipcRenderer.invoke("sessions:rename", taskId, name, cwd),
     generateTitle: (taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => ipcRenderer.invoke("sessions:generateTitle", taskId, message, cwd, model),
@@ -93,6 +93,8 @@ const bridge: PideckBridge = {
     chooseExternalEditor: () => ipcRenderer.invoke("settings:choose-external-editor"),
   },
   extensions: {
+    syncEditor: (taskId: string, text: string, cwd?: string) => ipcRenderer.invoke("extensions:sync-editor", taskId, text, cwd),
+    invokeShortcut: (taskId: string, key: string, text: string, cwd?: string) => ipcRenderer.invoke("extensions:invoke-shortcut", taskId, key, text, cwd),
     resolveUi: (requestId: string, value: string | boolean | undefined) => ipcRenderer.invoke("extension-ui:resolve", requestId, value),
   },
   packages: {

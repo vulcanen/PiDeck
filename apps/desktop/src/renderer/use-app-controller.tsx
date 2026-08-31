@@ -12,6 +12,8 @@ import { useChangeReview } from "./use-change-review";
 import { ComposerHistory } from "./composer-history";
 import { useConversationScroll } from "./use-conversation-scroll";
 import { useGlobalShortcuts } from "./use-global-shortcuts";
+import { useExtensionEditor } from "./use-extension-editor";
+import { commandModel, exportArguments } from "./pi-command-arguments";
 import { useSentImagesCache } from "./use-sent-images-cache";
 import { useNotice } from "./use-notice";
 import { usePreferences } from "./use-preferences";
@@ -674,6 +676,9 @@ export function useAppController() {
     onCloseMenus: () => { setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); },
   });
 
+  useExtensionEditor({ taskId: activeTaskId ?? undefined, cwd: projectCwd, text: composer,
+    shortcuts: capabilities?.extensionShortcuts, enabled: runtimeStatus === "connected" && !queueEdit, onError: showNotice });
+
   useEffect(() => {
     const close = () => { setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); };
     window.addEventListener("click", close);
@@ -889,7 +894,20 @@ export function useAppController() {
     const argument = match[2]?.trim() ?? "";
     let action: (() => unknown | Promise<unknown>) | null = null;
     if (command === "login" || command === "logout") action = () => openProviderSettings(argument || undefined);
-    else if (command === "model") action = () => { setModelMenuOpen(true); setThinkingMenuOpen(false); };
+    else if (command === "model") action = async () => {
+      if (!argument) { setModelMenuOpen(true); setThinkingMenuOpen(false); return; }
+      let model = commandModel(models, argument);
+      if (!model) {
+        // Extensions may register providers after the startup catalog request.
+        try {
+          const latestModels = await window.pideck.models.list();
+          setModels(latestModels);
+          model = commandModel(latestModels, argument);
+        } catch (error) { showNotice(error instanceof Error ? error.message : String(error), "error"); return; }
+      }
+      if (!model) { showNotice(t.modelArgumentNotFound(argument), "error"); return; }
+      await chooseModel(model);
+    };
     else if (command === "thinking") action = async () => {
       if (!argument) { setThinkingMenuOpen(true); setModelMenuOpen(false); return; }
       const requestedLevel = thinkingLevels.find((level) => level.toLowerCase() === argument.toLowerCase());
@@ -897,7 +915,7 @@ export function useAppController() {
       await chooseThinking(requestedLevel);
     };
     else if (command === "compact") action = () => compactSession(argument || undefined);
-    else if (command === "export") action = () => exportSession(argument.toLowerCase() === "jsonl" ? "jsonl" : "html");
+    else if (command === "export") action = () => { const options = exportArguments(argument); return exportSession(options.format, options.outputPath); };
     else if (command === "new") action = () => createTask();
     else if (command === "reload") action = async () => {
       if (!activeTask) { showNotice(t.noSessions); return; }
@@ -1110,7 +1128,12 @@ export function useAppController() {
 
   async function abortActive() {
     if (!activeTask) return;
-    try { await window.pideck.agent.abort(activeTask.id, activeProject?.cwd); discardStreamDeltas(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "", retryStatus: undefined }); }
+    try {
+      await window.pideck.agent.abort(activeTask.id, activeProject?.cwd);
+      discardStreamDeltas(activeTask.id);
+      patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "", retryStatus: undefined });
+      updateTaskLists((current) => current.map((task) => task.id === activeTask.id ? { ...task, state: "idle" } : task));
+    }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -1326,13 +1349,18 @@ export function useAppController() {
       const next = await window.pideck.sessions.messages(activeTask.id, projectCwd);
       setMessagesByTask((current) => ({ ...current, [activeTask.id]: next as any[] }));
       showNotice(t.contextCompacted);
-    } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const cancelled = /Compaction cancelled/i.test(message);
+      showNotice(cancelled ? t.contextCompactionCancelled : message, cancelled ? "info" : "error");
+    }
   }
 
-  async function exportSession(format: "jsonl" | "html") {
+  async function exportSession(format: "jsonl" | "html", outputPath?: string) {
     if (!activeTask) return showNotice(t.noSessions);
     try {
-      const result = await window.pideck.sessions.export(activeTask.id, format, projectCwd);
+      const result = await window.pideck.sessions.export(activeTask.id, format, projectCwd, outputPath);
+      if (!result) return;
       showNotice(`${t.exportedTo} ${result.path}${result.reviewPath ? ` · ${t.exportedReviewCompanion}: ${result.reviewPath}` : ""}`);
     } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
@@ -1380,7 +1408,7 @@ export function useAppController() {
     externalEditorShortcut: firstPiKeybinding(piKeybindings, "app.editor.external"),
     onSend: () => void sendPrompt(),
     onStop: () => void abortActive(),
-    isSending,
+    isSending: isWorking,
     language,
     activeModel,
     modelOptions,
@@ -1426,7 +1454,9 @@ export function useAppController() {
   }
 
   return {
-    language, setLanguage, theme, themePreference, cycleTheme, projectCwd, projects, expandedProjectCwds, tasks,
+    language, setLanguage, theme, themePreference,
+    cycleTheme: () => { if (activeTask) patchTaskUi(activeTask.id, { extensionTheme: undefined }); cycleTheme(); },
+    projectCwd, projects, expandedProjectCwds, tasks,
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, searchQuery, setSearchQuery, createTask, createTaskForProject, chooseProjectDirectory,
     selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions,

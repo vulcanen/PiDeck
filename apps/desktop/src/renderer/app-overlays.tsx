@@ -1,6 +1,7 @@
 import { CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, PiSettings, ProjectRemoveDialog, ProviderSettings, QuickSettings, QuickSettingsBoundary, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
 import { Icon } from "@pideck/ui-system";
 import type { AppController } from "./use-app-controller";
+import { extensionThemeStyle } from "./extension-theme";
 
 // All floating layers (dialogs, settings, toast, context menus) render
 // here so app-view.tsx only owns the shell layout. Add new overlays in this
@@ -20,7 +21,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     scopedModelsOpen, setScopedModelsOpen, modelOptions, capabilities, saveScopedModels,
     previewImage, setPreviewImage, imageContextMenu, setImageContextMenu, openImageContextMenu,
   } = controller;
-  return <div className={`overlay-root ${theme}${isMac ? " platform-macos" : " platform-overlay"}`}>
+  return <div style={extensionThemeStyle(controller.activeTaskUi?.extensionTheme)} className={`overlay-root ${controller.activeTaskUi?.extensionTheme?.appearance ?? theme}${isMac ? " platform-macos" : " platform-overlay"}`}>
     {quickSettingsOpen && <QuickSettingsBoundary language={language} onClose={() => setQuickSettingsOpen(false)}><QuickSettings
       language={language}
       commands={paletteCommands}

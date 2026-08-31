@@ -66,6 +66,18 @@ test("accepted built-in commands clear the Composer before asynchronous work set
   assert.match(controller, /if \(await handleBuiltinCommand\(text, \(\) => \{[\s\S]*?setComposer\(""\); setSuggestionMode\(null\);\s*\}\)\) return;/);
 });
 
+test("manual compaction exposes Stop, aborts its controller, and preserves staged queue IDs", () => {
+  const controller = rendererSource("use-app-controller.tsx");
+  const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
+  assert.match(controller, /onStop: \(\) => void abortActive\(\),\s*isSending: isWorking/);
+  const abortHandler = host.slice(host.indexOf('case "agent.abort"'), host.indexOf('case "agent.setThinkingLevel"'));
+  assert.match(abortHandler, /session\.abortCompaction\(\);\s*await session\.abort\(\)/);
+  assert.match(host, /resumeManualCompactionQueue\(payload\.taskId, stateKey, session, completed\)/);
+  assert.match(host, /trackQueuedPrompt\(stateKey, entry\.delivery, entry\.text, entry\.images, entry\.id\)/);
+  assert.match(main, /command === "input.externalEdit" \|\| command === "sessions.compact"/);
+});
+
 function message(id, role, text, timestamp) {
   return { id, role, content: text, timestamp };
 }

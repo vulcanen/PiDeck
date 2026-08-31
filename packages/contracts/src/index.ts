@@ -64,6 +64,7 @@ export interface ModelCycleState {
 }
 
 export interface SessionCapabilities {
+  extensionShortcuts?: Array<{ key: string; description?: string }>;
   model?: ModelSummary;
   thinkingLevel: string;
   thinkingLevels: string[];
@@ -178,6 +179,15 @@ export interface AgentQueueState {
 export type ExternalEditorSource = "project" | "user" | "visual" | "editor" | "default";
 
 export interface PiSettingsSummary {
+  retryEnabled?: boolean;
+  retryMaxRetries?: number;
+  retryBaseDelayMs?: number;
+  compactionReserveTokens?: number;
+  compactionKeepRecentTokens?: number;
+  httpProxy?: string;
+  httpProxyHasCredentials?: boolean;
+  httpIdleTimeoutMs?: number;
+  defaultTools?: string[] | null;
   defaultProvider?: string;
   defaultModel?: string;
   defaultThinkingLevel: string;
@@ -191,6 +201,9 @@ export interface PiSettingsSummary {
 }
 
 export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
+  | "retryEnabled" | "retryMaxRetries" | "retryBaseDelayMs"
+  | "compactionReserveTokens" | "compactionKeepRecentTokens"
+  | "httpProxy" | "httpIdleTimeoutMs" | "defaultTools"
   | "defaultProvider"
   | "defaultModel"
   | "defaultThinkingLevel"
@@ -202,6 +215,12 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
 >>;
 
 export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
+
+export interface ExtensionThemeSnapshot {
+  name?: string;
+  appearance: "light" | "dark";
+  colors: Partial<Record<"accent" | "text" | "muted" | "line" | "green" | "red" | "amber" | "selection-bg", string>>;
+}
 
 export interface ExtensionUiRequest {
   requestId: string;
@@ -298,7 +317,7 @@ export interface PideckBridge {
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     reload(taskId: string, cwd?: string): Promise<SessionCapabilities>;
-    export(taskId: string, format: "jsonl" | "html", cwd?: string): Promise<{ path: string; reviewPath?: string }>;
+    export(taskId: string, format: "jsonl" | "html", cwd?: string, outputPath?: string): Promise<{ path: string; reviewPath?: string } | null>;
     import(taskId: string | undefined, cwd?: string): Promise<ImportedSessionSummary | null>;
     rename(taskId: string, name: string, cwd?: string): Promise<string>;
     generateTitle(taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }): Promise<string | null>;
@@ -347,6 +366,8 @@ export interface PideckBridge {
     chooseExternalEditor(): Promise<string | null>;
   };
   extensions: {
+    syncEditor(taskId: string, text: string, cwd?: string): Promise<void>;
+    invokeShortcut(taskId: string, key: string, text: string, cwd?: string): Promise<void>;
     resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
   };
   packages: {
@@ -428,6 +449,8 @@ export type PiHostCommand =
   | "agent.deleteQueue"
   | "settings.get"
   | "settings.update"
+  | "extension.editor.sync"
+  | "extension.shortcut.invoke"
   | "extension.ui.resolve"
   | "packages.list"
   | "packages.install"
@@ -482,7 +505,7 @@ const piHostPayloadSchemas = {
   "sessions.capabilities": payload({ taskId: z.string().optional(), cwd: z.string().optional() }),
   "sessions.compact": payload({ taskId: z.string(), instructions: z.string().optional(), cwd: z.string().optional() }),
   "sessions.reload": payload({ taskId: z.string(), cwd: z.string().optional() }),
-  "sessions.export": payload({ taskId: z.string(), format: z.enum(["jsonl", "html"]), cwd: z.string().optional() }),
+  "sessions.export": payload({ taskId: z.string(), format: z.enum(["jsonl", "html"]), cwd: z.string().optional(), outputPath: z.string().min(1).max(4096).optional() }),
   "sessions.import": payload({ taskId: z.string().optional(), inputPath: z.string(), cwd: z.string().optional() }),
   "sessions.rename": payload({ taskId: z.string(), name: z.string(), cwd: z.string().optional() }),
   "sessions.generateTitle": payload({ taskId: z.string(), message: z.string(), cwd: z.string().optional(), model: modelReference.optional() }),
@@ -513,7 +536,13 @@ const piHostPayloadSchemas = {
   "agent.editQueue": payload({ taskId: z.string(), messageId: z.string(), text: z.string(), images: promptImages.optional(), cwd: z.string().optional() }),
   "agent.deleteQueue": payload({ taskId: z.string(), messageId: z.string(), cwd: z.string().optional() }),
   "settings.get": payload({ cwd: z.string().optional() }),
-  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional() }),
+  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional(),
+    retryEnabled: z.boolean().optional(), retryMaxRetries: z.number().int().min(0).max(100).optional(), retryBaseDelayMs: z.number().int().min(0).max(2147483647).optional(),
+    compactionReserveTokens: z.number().int().positive().max(100000000).optional(), compactionKeepRecentTokens: z.number().int().min(0).max(100000000).optional(),
+    httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),
+  }),
+  "extension.editor.sync": payload({ taskId: z.string(), text: z.string().max(1000000), cwd: z.string().optional() }),
+  "extension.shortcut.invoke": payload({ taskId: z.string(), key: z.string().min(1).max(100), text: z.string().max(1000000), cwd: z.string().optional() }),
   "extension.ui.resolve": payload({ requestId: z.string(), value: z.union([z.string(), z.boolean()]).optional() }),
   "packages.list": payload({ cwd: z.string().optional() }),
   "packages.install": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),

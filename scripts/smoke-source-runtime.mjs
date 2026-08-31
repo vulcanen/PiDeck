@@ -23,6 +23,15 @@ mkdirSync(projectExtensionDir, { recursive: true });
 writeFileSync(path.join(packageSource, "package.json"), JSON.stringify({ name: "pideck-package-state-smoke", version: "1.0.0" }), "utf8");
 writeFileSync(path.join(extensionDir, "pideck-runtime-smoke.ts"), `
 export default function pideckRuntimeSmoke(pi) {
+  pi.registerShortcut("ctrl+shift+y", {
+    description: "PiDeck shortcut IPC smoke",
+    handler: async (ctx) => {
+      if (ctx.mode !== "rpc" || ctx.ui.getEditorText() !== "live draft") throw new Error("Shortcut context/editor mirror mismatch");
+      ctx.ui.setEditorText("updated draft");
+      if (!ctx.ui.getAllThemes().some((theme) => theme.name === "light")) throw new Error("Theme catalog unavailable");
+      if (!ctx.ui.setTheme("light").success || ctx.ui.theme.name !== "light") throw new Error("Theme selection failed");
+    },
+  });
   pi.registerCommand("pideck-runtime-smoke", {
     description: "Verify PiDeck extension runtime bindings",
     handler: async (_args, ctx) => {
@@ -43,6 +52,8 @@ await new Promise((resolve, reject) => {
   let taskId;
   let extensionModeSeen = false;
   let extensionReplacementSeen = false;
+  let extensionEditorSeen = false;
+  let extensionThemeSeen = false;
   const child = fork(hostPath, [], {
     cwd: root,
     env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PIDECK_HOST_PROCESS: "1", PIDECK_PI_MODULE: piModulePath },
@@ -64,6 +75,10 @@ await new Promise((resolve, reject) => {
     if (!settled) finish(new Error(`Source PiHost exited before completing smoke (code ${code ?? "null"}, signal ${signal ?? "none"})`));
   });
   child.on("message", (message) => {
+    if (message?.type === "agent.event" && message.event?.type === "extension.ui.presentation") {
+      if (message.event.action === "editor-text" && message.event.text === "updated draft") extensionEditorSeen = true;
+      if (message.event.action === "theme" && message.event.theme?.appearance === "light") extensionThemeSeen = true;
+    }
     if (message?.type === "agent.event" && message.event?.type === "session.replaced") {
       extensionReplacementSeen = Boolean(message.event.task?.id && message.event.previousTaskId === taskId);
       if (message.event.task?.id) taskId = message.event.task.id;
@@ -238,6 +253,18 @@ await new Promise((resolve, reject) => {
       const commands = Array.isArray(message.result?.slashCommands) ? message.result.slashCommands : [];
       if (!message.ok || !commands.some((command) => command?.name === "permission-system" && command.source === "extension")) {
         finish(new Error(`Permission Extension did not load with its command source metadata: ${JSON.stringify(message)}`));
+        return;
+      }
+      if (!message.result?.extensionShortcuts?.some((shortcut) => shortcut.key === "ctrl+shift+y")) {
+        finish(new Error("Registered extension shortcut missing from capabilities"));
+        return;
+      }
+      child.send({ id: "extension-shortcut", command: "extension.shortcut.invoke", payload: { taskId, cwd: root, key: "ctrl+shift+y", text: "live draft" } });
+      return;
+    }
+    if (message?.id === "extension-shortcut") {
+      if (!message.ok || !extensionEditorSeen || !extensionThemeSeen) {
+        finish(new Error(`Extension shortcut/editor/theme IPC failed: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "agent-cycle-model", command: "agent.cycleModel", payload: { taskId, cwd: root, direction: "forward" } });

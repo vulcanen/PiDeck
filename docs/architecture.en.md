@@ -230,6 +230,20 @@ Each visited Session keeps its own pane; inactive panes use `visibility: hidden`
 
 PiDeck's Renderer `activity`/`completedActivity` remains presentation state of the current process and is never written back into the Session. To restore "processed" durations reliably, PiHost records each execution group's `startedAt/endedAt/durationMs` at `agent_start`, non-Steering Follow-up boundaries, and `agent_settled`, writing them as a `pideck.execution-run` custom entry via Pi's official `SessionManager.appendCustomEntry()`; the entry never enters the LLM context. The Renderer reads exact durations through `sessions.runMetadata`; Pi's raw thinking/tool content is used only to rebuild step content. Old sessions without this metadata show "processed" but never infer durations from message timestamps.
 
+### Desktop parity adapters
+
+`pi-command-arguments.ts` resolves exact runtime model IDs and export filenames. `sessions.export` accepts an optional output path: Main validates it, resolves project-relative/`~/` paths, and obtains native save/overwrite confirmation before PiHost calls Pi's exporter. A cancelled picker returns `null`. `.jsonl` paths select JSONL, and other paths select HTML.
+
+`settings-command-handler.ts` reads advanced effective settings through Pi's getters and writes only changed retry/compaction/proxy/timeout/default-tool keys through `FileSettingsStorage.withLock`, preserving nested provider retry policy and unknown settings. Existing proxy credentials are stripped from the summary and preserved unless explicitly replaced. HTTP proxy/idle timeout apply after a Host/application restart; default tools apply to newly created sessions.
+
+`extensions.syncEditor` / `extensions.invokeShortcut` map to `extension.editor.sync` / `extension.shortcut.invoke`. Both validate project scope and bounded text. The former updates a project/session-scoped presentation mirror without creating an Agent; the latter re-resolves Pi `ExtensionRunner.getShortcuts()` against effective keybindings, flushes the supplied draft, and calls the real handler with `createContext()`. `SessionCapabilities.extensionShortcuts` contains only key/description DTOs. `use-extension-editor.ts` blocks dispatch during IME composition, repeated keydown, concurrent handlers, and modal dialogs. Live text is an asynchronous desktop mirror, not a synchronous cross-process TUI component.
+
+`extension-theme.ts` in PiHost retains actual SDK Theme objects and resource-loaded themes. Pi's version-matched theme companion module is capability-guarded by `pi-adapter`. A stable proxy preserves `ui.theme` after SDK context copying. Theme events are `extension.ui.presentation` with `action: "theme"` and an `ExtensionThemeSnapshot`: only hex colors and a light/dark appearance cross IPC. Renderer validates a fixed token allowlist and applies it to the active Session's shell and overlays. TUI factories remain explicitly unsupported and are never invoked or serialized.
+
+Manual compaction Stop renders from `isSending || isCompacting`, calls `abortCompaction()` before `abort()`, and transfers staged messages back to native Pi queues without starting them after cancellation/failure. Their IDs, order, text, and images are preserved. Manual compaction and interactive Extension shortcuts are event-driven requests without the default 60-second timeout; process disconnect still rejects pending requests.
+
+After a Host restart, a session operation resolves its persisted ID through Pi `SessionManager.list(cwd)` if the path cache is cold. Unknown IDs fail explicitly instead of silently creating an empty session. Runtime smoke exercises this before any session-list request.
+
 ## 5. Current Bridge Capabilities
 
 Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
@@ -243,7 +257,7 @@ Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
 - `input.keybindings/externalEdit`
 - `providers.list/login/cancelLogin/logout/setApiKey/resolveAuth/openAuthUrl`
 - `agent.prompt/executeBash/abort/setThinkingLevel/setModel/cycleModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
-- `sessions.compact/reload`, `settings.get/update/chooseExternalEditor`, `extensions.resolveUi`
+- `sessions.compact/reload`, `settings.get/update/chooseExternalEditor`, `extensions.resolveUi/syncEditor/invokeShortcut`
 - `packages.list/install/remove/update/configure/configureResource/checkUpdates`
 - `approvals.resolve`
 - `permissions.status/setMode`
@@ -307,6 +321,8 @@ Local packaging keeps the current-host `package:mac` command and exposes explici
 The native packaging jobs run through the protected `release-signing` Environment and expose certificate material only to their `electron-builder` step. macOS hardened runtime, entitlements, and notarization are enabled when the corresponding signing and Apple API secrets are present; Windows Authenticode uses its own certificate secrets. Without trusted certificates the workflow remains useful for test installers, but those artifacts are not suitable as trusted public releases.
 
 ## 9. Runtime Verification
+
+For desktop parity, additionally verify advanced settings round-trip/validation and unchanged proxy credentials; `/model provider/model` including late Extension registration; native-confirmed HTML/JSONL export paths with spaces and picker cancellation; manual compaction Stop with staged text/images and no automatic continuation; registered shortcut conflict/modal/IME handling; scoped editor text; Pi theme lookup/selection and Session isolation; actionable TUI compatibility notices. UI checks use an isolated agent directory and Electron profile, with no external model prompts.
 
 For Windows menu changes, verify `app:popup-menu` through the Preload bridge: all three groups and the compact menu, pointer/keyboard dismissal, copy/paste with an existing text selection, zoom-adjusted anchors, localization, packaged-only restrictions, and rejection of unknown groups or malformed coordinates. Check 375/560/760/1024/1440px layouts and caption-button clearance; macOS must not render duplicate title-bar menus. These desktop menus do not call PiHost.
 

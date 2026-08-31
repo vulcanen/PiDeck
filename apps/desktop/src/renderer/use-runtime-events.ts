@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useRef } from "react";
+import { parseExtensionTheme } from "./extension-theme";
 import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewUnavailableReason, SessionRunRecord } from "@pideck/contracts";
 import type { TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
@@ -165,6 +166,7 @@ export function useRuntimeEvents({
         }
         if (event.action === "hidden-thinking-label") return { ...current, [taskId]: { ...previous, extensionHiddenThinkingLabel: typeof event.label === "string" ? event.label : undefined } };
         if (event.action === "tools-expanded") return { ...current, [taskId]: { ...previous, extensionToolsExpanded: event.expanded === true } };
+        if (event.action === "theme") return { ...current, [taskId]: { ...previous, extensionTheme: parseExtensionTheme(event.theme) } };
         return current;
       });
       return;

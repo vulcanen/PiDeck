@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ModelSummary, PiSettingsSummary, PiSettingsUpdate } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon, useDialogFocus } from "@pideck/ui-system";
+import { PiAdvancedSettings } from "./pi-advanced-settings";
 
 export function PiSettings({ language, cwd, models, onClose, onNotice }: {
   language: Language;
@@ -18,10 +19,12 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
   const [editorPicking, setEditorPicking] = useState(false);
   const [editorPickerError, setEditorPickerError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [advancedUpdate, setAdvancedUpdate] = useState<PiSettingsUpdate>({});
   useDialogFocus(dialogRef, onClose);
 
   function applySettings(value: PiSettingsSummary) {
     setSettings(value);
+    setAdvancedUpdate({});
     setEditorMode(value.externalEditor ? "custom" : "automatic");
   }
 
@@ -46,9 +49,12 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
 
   async function save() {
     if (!settings) return;
+    const invalid = dialogRef.current?.querySelector<HTMLInputElement>("input:invalid");
+    if (invalid) { invalid.closest("details")?.setAttribute("open", ""); invalid.reportValidity(); invalid.focus(); return; }
     setBusy(true); setError(null);
     try {
       const update: PiSettingsUpdate = {
+        ...advancedUpdate,
         defaultProvider: settings.defaultProvider,
         defaultModel: settings.defaultModel,
         defaultThinkingLevel: settings.defaultThinkingLevel,
@@ -113,6 +119,7 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
           <small id="pi-external-editor-status" className="pi-settings-effective">{t.piExternalEditorEffective(settings.effectiveExternalEditor, settings.externalEditorSource)}</small>
         </fieldset>
         <label className="pi-settings-check"><input type="checkbox" checked={settings.compactionEnabled} onChange={(event) => setSettings({ ...settings, compactionEnabled: event.target.checked })} /><span>{t.piAutoCompaction}</span></label>
+        <PiAdvancedSettings language={language} settings={settings} onChange={(patch) => { setAdvancedUpdate((current) => ({ ...current, ...patch })); setSettings((current) => current ? { ...current, ...patch } : current); }} />
         <p className="pi-settings-hint">{t.piSettingsReloadHint}</p>
       </div>}
       <div className="settings-footer"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" data-testid="pi-settings-save" disabled={busy || editorPicking || !settings || editorCommandMissing} onClick={() => void save()}>{busy ? t.saving : t.save}</button></div>

@@ -3,6 +3,22 @@
 > 本文描述当前仓库已经实现的结构，不描述尚未落地的目标架构。
 > 目标方案和后续计划请见 [产品与技术方案](product-plan.en.md)。
 
+## 桌面兼容适配补充
+
+`pi-command-arguments.ts` 解析真实模型 ID 与导出文件名。`sessions.export` 新增可选输出路径；Main 校验并解析项目相对路径和 `~/`，通过系统保存窗口确认路径及覆盖，取消返回 `null`，确认后才由 PiHost 调用 Pi 导出器。`.jsonl` 路径选择 JSONL，其余为 HTML。
+
+`settings-command-handler.ts` 通过 Pi getter 读取重试、压缩、超时和默认工具等配置，仅将变更的高级字段通过 `FileSettingsStorage.withLock` 写回，保留嵌套 Provider 重试参数与未知设置。代理摘要隐藏既有凭据，未编辑时保留原值。HTTP 代理/空闲超时需重启 Host/应用；默认工具用于新建会话。
+
+`extensions.syncEditor/invokeShortcut` 对应 `extension.editor.sync/extension.shortcut.invoke`，校验项目作用域与文本长度。前者只更新按项目/会话隔离的展示镜像，不创建 Agent；后者根据生效键位重新查询 Pi `ExtensionRunner.getShortcuts()`、同步当前草稿，并用真实 `createContext()` 执行处理器。`SessionCapabilities.extensionShortcuts` 只包含 key/description。`use-extension-editor.ts` 阻止输入法组合、重复按键、并行处理器和模态窗口中的快捷键派发。实时文本是异步桌面镜像，不冒充同步跨进程 TUI 组件。
+
+PiHost `extension-theme.ts` 保留真实 SDK Theme 对象及资源主题；`pi-adapter` 对版本对应的主题模块进行能力检测。稳定 Proxy 保证 SDK 复制 UI context 后 `ui.theme` 仍随选择更新。`extension.ui.presentation` 的 `action: "theme"` 携带 `ExtensionThemeSnapshot`，只传浅深色信息与十六进制颜色；Renderer 校验固定 token 白名单后作用于当前会话的工作区及浮层。TUI factory 仍明确不支持，既不调用也不跨进程序列化。
+
+手动压缩按钮依据 `isSending || isCompacting` 显示停止，先调用 `abortCompaction()` 再调用 `abort()`。取消/失败后暂存消息携带原 ID、顺序、文本和图片返回 Pi 原生队列，不自动执行。手动压缩和交互式扩展快捷键不使用普通 60 秒请求超时，但进程断开仍拒绝等待中的请求。
+
+Host 重启后，若会话路径缓存尚未加载，操作会通过 Pi `SessionManager.list(cwd)` 解析真实持久化 ID；不存在的 ID 明确报错，不再静默创建空会话。运行时 smoke 在首次列表请求前验证该恢复路径。
+
+验证新增范围：高级配置读写/非法值/凭据保留；扩展稍后注册模型的 `/model` 参数；带空格的 HTML/JSONL 路径与保存取消；手动压缩停止、队列保留且不自动续跑；快捷键的冲突/模态/输入法隔离；编辑器镜像、主题切换及会话隔离；可操作 TUI 兼容提示。界面验证使用隔离 Pi 目录和 Electron profile，不发送外部模型请求。
+
 ## 1. 产品边界
 
 PiDeck 是 `@earendil-works/pi-coding-agent` 的桌面适配层：Renderer 负责交互和呈现，PiHost 负责 Pi Session、ModelRuntime、Agent、Tool、Provider、资源和 CLI 兼容能力。
@@ -238,7 +254,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - `input.keybindings/externalEdit`
 - `providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl`
 - `agent.prompt/executeBash/abort/setThinkingLevel/setModel/cycleModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
-- `sessions.compact/reload`、`settings.get/update/chooseExternalEditor`、`extensions.resolveUi`
+- `sessions.compact/reload`、`settings.get/update/chooseExternalEditor`、`extensions.resolveUi/syncEditor/invokeShortcut`
 - `packages.list/install/remove/update/configure/configureResource/checkUpdates`
 - `approvals.resolve`
 - `permissions.status/setMode`

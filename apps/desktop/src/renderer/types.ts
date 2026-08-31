@@ -25,6 +25,7 @@ export type ActivityStep = {
   isError?: boolean;
 };
 export type TaskUiState = {
+  extensionTheme?: import("@pideck/contracts").ExtensionThemeSnapshot;
   isSending: boolean;
   isCompacting: boolean;
   streamText: string;

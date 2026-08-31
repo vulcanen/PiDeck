@@ -1,6 +1,7 @@
 import type { PermissionMode, PermissionStatus } from "@pideck/contracts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 export interface PermissionEngineCallbacks {
   emitApproval(requestId: string, taskId: string, toolName: string, args: unknown): void;
@@ -77,6 +78,7 @@ function permissionSource(): PermissionStatus["source"] {
 
 /** Pi permission-system adapter; it owns policy persistence and approval waiters, not tool execution. */
 export class PermissionEngine {
+  private editorTexts = new Map<string, string>();
   private mode: PermissionMode = loadPermissionMode();
   private revisionValue = 0;
   private readonly approvalWaiters = new Map<string, (allow: boolean) => void>();
@@ -148,6 +150,7 @@ export class PermissionEngine {
 
   /** Deny any pending approval/UI waits belonging to a session being torn down so its Promise never hangs. */
   dispose(scopeId: string): void {
+    this.editorTexts.delete(scopeId);
     const prefix = `${encodeURIComponent(scopeId)}:`;
     for (const [requestId, resolve] of this.approvalWaiters.entries()) {
       if (requestId.startsWith(prefix)) {
@@ -186,7 +189,7 @@ export class PermissionEngine {
     this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action: "reset" });
   }
 
-  createUi(taskId: string, scopeId = taskId) {
+  createUi(taskId: string, scopeId = taskId, themes?: { theme: any; getAllThemes(): any[]; getTheme(name: string): any; setTheme(value: any): { success: boolean; error?: string } }) {
     const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>, opts?: { signal?: AbortSignal; timeout?: number }) => new Promise<T | undefined>((resolve) => {
       const requestId = `${encodeURIComponent(scopeId)}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
       const settle = (value: string | boolean | undefined, reason?: "timeout" | "aborted") => {
@@ -222,7 +225,7 @@ export class PermissionEngine {
         settle(fallback);
       }
     });
-    let editorText = "";
+    let editorText = this.editorTexts.get(scopeId) ?? "";
     let toolsExpanded = false;
     const unsupported = new Set<string>();
     const present = (action: string, payload: Record<string, unknown> = {}) => this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action, ...payload });
@@ -235,39 +238,43 @@ export class PermissionEngine {
       select: (title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }) => request<string>("select", { title, options }, opts),
       confirm: (title: string, message: string, opts?: { signal?: AbortSignal; timeout?: number }) => request<boolean>("confirm", { title, message }, opts),
       input: (title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }) => request<string>("input", { title, placeholder }, opts),
-      notify: (message: string, type?: string) => this.callbacks.emitEvent(taskId, { type: "extension.ui.notify", message, level: type ?? "info" }),
+      notify: (message: string, type?: string) => this.callbacks.emitEvent(taskId, { type: "extension.ui.notify", message: stripVTControlCharacters(message), level: type ?? "info" }),
       onTerminalInput: () => { warnUnsupported("onTerminalInput"); return () => undefined; },
-      setStatus: (key: string, text?: string) => present("status", { key, text }),
+      setStatus: (key: string, text?: string) => present("status", { key, text: text === undefined ? undefined : stripVTControlCharacters(text) }),
       setWorkingMessage: (message?: string) => present("working-message", { message }),
       setWorkingVisible: (visible: boolean) => present("working-visible", { visible }),
       setWorkingIndicator: (indicator?: { frames?: string[]; intervalMs?: number }) => present("working-indicator", { indicator: indicator ? { frames: indicator.frames, interval: indicator.intervalMs } : undefined }),
       setHiddenThinkingLabel: (label?: string) => present("hidden-thinking-label", { label }),
       setWidget: (key: string, content?: string[] | (() => unknown), options?: Record<string, unknown>) => {
         if (content !== undefined && !Array.isArray(content)) { warnUnsupported("setWidget(component)"); return; }
-        present("widget", { key, lines: content, placement: options?.placement });
+        present("widget", { key, lines: content?.map(stripVTControlCharacters), placement: options?.placement });
       },
       setFooter: () => warnUnsupported("setFooter"),
       setHeader: () => warnUnsupported("setHeader"),
       setTitle: (title: string) => present("title", { title }),
       custom: async () => { warnUnsupported("custom"); return undefined; },
-      pasteToEditor: (text: string) => { editorText += text; present("editor-text", { text: editorText }); },
-      setEditorText: (text: string) => { editorText = text; present("editor-text", { text }); },
-      getEditorText: () => { warnUnsupported("getEditorText(live desktop composer)"); return editorText; },
+      pasteToEditor: (text: string) => { editorText = (this.editorTexts.get(scopeId) ?? editorText) + text; this.editorTexts.set(scopeId, editorText); present("editor-text", { text: editorText }); },
+      setEditorText: (text: string) => { editorText = text; this.editorTexts.set(scopeId, text); present("editor-text", { text }); },
+      getEditorText: () => this.editorTexts.get(scopeId) ?? editorText,
       setEditorComponent: () => warnUnsupported("setEditorComponent"),
       getEditorComponent: () => { warnUnsupported("getEditorComponent"); return undefined; },
       editor: async (title: string, prefill?: string) => {
         const value = await request<string>("editor", { title, prefill });
-        if (typeof value === "string") editorText = value;
+        if (typeof value === "string") { editorText = value; this.editorTexts.set(scopeId, value); }
         return value;
       },
       addAutocompleteProvider: () => { warnUnsupported("addAutocompleteProvider"); },
-      get theme() { return desktopPlainTextTheme; },
-      getAllThemes: () => { warnUnsupported("getAllThemes"); return []; },
-      getTheme: () => { warnUnsupported("getTheme"); return undefined; },
-      setTheme: () => { warnUnsupported("setTheme"); return { success: false, error: "Theme objects are not serializable in desktop RPC mode" }; },
+      get theme() { return themes?.theme ?? desktopPlainTextTheme; },
+      getAllThemes: () => { if (themes) return themes.getAllThemes(); warnUnsupported("getAllThemes"); return []; },
+      getTheme: (name: string) => { if (themes) return themes.getTheme(name); warnUnsupported("getTheme"); return undefined; },
+      setTheme: (value: any) => { if (themes) return themes.setTheme(value); warnUnsupported("setTheme"); return { success: false, error: "The Pi runtime does not expose desktop theme adaptation" }; },
       getToolsExpanded: () => toolsExpanded,
       setToolsExpanded: (expanded: boolean) => { toolsExpanded = expanded; present("tools-expanded", { expanded }); },
     };
+  }
+
+  syncEditorText(scopeId: string, text: string): void {
+    this.editorTexts.set(scopeId, text);
   }
 
   async beforeToolCallWithExtension(taskId: string, context: any, previous: BeforeToolCall | undefined, extensionLoaded: boolean, signal?: AbortSignal, scopeId = taskId): Promise<unknown> {

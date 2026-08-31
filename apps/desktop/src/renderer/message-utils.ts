@@ -17,6 +17,7 @@ export function resetExtensionPresentation(state: TaskUiState): TaskUiState {
     extensionWorkingInterval: undefined,
     extensionHiddenThinkingLabel: undefined,
     extensionToolsExpanded: false,
+    extensionTheme: undefined,
     retryStatus: undefined,
   };
 }

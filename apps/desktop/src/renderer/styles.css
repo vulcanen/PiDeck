@@ -941,6 +941,14 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .tree-entry-actions, .package-actions { display: flex; flex-shrink: 0; gap: 6px; }
 .package-settings { width: min(640px, 100vw); }
 .pi-settings { width: min(620px, 100vw); }
+.pi-settings-advanced { border: 1px solid var(--line); border-radius: var(--radius-card); padding: 12px; }
+.pi-settings-advanced summary { cursor: pointer; min-height: var(--control-height); font-weight: 600; }
+.pi-settings-advanced summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pi-settings-advanced[open] summary { margin-bottom: 12px; }
+.pi-settings-advanced .pi-settings-fields { padding: 0; overflow: visible; }
+.pi-settings-advanced .pi-settings-fields > label:not(.pi-settings-check) { grid-template-columns: 1fr; gap: 6px; }
+.pi-settings-advanced input:not([type="checkbox"]) { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text); padding: 8px 10px; }
+.pi-settings-advanced input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pi-settings-fields { display: grid; gap: 14px; padding: 20px 24px; overflow-y: auto; }
 .pi-settings-fields > label:not(.pi-settings-check) { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.2fr); align-items: center; gap: 16px; color: var(--muted); font-size: 13px; }
 .pi-settings-fields select, .pi-settings-fields input[type="text"] { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text); padding: 8px 10px; }

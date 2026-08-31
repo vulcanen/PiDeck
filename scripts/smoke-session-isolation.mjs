@@ -22,6 +22,10 @@ sourceManager.appendSessionInfo("Isolation smoke source");
 sourceManager.appendMessage({ role: "user", content: "isolation smoke", timestamp: Date.now() });
 sourceManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: Date.now() });
 const sourcePath = sourceManager.getSessionFile();
+const coldManager = sdk.SessionManager.create(projectA);
+coldManager.appendSessionInfo("Cold-start persisted session");
+coldManager.appendMessage({ role: "user", content: "persisted context", timestamp: Date.now() });
+coldManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "persisted reply" }], timestamp: Date.now(), api: "openai-completions", provider: "fixture", model: "fixture", stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 
 const child = fork(path.join(root, "packages", "pi-host", "dist", "index.js"), [], {
   cwd: root,
@@ -76,6 +80,9 @@ function request(command, payload) {
 
 try {
   await connected;
+  // No sessions.list call has populated PiHost's path cache yet.
+  const coldStats = await request("sessions.stats", { taskId: coldManager.getSessionId(), cwd: projectA });
+  if (coldStats.sessionId !== coldManager.getSessionId() || coldStats.userMessages !== 1 || coldStats.assistantMessages !== 1) throw new Error("Cold-start operation replaced the persisted session with an empty one");
   const importedA = await request("sessions.import", { inputPath: sourcePath, cwd: projectA });
   const importedB = await request("sessions.import", { inputPath: sourcePath, cwd: projectB });
   if (importedA.id !== importedB.id) throw new Error("Smoke fixture did not preserve the duplicate session ID");

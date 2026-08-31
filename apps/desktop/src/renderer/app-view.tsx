@@ -7,6 +7,7 @@ import { AppSidebar } from "./app-sidebar";
 import { PaneResizeHandle } from "./ui";
 import { languageSwitchTarget } from "./use-preferences";
 import type { AppController } from "./use-app-controller";
+import { extensionThemeStyle } from "./extension-theme";
 
 const MINIMUM_SIDEBAR_WIDTH = 190;
 const MAXIMUM_SIDEBAR_WIDTH = 420;
@@ -69,7 +70,8 @@ export function AppView({ controller }: { controller: AppController }) {
   );
   return <>
   <div
-    className={`app-shell ${theme}${isMac ? " platform-macos" : " platform-overlay"}`}
+    style={extensionThemeStyle(activeTaskUi?.extensionTheme)}
+    className={`app-shell ${activeTaskUi?.extensionTheme?.appearance ?? theme}${isMac ? " platform-macos" : " platform-overlay"}`}
     inert={modalOverlayOpen}
     aria-hidden={modalOverlayOpen || undefined}
     onFocusCapture={(event) => { overlayReturnFocusRef.current = event.target; }}

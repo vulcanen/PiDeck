@@ -6,6 +6,10 @@ import { pathToFileURL } from "node:url";
 
 /** The supported Pi SDK surface used by PiDeck's host adapter. */
 export type PiSdk = {
+  themeApi?: {
+    getAvailableThemesWithPaths(): Array<{ name: string; path?: string }>;
+    getThemeByName(name: string): any;
+  };
   main?: (args: string[], options?: unknown) => Promise<void>;
   ModelRuntime: {
     create(options?: { allowModelNetwork?: boolean }): Promise<any>;
@@ -376,13 +380,15 @@ export function loadPiSdk(): Promise<PiSdk> {
     const keybindingsModule = piCompanionModule(piModule, ["core", "keybindings.js"], "effective keybindings");
     const settingsModule = piCompanionModule(piModule, ["core", "settings-manager.js"], "locked settings storage");
     const externalEditorModule = piCompanionModule(piModule, ["modes", "interactive", "external-editor.js"], "the external editor helper");
-    const [sdk, keybindings, settingsStorage, externalEditor] = await Promise.all([
+    const themeModule = piCompanionModule(piModule, ["modes", "interactive", "theme", "theme.js"], "extension themes");
+    const [sdk, keybindings, settingsStorage, externalEditor, themeApi] = await Promise.all([
       import(pathToFileURL(piModule).href) as Promise<PiSdk>,
       import(pathToFileURL(keybindingsModule).href) as Promise<Pick<PiSdk, "KeybindingsManager">>,
       import(pathToFileURL(settingsModule).href) as Promise<Pick<PiSdk, "FileSettingsStorage">>,
       import(pathToFileURL(externalEditorModule).href) as Promise<Pick<PiSdk, "editInExternalEditor">>,
+      import(pathToFileURL(themeModule).href) as Promise<NonNullable<PiSdk["themeApi"]>>,
     ]);
-    return { ...sdk, ...keybindings, ...settingsStorage, ...externalEditor };
+    return { ...sdk, ...keybindings, ...settingsStorage, ...externalEditor, themeApi };
   })().catch((error) => {
     sdkPromise = undefined;
     throw error;

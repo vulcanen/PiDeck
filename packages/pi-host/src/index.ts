@@ -19,6 +19,7 @@ import {
 } from "./agent-prompt-coordination.js";
 import { normalizeAgentEvent } from "./agent-event-adapter.js";
 import { withExternalEditorPathAliases } from "./external-editor-command.js";
+import { createExtensionTheme } from "./extension-theme.js";
 import {
   activeChangeReviews,
   activeProviderLoginByProvider,
@@ -790,10 +791,10 @@ function consumeQueueDeliveryHint(taskId: string, text: string): "steer" | "foll
   return hint.delivery;
 }
 
-function trackQueuedPrompt(taskId: string, delivery: "steer" | "followUp", text: string, images?: NormalizedPromptImage[]) {
+function trackQueuedPrompt(taskId: string, delivery: "steer" | "followUp", text: string, images?: NormalizedPromptImage[], id: string = randomUUID()) {
   const state = queuedPromptImageState(taskId);
   const bucket = delivery === "steer" ? state.steering : state.followUp;
-  bucket.push({ id: randomUUID(), text, images: images ? [...images] : [] });
+  bucket.push({ id, text, images: images ? [...images] : [] });
   queuedPromptImages.set(taskId, state);
 }
 
@@ -813,8 +814,16 @@ async function withQueueMutationLock<T>(taskId: string, operation: () => Promise
   }
 }
 
-async function resumeManualCompactionQueue(taskId: string, stateKey: string, session: any): Promise<void> {
+async function resumeManualCompactionQueue(taskId: string, stateKey: string, session: any, resume = true): Promise<void> {
   const queued = manualCompactionQueues.drain(stateKey);
+  if (!resume) {
+    for (const entry of queued) {
+      trackQueuedPrompt(stateKey, entry.delivery, entry.text, entry.images, entry.id);
+      await (entry.delivery === "steer" ? session.steer(entry.text, entry.images) : session.followUp(entry.text, entry.images));
+    }
+    emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
+    return;
+  }
   emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
   if (queued.length === 0) return;
 
@@ -842,7 +851,7 @@ async function resumeManualCompactionQueue(taskId: string, stateKey: string, ses
   if (!started) return;
   await withQueueMutationLock(stateKey, async () => {
     for (const entry of remaining) {
-      trackQueuedPrompt(stateKey, entry.delivery, entry.text, entry.images);
+      trackQueuedPrompt(stateKey, entry.delivery, entry.text, entry.images, entry.id);
       await session.prompt(entry.text, {
         source: "interactive",
         images: entry.images,
@@ -853,6 +862,13 @@ async function resumeManualCompactionQueue(taskId: string, stateKey: string, ses
     reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
     emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
   });
+}
+
+async function extensionShortcuts(session: any): Promise<Array<{ key: string; description?: string }>> {
+  if (!session.extensionRunner?.getShortcuts) return [];
+  const sdk = await loadPiSdk();
+  const keybindings = sdk.KeybindingsManager?.create(sdk.getAgentDir?.()).getEffectiveConfig() ?? {};
+  return [...session.extensionRunner.getShortcuts(keybindings).entries()].map(([key, shortcut]: [string, { description?: string }]) => ({ key, description: shortcut.description }));
 }
 
 async function createPackageManagerContext(cwd: string): Promise<{ manager: any; settingsManager: any }> {
@@ -1119,8 +1135,16 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     const modelRuntime = await getModelRuntime();
     let manager = sessionManagers.get(stateKey);
     if (!manager) {
-      const sessionPath = sessionFiles.get(stateKey);
-      manager = sessionPath ? sdk.SessionManager.open(sessionPath) : sdk.SessionManager.create(cwd);
+      // A restart can receive a session operation before sessions.list warms
+      // this cache. Never silently replace that persisted ID with a new one.
+      let sessionPath = sessionFiles.get(stateKey);
+      if (!sessionPath) {
+        const persisted = (await sdk.SessionManager.list(cwd)).find((session) => session.id === taskId);
+        sessionPath = persisted?.path;
+        if (sessionPath) sessionFiles.set(stateKey, sessionPath);
+      }
+      if (!sessionPath) throw new Error(`Pi session no longer exists: ${taskId}. Refresh the session list or create a new session.`);
+      manager = sdk.SessionManager.open(sessionPath);
       sessionManagers.set(stateKey, manager);
     }
     normalizeSessionImages(manager);
@@ -1223,7 +1247,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       // Desktop dialogs are RPC-style serializable UI. Declaring rpc here is
       // important: extensions can guard terminal-only components with ctx.mode.
       await session.bindExtensions?.({
-        uiContext: permissionEngine.createUi(boundTaskId, boundStateKey),
+        uiContext: permissionEngine.createUi(boundTaskId, boundStateKey, sdk.themeApi ? createExtensionTheme(sdk.themeApi, session, (snapshot) => emit(boundTaskId, { type: "extension.ui.presentation", action: "theme", theme: snapshot })) : undefined),
         mode: "rpc",
         commandContextActions: {
           waitForIdle: () => runtime.session.waitForIdle(),
@@ -1739,6 +1763,7 @@ async function handle(request: PiHostRequest): Promise<void> {
             skills: slash.skills,
             scopedModels: scopedModelSelections(session),
             contextUsage: jsonSafe(session.getContextUsage?.()),
+            extensionShortcuts: await extensionShortcuts(session),
           },
         });
         return;
@@ -1753,11 +1778,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (manualCompactionQueues.isActive(stateKey)) throw new Error("Manual compaction is already running for this session");
         manualCompactionQueues.begin(stateKey);
         let result: unknown;
+        let completed = false;
         try {
           result = await session.compact(payload.instructions);
+          completed = true;
           emit(payload.taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         } finally {
-          await resumeManualCompactionQueue(payload.taskId, stateKey, session);
+          await resumeManualCompactionQueue(payload.taskId, stateKey, session, completed);
         }
         send({ id: request.id, ok: true, result: jsonSafe(result) });
         return;
@@ -1786,19 +1813,20 @@ async function handle(request: PiHostRequest): Promise<void> {
           skills: slash.skills,
           scopedModels: scopedModelSelections(session),
           contextUsage: jsonSafe(session.getContextUsage?.()),
+          extensionShortcuts: await extensionShortcuts(session),
         };
         send({ id: request.id, ok: true, result: capabilities });
         return;
       }
       case "sessions.export": {
-        const payload = request.payload as { taskId?: string; format?: "jsonl" | "html"; cwd?: string } | undefined;
+        const payload = request.payload as { taskId?: string; format?: "jsonl" | "html"; cwd?: string; outputPath?: string } | undefined;
         if (!payload?.taskId || !payload.format) throw new Error("taskId and format are required");
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const stateKey = sessionStateKey(payload.taskId, cwd);
         const session = await ensureAgentSession(payload.taskId, cwd);
         await Promise.allSettled([...(pendingChangeReviewWritesBySession.get(stateKey) ?? [])]);
         if (payload.format === "jsonl") await flushSessionChangeReviewStore(session);
-        const outputPath = payload.format === "html" ? await session.exportToHtml() : session.exportToJsonl();
+        const outputPath = payload.format === "html" ? await session.exportToHtml(payload.outputPath) : session.exportToJsonl(payload.outputPath);
         const copiedReviewStore = payload.format === "jsonl" && await copySessionChangeReviewStore(session, outputPath);
         send({
           id: request.id,
@@ -2078,6 +2106,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const session = agentSessions.get(stateKey);
         if (session) {
           session.abortBash?.();
+          session.abortCompaction();
           await session.abort();
         }
         send({ id: request.id, ok: true, result: undefined });
@@ -2411,6 +2440,28 @@ async function handle(request: PiHostRequest): Promise<void> {
         const runtime = await getModelRuntime();
         const storage = sdk.FileSettingsStorage ? new sdk.FileSettingsStorage(cwd, agentDir) : undefined;
         send({ id: request.id, ok: true, result: await updatePiSettings(settingsManager, runtime, payload ?? {}, storage) });
+        return;
+      }
+      case "extension.editor.sync": {
+        const payload = request.payload as { taskId?: string; text?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || typeof payload.text !== "string") throw new Error("taskId and text are required");
+        permissionEngine.syncEditorText(sessionStateKey(payload.taskId, payload.cwd ?? resolveWorkspaceCwd()), payload.text);
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "extension.shortcut.invoke": {
+        const payload = request.payload as { taskId?: string; key?: string; text?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || !payload.key || typeof payload.text !== "string") throw new Error("taskId, key and text are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        permissionEngine.syncEditorText(stateKey, payload.text);
+        const sdk = await loadPiSdk();
+        const bindings = sdk.KeybindingsManager?.create(sdk.getAgentDir?.()).getEffectiveConfig() ?? {};
+        const shortcut = session.extensionRunner?.getShortcuts(bindings).get(payload.key.toLowerCase());
+        if (!shortcut) throw new Error(`Extension shortcut is no longer available: ${payload.key}`);
+        await shortcut.handler(session.extensionRunner.createContext());
+        send({ id: request.id, ok: true, result: undefined });
         return;
       }
       case "extension.ui.resolve": {

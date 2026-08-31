@@ -5,6 +5,14 @@
 
 ## Integrated
 
+### Command, settings, and Extension parity
+
+- Manual compaction exposes Stop and calls `abortCompaction()` before `abort()`. A cancelled/failed compaction returns staged messages to Pi queues without starting a new run; long compactions do not use the ordinary 60-second IPC timeout.
+- `/model provider/model` resolves the real runtime catalog (including late-registered Extension providers); an unqualified ID must be unique. `/export path` preserves spaces and uses `.jsonl` for JSONL, HTML otherwise. An explicit path seeds a native save dialog with overwrite confirmation. Existing `/export jsonl` and `/export html` shortcuts remain available.
+- Pi settings → Advanced exposes retry enabled/max retries/base delay, compaction reserve/recent tokens, HTTP(S) proxy/idle timeout, and default tools. Updates use Pi's locked settings storage and preserve unrelated/nested settings; existing proxy credentials are not sent to the Renderer. Project overrides still win. Networking changes require restart; default tools affect new sessions; `/reload` applies retry/compaction changes.
+- `SessionCapabilities.extensionShortcuts` lists Pi-registered shortcuts after Pi's own conflict resolution. `extensions.invokeShortcut` executes handlers with Pi's RPC context, syncing the current draft first. `extensions.syncEditor` mirrors edits by project/session for `getEditorText`, `setEditorText`, and `pasteToEditor`. Modal dialogs and IME composition do not dispatch shortcuts.
+- Extension `getAllThemes`, `getTheme`, and `setTheme` retain actual Pi Theme objects in PiHost, including resource-loaded themes. Only validated color tokens and light/dark appearance cross IPC. The override is session-scoped and shared by the workspace and overlays; the header theme control can clear it. Terminal ANSI is stripped from status/text Widgets/notifications.
+
 | Pi capability | PiDeck entry point | Current implementation |
 | --- | --- | --- |
 | Project discovery, browsing, removal | Left project tree; multiple projects expand at once, clicking a project only toggles its own expansion, right-click removes from the list; below 560px a top button opens the focus-trapped session drawer and makes the background inert | `SessionManager.listAll()` + Main ordered/hidden `cwd` list → `projects.list` / `projects.remove`; removal never deletes project files or Pi Sessions |
@@ -86,7 +94,7 @@ The following capabilities have a basic desktop mapping:
 - Extension UI select, confirm, input, editor, and notify requests, plus serializable status, working message/visibility/indicator, hidden-thinking label, text Widget, title, and editor-text presentation. TUI component factories emit an explicit compatibility notice instead of silently doing nothing.
 - Pi Package install/remove/update/config manager, per-resource filtering, update checks, and model-catalog refresh; one entry point in Quick settings.
 
-Remaining boundary: Extension TUI-only `custom`, Footer/Header component instances, component Widgets, terminal-input, live synchronous editor-component, autocomplete providers, and theme component APIs cannot pass component instances across PiHost and the Renderer. PiDeck reports this boundary explicitly and does not fake equivalence. The desktop UI does not embed a CLI panel; the separate headless compatibility entry delegates directly to Pi's official CLI `main()`.
+Remaining boundary: Extension TUI-only `custom`, Footer/Header component instances, component Widgets, terminal-input, synchronous editor-component, and autocomplete-provider APIs cannot pass component instances across PiHost and the Renderer. These show an actionable notice directing users to Pi CLI or standard desktop-adapted dialogs; they are not implemented as desktop components. Live editor text and theme color APIs are supported as described above, but terminal layout is not emulated. The desktop UI does not embed a CLI panel; the separate headless compatibility entry delegates directly to Pi's official CLI `main()`.
 
 Task-baseline unified diff review is integrated. Chunk acceptance/revert and a Monaco-based editable merge workflow remain unimplemented; PiDeck does not claim those actions until they have a safe Pi/desktop mapping.
 

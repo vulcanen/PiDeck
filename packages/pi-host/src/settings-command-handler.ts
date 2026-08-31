@@ -1,15 +1,19 @@
-import type { PiSettingsSummary, PiSettingsUpdate } from "@pideck/contracts";
+import { validatePiHostPayload, type PiSettingsSummary, type PiSettingsUpdate } from "@pideck/contracts";
 
 export interface PiSettingsManager {
   getDefaultProvider(): string | undefined;
   getDefaultModel(): string | undefined;
   getDefaultThinkingLevel(): string | undefined;
   getTransport(): PiSettingsSummary["transport"] | undefined;
-  getCompactionSettings(): { enabled?: boolean } | undefined;
+  getCompactionSettings(): { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } | undefined;
+  getRetrySettings?(): { enabled: boolean; maxRetries: number; baseDelayMs: number };
+  getHttpIdleTimeoutMs?(): number;
+  getDefaultTools?(): string[] | undefined;
+  drainErrors?(): Array<{ error: Error }>;
   getSteeringMode(): PiSettingsSummary["steeringMode"];
   getFollowUpMode(): PiSettingsSummary["followUpMode"];
   getExternalEditorCommand?(): string;
-  getGlobalSettings?(): { externalEditor?: unknown };
+  getGlobalSettings?(): { externalEditor?: unknown; httpProxy?: string };
   getProjectSettings?(): { externalEditor?: unknown };
   setDefaultModelAndProvider(provider: string, model: string): void;
   setDefaultThinkingLevel(level: string): void;
@@ -54,6 +58,13 @@ export function persistExternalEditorSetting(storage: PiSettingsStorage, value: 
 
 export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSummary {
   const compaction = manager.getCompactionSettings();
+  const retry = manager.getRetrySettings?.();
+  let httpProxy = manager.getGlobalSettings?.().httpProxy ?? "";
+  let httpProxyHasCredentials = false;
+  if (httpProxy) {
+    try { const url = new URL(httpProxy); httpProxyHasCredentials = Boolean(url.username || url.password); url.username = ""; url.password = ""; httpProxy = url.toString(); }
+    catch { httpProxy = ""; }
+  }
   const projectEditor = editorCommand(manager.getProjectSettings?.().externalEditor);
   const userEditor = editorCommand(manager.getGlobalSettings?.().externalEditor);
   const visualEditor = editorCommand(process.env.VISUAL);
@@ -61,6 +72,14 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
   const defaultEditor = process.platform === "win32" ? "notepad" : "nano";
   const externalEditorSource = projectEditor ? "project" : userEditor ? "user" : visualEditor ? "visual" : environmentEditor ? "editor" : "default";
   return {
+    retryEnabled: retry?.enabled,
+    retryMaxRetries: retry?.maxRetries,
+    retryBaseDelayMs: retry?.baseDelayMs,
+    compactionReserveTokens: compaction?.reserveTokens,
+    compactionKeepRecentTokens: compaction?.keepRecentTokens,
+    httpProxy, httpProxyHasCredentials,
+    httpIdleTimeoutMs: manager.getHttpIdleTimeoutMs?.(),
+    defaultTools: manager.getDefaultTools?.() ?? null,
     defaultProvider: manager.getDefaultProvider(),
     defaultModel: manager.getDefaultModel(),
     defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
@@ -80,6 +99,9 @@ export async function updatePiSettings(
   payload: PiSettingsUpdate,
   storage?: PiSettingsStorage,
 ): Promise<PiSettingsSummary> {
+  validatePiHostPayload("settings.update", payload);
+  const advanced = advancedSettingsPatch(payload);
+  if (Object.keys(advanced).length && !storage) throw new Error("This Pi runtime does not expose locked settings storage");
   if (payload.externalEditor !== undefined && !storage) throw new Error("This Pi runtime does not expose locked settings storage");
   if (payload.externalEditor !== undefined) normalizedExternalEditor(payload.externalEditor);
   const provider = payload.defaultProvider?.trim();
@@ -111,9 +133,49 @@ export async function updatePiSettings(
     manager.setFollowUpMode(mode);
   }
   await manager.flush();
+  const failure = manager.drainErrors?.()[0];
+  if (failure) throw failure.error;
   if (payload.externalEditor !== undefined && storage) {
     persistExternalEditorSetting(storage, payload.externalEditor);
     await manager.reload?.();
   }
+  if (Object.keys(advanced).length && storage) {
+    storage.withLock("global", (current) => {
+      const parsed = current?.trim() ? JSON.parse(current.replace(/^\uFEFF/, "")) : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Pi user settings must contain a JSON object");
+      for (const [key, value] of Object.entries(advanced)) {
+        if (value === null) delete parsed[key];
+        else parsed[key] = typeof value === "object" && !Array.isArray(value) ? { ...parsed[key], ...value } : value;
+      }
+      return JSON.stringify(parsed, null, 2);
+    });
+    await manager.reload?.();
+  }
   return summarizePiSettings(manager);
+}
+
+/** Only Pi settings keys, written through Pi's own lock; untouched keys survive. */
+export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  const retry: Record<string, unknown> = {};
+  const compaction: Record<string, unknown> = {};
+  if (payload.retryEnabled !== undefined) retry.enabled = payload.retryEnabled;
+  if (payload.retryMaxRetries !== undefined) retry.maxRetries = payload.retryMaxRetries;
+  if (payload.retryBaseDelayMs !== undefined) retry.baseDelayMs = payload.retryBaseDelayMs;
+  if (payload.compactionReserveTokens !== undefined) compaction.reserveTokens = payload.compactionReserveTokens;
+  if (payload.compactionKeepRecentTokens !== undefined) compaction.keepRecentTokens = payload.compactionKeepRecentTokens;
+  if (Object.keys(retry).length) patch.retry = retry;
+  if (Object.keys(compaction).length) patch.compaction = compaction;
+  if (payload.httpIdleTimeoutMs !== undefined) patch.httpIdleTimeoutMs = payload.httpIdleTimeoutMs;
+  if (payload.defaultTools !== undefined) patch.defaultTools = payload.defaultTools === null ? null : [...new Set(payload.defaultTools)];
+  if (payload.httpProxy !== undefined) {
+    const proxy = payload.httpProxy.trim();
+    if (proxy) {
+      let url: URL;
+      try { url = new URL(proxy); } catch { throw new Error("Use an absolute HTTP(S) proxy URL"); }
+      if (!new Set(["http:", "https:"]).has(url.protocol) || !url.hostname || url.hash || /[\r\n\0]/.test(proxy)) throw new Error("Use an absolute HTTP(S) proxy URL");
+    }
+    patch.httpProxy = proxy || null;
+  }
+  return patch;
 }

@@ -5,6 +5,14 @@
 
 ## 已接入
 
+### 命令、设置与 Extension 兼容
+
+- 手动压缩期间显示停止按钮，先调用 `abortCompaction()` 再调用 `abort()`。取消或失败后，暂存消息返回 Pi 队列，不会自动启动下一轮；长时间压缩不再受普通 IPC 的 60 秒超时限制。
+- `/model provider/model` 使用真实运行时目录（包括扩展稍后注册的 Provider）；不带 Provider 的 ID 必须唯一。`/export 路径` 保留空格，`.jsonl` 输出 JSONL，其余输出 HTML；显式路径进入带覆盖确认的系统保存窗口。原有 `/export jsonl`、`/export html` 仍可用。
+- Pi 设置 → 高级配置提供重试开关/次数/基础延迟、压缩预留/保留 Token、HTTP(S) 代理/空闲超时、默认工具。写入 Pi 自带锁定存储，保留未知及嵌套设置，既有代理凭据不传入 Renderer。项目覆盖仍优先；网络修改需重启，默认工具用于新会话，重试/压缩可通过 `/reload` 加载。
+- `SessionCapabilities.extensionShortcuts` 返回经过 Pi 原生冲突处理的扩展快捷键；`extensions.invokeShortcut` 先同步当前草稿，再以 Pi RPC context 执行处理器。`extensions.syncEditor` 按项目和会话镜像编辑文本，支持 `getEditorText`、`setEditorText`、`pasteToEditor`；模态窗口和输入法组合期间不触发扩展快捷键。
+- 扩展 `getAllThemes`、`getTheme`、`setTheme` 在 PiHost 中保留真实 Pi Theme 对象（含资源加载主题），只传递校验后的颜色和浅深色信息。主题覆盖按会话隔离，同时作用于工作区与浮层，可通过顶栏主题按钮清除。状态、文本 Widget、通知会移除终端 ANSI 控制符。
+
 | Pi 能力 | PiDeck 入口 | 当前实现 |
 | --- | --- | --- |
 | 项目发现、浏览与移除 | 左侧项目树；多个项目可同时展开，单击项目只切换自身展开状态，右键项目可从列表移除；560px 以下通过顶部按钮打开带焦点约束的会话抽屉，并将背景设为 inert | `SessionManager.listAll()` + Main 有序/隐藏 `cwd` 清单 → `projects.list` / `projects.remove`；移除不删除项目文件或 Pi Session |
@@ -84,7 +92,7 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 
 - Extension UI 的 select、confirm、input、editor、notify，以及可序列化的状态、工作文案/可见性/动画、隐藏思考标签、文本 Widget、标题与编辑器文本；TUI 组件工厂无法映射时会明确提示，不再静默失效。
 - Pi Package install/remove/update/config 管理器；快捷设置提供唯一入口。
-当前仍有边界：Extension 的 TUI 专属 `custom` 组件、主题/Widget/Footer/Header 等函数无法跨 PiHost 与 Renderer 直接传递组件实例，暂不伪装成完整等价实现。PiDeck 不嵌入 Pi CLI 的独立 CLI 面板，命令执行统一通过 Pi Agent 完成。
+当前仍有边界：TUI 专属 `custom`、组件 Widget/Footer/Header、terminal input、同步 editor component 和 autocomplete provider 不能跨进程传递组件实例，尚未实现桌面组件映射；调用会明确提示改用 Pi CLI 或标准桌面对话框。实时编辑文本和主题颜色接口已接入，但不模拟终端布局。PiDeck 不嵌入独立 CLI 面板，单独的兼容入口仍委托给 Pi 官方 `main()`。
 
 任务基线统一 diff 审查已经接入。逐块接受/撤销及 Monaco 可编辑合并流程仍未实现；在获得安全的 Pi/桌面映射前，PiDeck 不会把这些操作声明为已支持。
 
