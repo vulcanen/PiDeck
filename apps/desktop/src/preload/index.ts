@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppLanguage, ApplicationMenuRequest, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PiSettingsUpdate, PromptImage, QueueDelivery, QueueMode, WindowTheme } from "@pideck/contracts";
+import type { AppLanguage, ApplicationMenuRequest, PermissionMode, PiDeckRuntimeEvent, PideckBridge, PiPackageResourceType, PiSettingsUpdate, PromptImage, QueueDelivery, QueueMode, ScopedModelSelection, WindowTheme } from "@pideck/contracts";
 
 const confirmCloseListeners = new Map<(enabled: boolean) => void, (event: Electron.IpcRendererEvent, enabled: boolean) => void>();
 
@@ -30,6 +30,7 @@ const bridge: PideckBridge = {
     list: (preferredCwd?: string) => ipcRenderer.invoke("projects:list", preferredCwd),
     chooseDirectory: () => ipcRenderer.invoke("projects:choose-directory"),
     remove: (cwd: string) => ipcRenderer.invoke("projects:remove", cwd),
+    trustStatus: (cwd: string) => ipcRenderer.invoke("projects:trust-status", cwd),
     setTrust: (cwd: string, trusted: boolean) => ipcRenderer.invoke("projects:set-trust", cwd, trusted),
   },
   sessions: {
@@ -53,9 +54,14 @@ const bridge: PideckBridge = {
   },
   models: {
     list: () => ipcRenderer.invoke("models:list"),
+    refresh: () => ipcRenderer.invoke("models:refresh"),
   },
   workspace: {
     snapshot: (cwd: string) => ipcRenderer.invoke("workspace:snapshot", cwd),
+  },
+  input: {
+    keybindings: (cwd?: string) => ipcRenderer.invoke("input:keybindings", cwd),
+    externalEdit: (content: string, cwd?: string) => ipcRenderer.invoke("input:external-edit", content, cwd),
   },
   providers: {
     list: () => ipcRenderer.invoke("providers:list"),
@@ -72,7 +78,8 @@ const bridge: PideckBridge = {
     abort: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:abort", taskId, cwd),
     setThinkingLevel: (taskId: string, level: string, cwd?: string) => ipcRenderer.invoke("agent:set-thinking-level", taskId, level, cwd),
     setModel: (taskId: string, providerId: string, modelId: string, cwd?: string) => ipcRenderer.invoke("agent:set-model", taskId, providerId, modelId, cwd),
-    setScopedModels: (taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => ipcRenderer.invoke("agent:set-scoped-models", taskId, modelIds, persist, cwd),
+    cycleModel: (taskId: string, direction: "forward" | "backward", cwd?: string) => ipcRenderer.invoke("agent:cycle-model", taskId, direction, cwd),
+    setScopedModels: (taskId: string, models: ScopedModelSelection[] | null, persist?: boolean, cwd?: string) => ipcRenderer.invoke("agent:set-scoped-models", taskId, models, persist, cwd),
     queue: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:queue", taskId, cwd),
     setQueueModes: (taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string) => ipcRenderer.invoke("agent:set-queue-modes", taskId, modes, cwd),
     clearQueue: (taskId: string, cwd?: string) => ipcRenderer.invoke("agent:clear-queue", taskId, cwd),
@@ -83,6 +90,7 @@ const bridge: PideckBridge = {
   settings: {
     get: (cwd?: string) => ipcRenderer.invoke("settings:get", cwd),
     update: (settings: PiSettingsUpdate, cwd?: string) => ipcRenderer.invoke("settings:update", settings, cwd),
+    chooseExternalEditor: () => ipcRenderer.invoke("settings:choose-external-editor"),
   },
   extensions: {
     resolveUi: (requestId: string, value: string | boolean | undefined) => ipcRenderer.invoke("extension-ui:resolve", requestId, value),
@@ -93,6 +101,8 @@ const bridge: PideckBridge = {
     remove: (source: string, local?: boolean, cwd?: string) => ipcRenderer.invoke("packages:remove", source, local, cwd),
     update: (source?: string, cwd?: string) => ipcRenderer.invoke("packages:update", source, cwd),
     configure: (source: string, enabled: boolean, local?: boolean, cwd?: string) => ipcRenderer.invoke("packages:configure", source, enabled, local, cwd),
+    configureResource: (source: string, type: PiPackageResourceType, resourcePath: string, enabled: boolean, local?: boolean, cwd?: string) => ipcRenderer.invoke("packages:configure-resource", source, type, resourcePath, enabled, local, cwd),
+    checkUpdates: (cwd?: string) => ipcRenderer.invoke("packages:check-updates", cwd),
   },
   events: {
     subscribe: (listener: (event: PiDeckRuntimeEvent) => void) => {

@@ -9,7 +9,7 @@ PiDeck documentation must reflect the current code and the capabilities of the c
 1. When the project structure changes, update the affected documents in the same change:
    - `README.md`: entry points, how to run, project positioning.
    - `docs/architecture.en.md`: process boundaries, directory structure, dependency direction, runtime topology.
-   - `docs/pi-cli-feature-matrix.en.md`: the actual mapping from Pi capabilities to UI/command palette/compatibility channels.
+   - `docs/pi-cli-feature-matrix.en.md`: the actual mapping from Pi capabilities to UI/Quick settings/compatibility channels.
    - `docs/product-plan.en.md`: the current implementation baseline and unimplemented plans.
    - English docs are the primary reference; keep the `docs/*.zh-CN.md` versions in sync.
 2. When a `packages/contracts` IPC command, event, DTO, or field changes, update the architecture doc, the feature matrix, and the corresponding runtime validation checklist.

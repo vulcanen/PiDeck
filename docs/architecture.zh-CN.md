@@ -29,10 +29,12 @@ Sandboxed React Renderer
 
 当前实现使用普通 Node `child_process.fork` 和 `process.send/process.on("message")`，不是 Electron `utilityProcess`，也不是 MessagePort。fork 目标是 Electron 自身可执行文件并带 `ELECTRON_RUN_AS_NODE=1`，即 Electron 内置 Node：内置 Node 满足 Pi SDK engines 时不存在 WebIDL/undici 兼容问题，且能透明读取 asar 归档，因此 node_modules 全部打包进 asar，仅原生 `.node` 模块与 `apps/desktop/assets` 经 `asarUnpack` 解包。若内置 Node 低于 Pi SDK 要求，则必须改用外部系统 Node 并整体解包 node_modules（系统 Node 不能读取 asar）。
 
+无头 `pideck-cli` / `npm run cli -- <参数>` 使用独立直连路径：`packages/pi-host/dist/cli.js` 加载选定 Pi SDK 并调用 Pi 官方 `main(args)`。Print、JSON、RPC、stdin JSONL 与 Auth Print 保留 Pi 自己的 stdout/stderr 和协议语义，不经过 Renderer/Main IPC 拓扑。
+
 两个运行时定位入口：
 
 - `PIDECK_NODE_EXECUTABLE`：显式指定 PiHost 使用的 Node 可执行文件，缺省为 `process.execPath`（Electron 内置 Node）。
-- `PIDECK_PI_MODULE`：显式指定 Pi SDK 入口文件。打包版本否则必须使用 `app.asar` 内由锁文件固定的 SDK；开发版本还可发现全局 Pi 安装。
+- `PIDECK_PI_MODULE`：显式指定 Pi SDK 入口文件。打包版本否则必须使用 `app.asar` 内由锁文件固定的 SDK；开发版本先解析仓库锁定依赖，再以全局 Pi 安装为兜底，避免无关的旧版全局 CLI 静默改变 API 面。
 
 `packages/pi-host` 同时向 `process.send` 和 `worker_threads` 的 `parentPort` 投递消息，因此进程宿主方式可替换，但当前 Main 只使用 `child_process.fork`。
 
@@ -46,11 +48,11 @@ Main 只负责：
 - 启动、监听和停止 PiHost。生命周期回调绑定到触发它的进程实例，已替换 Host 的迟到 `exit` 不会拆掉新 Host；重启仅在真实 `runtime.status` IPC 往返成功后完成。
 - 当显式代理环境变量与 Pi `httpProxy` 都未设置时，通过 Main/PiHost 内部桥按每个请求 URL 调用 Electron 解析操作系统代理。
 - 在 Renderer IPC 与 PiHost 请求之间做编排。
-- 为请求设置超时（默认 60s；`providers.login`、`sessions.share` 15min，`packages.*` 10min；`agent.prompt` 不设超时——其完成由 `agent_settled` 事件标示，而非 RPC 响应），处理 Host 断开。
+- 为请求设置超时（默认 60s；`providers.login`、`sessions.share` 15min，`packages.*` 10min；`agent.prompt` 与 `input.externalEdit` 因完成由外部/事件驱动而不设固定超时），处理 Host 断开。
 - 通过系统浏览器打开经过协议校验的 HTTP(S) URL，并拒绝窗口内新开链接。
 - 在 Electron `userData/projects.json` 中记录项目目录引用、隐藏引用及其显示顺序。
 - 构建应用菜单并按 `app:set-language` 切换菜单语言，文案取自 `@pideck/i18n`。
-- 打开目录选择、会话导入等原生对话框。
+- 打开目录选择、会话导入和外部编辑器应用选择等原生对话框。Main 会校验所选可执行文件（或 macOS `.app`），只向 Renderer 返回兼容 Pi 的命令字符串，不开放通用文件系统访问。
 - Windows 使用 Electron Window Controls Overlay 保留主题化顶栏。“工作台”右侧提供编辑/查看/帮助入口，复用原生应用菜单；1100px 及以下收为“菜单”按钮。560px 及以下将操作按钮移至第二行，避开原生 48px 窗口控制区；设置抽屉位于完整工具栏下方，常规为 48px，极窄 Windows 布局为 96px。macOS 继续使用系统菜单栏。`app:set-window-theme` 同步原生背景和控制按钮颜色。
 - `app:popup-menu` 是经发送方校验的 Main 专用 IPC，由 `PideckBridge.app.popupMenu({ menu, x, y })` 暴露。严格契约仅允许 all/edit/view/help 和有界有限 CSS 像素坐标；Main 按稳定 ID 复用现有原生菜单，按缩放比例换算并限制坐标，关闭后返回。Renderer 不传可执行动作或菜单模板。鼠标打开保留编辑选区；键盘打开前恢复原内容焦点，关闭后返回触发按钮；失败显示本地化重试/重启提示。
 - macOS 上设置 Dock 图标，并尝试加载 `pideck-miniwindow.node` 定制最小化窗口图标；加载失败只降级告警。
@@ -70,15 +72,18 @@ Preload 通过 `contextBridge` 暴露 capability-scoped 的 `window.pideck`。Re
 PiHost 负责：
 
 - 编排 `@pideck/pi-adapter`、SessionManager、AgentSession 和 ModelRuntime。
+- 通过 Pi `ProjectTrustStore` 与 `hasTrustRequiringProjectResources()` 计算项目 Pi 资源授权，并用项目保存、父目录继承或全局默认的最终决定创建项目 `SettingsManager` 与 `ResourceLoader`。
 - 读取/恢复 Pi Session，并通过 `SessionManager.appendCustomEntry()` 写入 `pideck.execution-run` 运行元数据。
 - 转发 Agent event、Approval event、Auth event 和 Extension UI 请求。
+- 持有 Pi `AgentSessionRuntime`，让 Extension command 获得 RPC mode、官方 command-context actions、Session 替换/重绑定、诊断、异步错误、shutdown 请求，以及可取消/有超时的 Extension UI 请求。
 - 执行 Pi built-in tools、Bash、Provider 登录、Pi package 管理、权限模式读写和会话操作。
+- 读取 Pi 生效的 keybindings 并调用 Pi 配置的外部编辑器 helper；Pi 设置页读取当前生效命令与来源，并通过 Pi 自带的锁定 `FileSettingsStorage` 写入用户命令。Pi 0.84.4 会先按空格拆分编辑器命令，因此在 macOS/Linux 上，PiHost 会把所选且带引号的绝对路径临时替换为不含空格的符号链接别名，调用同一个 Pi helper 后立即删除别名。Renderer 不直接启动编辑器，也不读取 Pi 配置文件。
 - 在报告 `runtime.status=connected` 前初始化 Pi 自带的代理感知 HTTP dispatcher，使 OAuth Token 交换、模型请求和 Provider HTTP 调用使用同一条 PiHost 网络路径。npm、pnpm、git 等 package manager 子进程仍使用各自的代理配置。
 - 将跨进程数据转换成可 JSON 序列化的响应（`jsonSafe`），并对队列中的图片附件做旁路保存，避免 `promoteQueue` 丢附件。
 - 以规范化 `cwd` + Pi 会话 ID 为每个内存 SessionManager、AgentSession、队列、审批和生命周期资源划分作用域。即使导入 JSONL 在不同项目保留同一 ID，删除、中止和队列操作仍保持项目隔离。
 - 以异步外部进程和有界超时执行 Git 工作区检查及 `gh` 分享，避免阻塞 PiHost IPC 循环。
 
-Pi SDK 的动态定位、加载和模型/Session 适配集中在 `packages/pi-adapter`。Pi 权限配置、Extension UI 绑定、审批等待和策略切换集中在 `packages/permission-engine`。两者都不创建第二套 Agent、Provider 或 Session 存储；权威来源仍是 Pi SDK 和 `@gotgenes/pi-permission-system`。
+Pi SDK 的动态定位、加载、模型/Session 适配，以及对 Pi 同版本 keybinding、settings-storage、external-editor 模块的兼容守卫集中在 `packages/pi-adapter`。Pi 权限配置、Extension UI 绑定、审批等待和策略切换集中在 `packages/permission-engine`。两者都不创建第二套 Agent、Provider 或 Session 存储；权威来源仍是 Pi SDK 和 `@gotgenes/pi-permission-system`。独立的 `packages/pi-host/src/cli.ts` 只透明调用 Pi 官方 `main()`，不进入桌面 IPC 协议。
 
 代理优先级依次为显式 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`、Pi 全局 `httpProxy` 设置、Electron 的跨平台系统代理解析结果。`pi-adapter` 先调用与当前 Pi 版本匹配的 `configureHttpDispatcher()`；仅在没有显式/Pi 代理时，才安装一层轻量 dispatcher，为每个请求 URL 请求 Main 执行 `session.resolveProxy(url)`。因此 PAC、绕过列表和按域规则仍保持 URL 感知，不会被压缩为启动时快照。解析失败会拒绝请求，不会静默回退直连；dispatcher 缺失或 API 不兼容时，PiHost 会先发送脱敏的 `runtime.error` 再退出。
 
@@ -107,7 +112,7 @@ PiDeck/
 │        ├─ app-view.tsx                  # 工作区壳层与全局布局
 │        ├─ app-sidebar.tsx               # 项目树、Session 列表与侧栏交互
 │        ├─ app-conversation.tsx          # 会话 pane 缓存、对话区与 Composer 组合
-│        ├─ app-overlays.tsx              # 命令面板、对话框等全局浮层组合
+│        ├─ app-overlays.tsx              # 快捷设置、对话框等全局浮层组合
 │        ├─ use-app-controller.tsx        # 页面状态与动作编排
 │        ├─ use-session-data.ts           # Session/能力/消息加载
 │        ├─ use-runtime-events.ts         # PiHost 运行时事件状态归一化
@@ -136,8 +141,7 @@ PiDeck/
 │           ├─ change-review.tsx          # 单轮文件变更审查面板/抽屉
 │           ├─ pane-resize-handle.tsx     # 指针/键盘无障碍分栏手柄
 │           ├─ composer.tsx               # 输入区、建议与队列投递
-│           ├─ command-palette.tsx        # 命令面板
-│           ├─ quick-settings.tsx         # 统一快捷设置入口
+│           ├─ quick-settings.tsx         # 分层设置、任务操作与可搜索 Pi 命令
 │           ├─ application-menu.tsx       # Windows 顶栏原生菜单入口
 │           ├─ dialogs.tsx                # 重命名/信任/恢复/扩展 UI 等对话框
 │           ├─ approval-card.tsx          # 工具审批卡
@@ -207,6 +211,8 @@ ui-system → React + focus-trap
 
 Renderer 图片预览仍只是非权威缓存。`image-cache.ts` 使用轻量 `idb` Promise 封装，同时保留现有 `pideck-cache` 数据库、`snapshots` object store、structured-clone 数据和值写入失败后的 `localStorage` fallback。Modal 焦点行为在 `ui-system` 中基于 `focus-trap` 统一实现；PiDeck 保留自己的对话框结构和应用壳层 inert 边界，由库负责嵌套 trap 栈、动态 tabbable 发现、Escape 路由与关闭后的焦点恢复。
 
+快捷设置中的 Pi 命令子页与 Composer 模型选择器使用 `cmdk`，由同一个经过测试的交互基元负责筛选、活动选项语义、方向键导航、滚动与 Enter 执行；PiDeck 仍只负责 Pi 命令路由和模型切换副作用。不执行选项动作的普通筛选使用 Chromium 原生 search input；会话消息搜索仍保持 Session 数据感知，因为浏览器页面搜索无法读取已折叠且未挂载的历史消息。
+
 Renderer 的会话时间线由 `app-conversation.tsx` 与 `ui/message-timeline.tsx` 组合，采用**普通文档流列表 + 早期消息折叠**，不使用虚拟列表。原因是 Mermaid、KaTeX、语法高亮都是异步定高，虚拟列表的测量-定位循环与之根本冲突（跳动、重叠、回弹）；改为只挂载最近 `FOLD_WINDOW = 200` 条消息，更早的消息折叠在"显示更早消息"按钮后，每次展开 `FOLD_STEP = 200` 条。防跳动依赖浏览器原生 scroll anchoring：`.conversation-scroll` 必须保持 `overflow-anchor: auto`（虚拟列表时代的 `none` 会关闭该机制）。
 
 单轮文件审查由 PiHost 的 `session-change-review.ts` 与 `session-change-review-store.ts` 负责。`agent_start` 捕获 Git 工作树基线，非 Steering 的 Follow-up 复用一个边界检查拆分轮次，Steering 保持同组；edit/write/Bash/PowerShell 后的运行中预览会去抖，过期扫描通过 `AbortController` 取消。settlement 执行权威比较并覆盖本轮提交后的 HEAD 变化。候选路径、基线内容、文件、单/总 patch、Git 超时均有硬上限，重命名、可执行模式、二进制、超大与截断状态显式建模；同一执行时段的外部修改无法与 Pi 修改可靠区分，UI 因此明确标注为“执行期间工作树变化”。
@@ -225,14 +231,15 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 - `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
-- `projects.list/chooseDirectory/remove/setTrust`
+- `projects.list/chooseDirectory/remove/trustStatus/setTrust`
 - `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
-- `models.list`
+- `models.list/refresh`
 - `workspace.snapshot`
+- `input.keybindings/externalEdit`
 - `providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl`
-- `agent.prompt/executeBash/abort/setThinkingLevel/setModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
-- `sessions.compact/reload`、`settings.get/update`、`extensions.resolveUi`
-- `packages.list/install/remove/update/configure`
+- `agent.prompt/executeBash/abort/setThinkingLevel/setModel/cycleModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
+- `sessions.compact/reload`、`settings.get/update/chooseExternalEditor`、`extensions.resolveUi`
+- `packages.list/install/remove/update/configure/configureResource/checkUpdates`
 - `approvals.resolve`
 - `permissions.status/setMode`
 
@@ -243,7 +250,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 - `sessions.remove` 是 `sessions.delete` 的别名，两者走同一个 `sessions:delete` IPC 通道。
 - `providers.resolveAuth` / `providers.openAuthUrl` 对应 IPC 通道 `providers:auth-response` / `providers:open-auth-url`；只有前者转发到 PiHost 命令 `providers.auth-response`，后者由 Main 直接用系统浏览器打开。
-- `sessions.changelog` 对应 PiHost 命令 `app.changelog`；`projects.list/chooseDirectory/remove` 由 Main 结合 `projects.json` 与 PiHost `projects.list`、`sessions.list` 组合完成，没有一一对应的 Host 命令。
+- `sessions.changelog` 对应 PiHost 命令 `app.changelog`；`projects.list/chooseDirectory/remove` 由 Main 结合 `projects.json` 与 PiHost `projects.list`、`sessions.list` 组合完成，没有一一对应的 Host 命令。`projects.trustStatus/setTrust` 对应 PiHost 中 Pi 的 `ProjectTrustStore`；PiHost 计算项目保存、父目录继承或全局默认的最终决定，并将其传给每一次项目 `SettingsManager` 和 `ResourceLoader` 创建。
 
 如果文档与 `packages/contracts` 不一致，以 contracts 和实现为准，文档必须在同一个变更中更新。
 
@@ -274,13 +281,13 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 - Pi Session / `cwd` → 左侧项目树、项目内会话列表与中央对话。
 - Pi ModelRuntime → Provider 设置、模型选择和思考等级。
-- Pi slash command / Prompt / Skill catalog → Composer 建议和命令面板。
+- Pi slash command / Prompt / Skill catalog → Composer 建议和快捷设置中的可搜索 Pi 命令子页。
 - Pi Agent event → 流式回复、工具过程、审批和运行状态。
-- Pi Session export/compact → 会话操作和命令面板入口；Session Tree 的 `/fork`、`/clone`、`/tree` 仍列入待支持。
+- Pi Session export/compact → 快捷设置中的会话操作；Session Tree 的 `/fork`、`/clone`、`/tree` 仍列入待支持。
 - Pi Agent steering/follow-up queue → Composer 队列面板、投递方式、图片、提升、编辑、删除和批处理模式。自动压缩期间输入进入 Pi 原生队列；手动压缩结束时没有活跃 Agent run，因此 PiHost 使用按 Session 隔离的暂存队列，压缩后启动第一条并将其余消息按序交回 Pi。两条路径共用稳定 ID 的队列操作，预检门闩继续阻止并发直接 prompt。
-- Pi Package 管理 → 命令面板中的 Pi packages 设置面板。
-- 顶栏齿轮 / `Ctrl/Cmd + ,` → 快捷设置，复用已有 Pi 设置、Provider、包管理、模型范围、信任和快捷键界面；Provider 认证使用独立大脑图标。所有设置抽屉在 macOS 与 Windows 上均从 `--titlebar-height` 下方展开。
-- 命令面板点击/回车通过 `renderer/palette-command.ts` 分流：内置命令调用已有桌面处理器，运行时标记 `source: "extension"` 的命令调用 Pi prompt 桥，Prompt/Skill 保留为可编辑模板。可选来源元数据仅为 `SessionCapabilities` 增加字段，不新增 IPC 端点。命令面板/快捷入口卸载后，后续弹层通过共享的工作区焦点上下文恢复到原入口。
+- Pi Package 管理 → 快捷设置中的 Pi packages 设置面板。
+- 顶栏齿轮 / `Ctrl/Cmd + ,` 打开精简的快捷设置首页；任务操作与 Pi 命令进入子页，`Ctrl/Cmd + K` 可直接打开 Pi 命令子页；原顶栏 Provider 和独立命令入口已移除。所有设置抽屉在 macOS 与 Windows 上均从 `--titlebar-height` 下方展开。
+- Pi 命令子页点击/回车通过 `renderer/palette-command.ts` 分流：内置命令调用已有桌面处理器，运行时标记 `source: "extension"` 的命令调用 Pi prompt 桥，Prompt/Skill 保留为可编辑模板；固定操作会过滤等价 slash command，避免同页出现重复行。可选来源元数据仅为 `SessionCapabilities` 增加字段，不新增 IPC 端点。入口卸载后，后续弹层通过共享的工作区焦点上下文恢复到原入口。
 - Pi 权限系统模式 → 输入框下方的权限等级控件。
 - Pi workspace 文件列表 → Composer 的 `@file` 引用候选。`workspace.snapshot` 同时返回 git `changes`，但当前 UI 没有独立的 Files / Changes 面板，该字段暂未消费。
 
@@ -310,6 +317,7 @@ sessions.runMetadata
 sessions.changeReviews
 sessions.changeReview（不存在的 ID 返回 null）
 sessions.capabilities
+agent.cycleModel
   # 检查注册的扩展命令携带 source: "extension"。
 workspace.snapshot
 ```

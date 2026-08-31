@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, QueueDelivery, QueueMode, ProviderSummary, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
+import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, PiKeybindings, ProjectTrustStatus, QueueDelivery, QueueMode, ProviderSummary, ScopedModelSelection, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
 import { deriveSessionTitle, isDefaultSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
@@ -9,6 +9,7 @@ import { createDefaultTaskUiState, sortTasksByUpdatedAt, textFromMessage } from 
 import { useRuntimeEvents } from "./use-runtime-events";
 import { useSessionData } from "./use-session-data";
 import { useChangeReview } from "./use-change-review";
+import { ComposerHistory } from "./composer-history";
 import { useConversationScroll } from "./use-conversation-scroll";
 import { useGlobalShortcuts } from "./use-global-shortcuts";
 import { useSentImagesCache } from "./use-sent-images-cache";
@@ -17,6 +18,7 @@ import { usePreferences } from "./use-preferences";
 import { useStreamDeltas } from "./use-stream-deltas";
 import { loadQueueForCurrentTask } from "./queue-load";
 import { activatePaletteCommand, type PaletteCommand } from "./palette-command";
+import { firstPiKeybinding, matchesPiKeybinding } from "./pi-keybindings";
 
 export function useAppController() {
 
@@ -52,8 +54,14 @@ export function useAppController() {
   const [composerImages, setComposerImages] = useState<ImageAttachment[]>([]);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [piKeybindings, setPiKeybindings] = useState<PiKeybindings>({});
+  const [externalEditing, setExternalEditing] = useState(false);
+  const [transcriptSearchOpen, setTranscriptSearchOpen] = useState(false);
+  const [transcriptSearchQuery, setTranscriptSearchQuery] = useState("");
+  const [transcriptSearchRequest, setTranscriptSearchRequest] = useState<{ serial: number; direction: "forward" | "backward"; reset: boolean }>({ serial: 0, direction: "forward", reset: true });
+  const [transcriptSearchResult, setTranscriptSearchResult] = useState({ current: 0, total: 0 });
   const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
+  const [quickSettingsPage, setQuickSettingsPage] = useState<"root" | "commands">("root");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [piSettingsOpen, setPiSettingsOpen] = useState(false);
   const [providerFocus, setProviderFocus] = useState<string | null>(null);
@@ -74,6 +82,9 @@ export function useAppController() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [trustOpen, setTrustOpen] = useState(false);
+  const [trustProject, setTrustProject] = useState<ProjectSummary | null>(null);
+  const [trustStatus, setTrustStatus] = useState<ProjectTrustStatus | null>(null);
+  const [trustBusy, setTrustBusy] = useState(false);
   const [scopedModelsOpen, setScopedModelsOpen] = useState(false);
   const [thinkingLevel, setThinkingLevel] = useState("off");
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(["off"]);
@@ -104,6 +115,7 @@ export function useAppController() {
   const modelSelectionRequestRef = useRef(0);
   const initialLoadStartedRef = useRef(false);
   const queueEditDraftRef = useRef<{ text: string; images: ImageAttachment[]; delivery: QueueDelivery } | null>(null);
+  const composerHistoryRef = useRef(new ComposerHistory());
   const handlePreviewImage = useCallback((image: PreviewImage) => setPreviewImage(image), []);
   const openImageContextMenu = useCallback((event: React.MouseEvent, image: PreviewImage) => {
     event.preventDefault();
@@ -140,6 +152,15 @@ export function useAppController() {
       return { ...message, content: [{ type: "text", text: sent.text }, ...sent.images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] };
     });
   }, [activeTaskId, rawMessages, sentImagesByTask]);
+  const promptHistory = useMemo(() => {
+    const history: string[] = [];
+    for (const message of messages) {
+      if (message?.role !== "user") continue;
+      const text = textFromMessage(message).trim();
+      if (text && history[history.length - 1] !== text) history.push(text);
+    }
+    return history;
+  }, [messages]);
   const messageLoad = activeTask ? messageLoads[activeTask.id] ?? { status: "idle" as const } : { status: "idle" as const };
   const activeProject = projects.find((project) => project.cwd === projectCwd) ?? null;
   const handleChangeReviewError = useCallback((error: unknown) => showNotice(`${t.changeReviewLoadFailed}: ${error instanceof Error ? error.message : String(error)}`), [showNotice, t.changeReviewLoadFailed]);
@@ -187,22 +208,16 @@ export function useAppController() {
 
   function openProviderSettings(providerId?: string) {
     setQuickSettingsOpen(false);
-    setPaletteOpen(false);
     setPreviewImage(null);
     setProviderFocus(providerId ?? null);
     setSettingsOpen(true);
   }
 
-  function openCommandPalette() {
-    setQuickSettingsOpen(false);
+  function openQuickSettings(page: "root" | "commands" = "root") {
     setSettingsOpen(false);
     setProviderFocus(null);
     setPreviewImage(null);
-    setPaletteOpen(true);
-  }
-
-  function openQuickSettings() {
-    setPaletteOpen(false);
+    setQuickSettingsPage(page);
     setQuickSettingsOpen(true);
   }
 
@@ -447,6 +462,16 @@ export function useAppController() {
       if (!project) return;
       setProjects((current) => [project, ...current.filter((item) => item.cwd !== project.cwd)]);
       await selectProject(project);
+      try {
+        const status = await window.pideck.projects.trustStatus(project.cwd);
+        if ((status.source === "default" || status.source === "not-required") && status.defaultPolicy === "ask") {
+          setTrustProject(project);
+          setTrustStatus(status);
+          setTrustOpen(true);
+        }
+      } catch (error) {
+        showNotice(`${t.trustStatusFailed}: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
     } catch (error) {
       showNotice(`${t.projectOpenFailed}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -572,11 +597,48 @@ export function useAppController() {
     refreshWorkspace,
     onQueueActivity: followLatest,
     onExtensionEditorText: (text: string) => { setComposer(text); setSuggestionMode(null); },
+    onSessionReplaced: (task: TaskSummary) => {
+      rememberOptimisticTask(task);
+      setProjectTasksByCwd((current) => ({
+        ...current,
+        [task.projectId]: sortTasksByUpdatedAt([task, ...(current[task.projectId] ?? []).filter((item) => item.id !== task.id)]),
+      }));
+      setExpandedProjectCwds((current) => current.includes(task.projectId) ? current : [...current, task.projectId]);
+      if (task.projectId === projectCwd) {
+        setTasks((current) => sortTasksByUpdatedAt([task, ...current.filter((item) => item.id !== task.id)]));
+        setActiveTask(task);
+        return;
+      }
+      setActiveTask(null);
+      setCapabilities(null);
+      setActiveModel(null);
+      setContextUsage(undefined);
+      setQueueState(null);
+      setWorkspace(null);
+      setProjectSwitching(true);
+      void loadProjectData(task.projectId, task.id, true, task, true)
+        .finally(() => setProjectSwitching(false));
+      void window.pideck.projects.list(task.projectId).then(setProjects).catch(() => undefined);
+    },
     onChangeReviewUpdated: changeReview.applyUpdatedReview,
     onChangeReviewStatus: changeReview.applyReviewStatus,
   });
 
   useEffect(() => { void window.pideck.runtime.status().then(setRuntimeStatus).catch(() => setRuntimeStatus("disconnected")); void window.pideck.permissions.status().then(setPermissionStatus).catch(() => undefined); }, []);
+
+  useEffect(() => {
+    if (runtimeStatus !== "connected") return;
+    void window.pideck.input.keybindings(projectCwd || undefined).then(setPiKeybindings).catch((error) => {
+      showNotice(`Pi keybindings: ${error instanceof Error ? error.message : String(error)}`, "error");
+    });
+  }, [projectCwd, runtimeStatus, showNotice]);
+
+  useEffect(() => {
+    if (activeTaskId) composerHistoryRef.current.resetNavigation(activeTaskId);
+    setTranscriptSearchOpen(false);
+    setTranscriptSearchQuery("");
+    setTranscriptSearchResult({ current: 0, total: 0 });
+  }, [activeTaskId]);
 
   // The timeline owns the real scroll state. Reset only the transient affordance
   // when the active task changes; the new timeline will publish its restored
@@ -585,7 +647,6 @@ export function useAppController() {
 
   useGlobalShortcuts({
     searchInputRef,
-    paletteOpen,
     settingsOpen,
     piSettingsOpen,
     quickSettingsOpen,
@@ -605,8 +666,10 @@ export function useAppController() {
     contextMenu: Boolean(contextMenu),
     projectContextMenu: Boolean(projectContextMenu),
     imageContextMenu: Boolean(imageContextMenu),
-    onCommandPalette: openCommandPalette,
-    onQuickSettings: openQuickSettings,
+    piKeybindings,
+    onPiCommands: () => openQuickSettings("commands"),
+    onTranscriptSearch: () => setTranscriptSearchOpen(true),
+    onQuickSettings: () => openQuickSettings(),
     onCreateTask: createTask,
     onCloseMenus: () => { setThinkingMenuOpen(false); setModelMenuOpen(false); setSuggestionMode(null); setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); },
   });
@@ -701,6 +764,7 @@ export function useAppController() {
   }
 
   function showHotkeys() {
+    const piBinding = (action: string) => (piKeybindings[action] ?? []).join(" / ") || "—";
     showCommandResult(t.hotkeysTitle, [
       `${shortcut("K")} — ${t.command}`,
       `${shortcut(",")} — ${t.quickSettings}`,
@@ -708,6 +772,11 @@ export function useAppController() {
       `Esc — ${t.cancel}`,
       `Enter — ${t.send}`,
       t.shiftEnter,
+      "",
+      `${piBinding("tui.altScreen.search")} — ${t.transcriptSearch}`,
+      `${piBinding("app.editor.external")} — ${t.externalEditor}`,
+      `${piBinding("app.model.select")} — ${t.chooseModel}`,
+      `${piBinding("app.thinking.cycle")} — ${t.chooseThinking}`,
     ].join("\n"));
   }
 
@@ -760,16 +829,52 @@ export function useAppController() {
     else showNotice(t.copyLastAssistantFailed);
   }
 
-  async function resolveTrust(trusted: boolean) {
-    if (!projectCwd) return showNotice(t.selectProjectFirst);
-    try { await window.pideck.projects.setTrust(projectCwd, trusted); setTrustOpen(false); showNotice(trusted ? t.trustProject : t.untrustProject); }
-    catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
+  async function openProjectTrust(project: ProjectSummary | null = activeProject) {
+    if (!project) return showNotice(t.selectProjectFirst);
+    try {
+      const status = await window.pideck.projects.trustStatus(project.cwd);
+      setTrustProject(project);
+      setTrustStatus(status);
+      setTrustOpen(true);
+    } catch (error) {
+      showNotice(`${t.trustStatusFailed}: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
   }
 
-  async function saveScopedModels(modelIds: string[] | null, persist: boolean) {
+  async function resolveTrust(trusted: boolean, project: ProjectSummary | null = trustProject ?? activeProject) {
+    if (!project || trustBusy) return showNotice(t.selectProjectFirst);
+    setTrustBusy(true);
+    let appliedNow = false;
+    let reloadError: unknown;
+    try {
+      const status = await window.pideck.projects.setTrust(project.cwd, trusted);
+      setTrustStatus(status);
+      if (activeTask && project.cwd === projectCwd && !isWorking) {
+        try {
+          const next = await window.pideck.sessions.reload(activeTask.id, project.cwd);
+          setCapabilities(next);
+          setMessageReload((current) => current + 1);
+          appliedNow = true;
+        } catch (error) {
+          reloadError = error;
+        }
+      }
+      setTrustOpen(false);
+      setTrustProject(null);
+      const action = trusted ? t.trustProject : t.untrustProject;
+      const timing = appliedNow ? t.trustAppliedNow : t.trustAppliesNextSession;
+      showNotice(`${action} · ${timing}${reloadError ? ` (${reloadError instanceof Error ? reloadError.message : String(reloadError)})` : ""}`);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      setTrustBusy(false);
+    }
+  }
+
+  async function saveScopedModels(models: ScopedModelSelection[] | null, persist: boolean) {
     if (!activeTask) return showNotice(t.noSessions);
     try {
-      await window.pideck.agent.setScopedModels(activeTask.id, modelIds, persist, projectCwd);
+      await window.pideck.agent.setScopedModels(activeTask.id, models, persist, projectCwd);
       setScopedModelsOpen(false);
       const next = await window.pideck.sessions.capabilities(activeTask.id, projectCwd);
       setCapabilities(next);
@@ -777,52 +882,53 @@ export function useAppController() {
     } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
-  async function handleBuiltinCommand(text: string): Promise<boolean> {
+  async function handleBuiltinCommand(text: string, onAccepted?: () => void): Promise<boolean> {
     const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text);
     if (!match) return false;
     const command = match[1].toLowerCase();
     const argument = match[2]?.trim() ?? "";
-    if (command === "login" || command === "logout") { openProviderSettings(argument || undefined); return true; }
-    if (command === "model") { setModelMenuOpen(true); setThinkingMenuOpen(false); return true; }
-    if (command === "thinking") {
-      if (!argument) { setThinkingMenuOpen(true); setModelMenuOpen(false); return true; }
+    let action: (() => unknown | Promise<unknown>) | null = null;
+    if (command === "login" || command === "logout") action = () => openProviderSettings(argument || undefined);
+    else if (command === "model") action = () => { setModelMenuOpen(true); setThinkingMenuOpen(false); };
+    else if (command === "thinking") action = async () => {
+      if (!argument) { setThinkingMenuOpen(true); setModelMenuOpen(false); return; }
       const requestedLevel = thinkingLevels.find((level) => level.toLowerCase() === argument.toLowerCase());
-      if (!requestedLevel) { showNotice(`${t.chooseThinking}: ${thinkingLevels.join(", ")}`); setThinkingMenuOpen(true); setModelMenuOpen(false); return true; }
+      if (!requestedLevel) { showNotice(`${t.chooseThinking}: ${thinkingLevels.join(", ")}`); setThinkingMenuOpen(true); setModelMenuOpen(false); return; }
       await chooseThinking(requestedLevel);
-      return true;
-    }
-    if (command === "compact") { await compactSession(argument || undefined); return true; }
-    if (command === "export") { await exportSession(argument.toLowerCase() === "jsonl" ? "jsonl" : "html"); return true; }
-    if (command === "new") { await createTask(); return true; }
-    if (command === "reload") {
-      if (!activeTask) { showNotice(t.noSessions); return true; }
+    };
+    else if (command === "compact") action = () => compactSession(argument || undefined);
+    else if (command === "export") action = () => exportSession(argument.toLowerCase() === "jsonl" ? "jsonl" : "html");
+    else if (command === "new") action = () => createTask();
+    else if (command === "reload") action = async () => {
+      if (!activeTask) { showNotice(t.noSessions); return; }
       try {
         const next = await window.pideck.sessions.reload(activeTask.id, projectCwd);
         setCapabilities(next);
         await loadInitialData();
         showNotice(t.sessionReloaded);
       } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
-      return true;
-    }
-    if (command === "import") { await importSession(); return true; }
-    if (command === "share") { await shareSession(); return true; }
-    if (command === "copy") { await copyLastAssistant(); return true; }
-    if (command === "name") { if (argument) await renameSession(argument); else if (activeTask) setRenameOpen(true); else showNotice(t.noSessions); return true; }
-    if (command === "session") { await showSessionInfo(); return true; }
-    if (command === "changelog") { try { showCommandResult(t.changelogTitle, await window.pideck.sessions.changelog()); } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); } return true; }
-    if (command === "hotkeys") { showHotkeys(); return true; }
-    if (command === "trust") { if (/^(?:yes|true|trust|on)$/i.test(argument)) await resolveTrust(true); else if (/^(?:no|false|untrust|off)$/i.test(argument)) await resolveTrust(false); else setTrustOpen(true); return true; }
-    if (command === "resume") { setResumeOpen(true); return true; }
-    if (command === "quit") { await window.pideck.app.quit(); return true; }
-    if (command === "scoped-models") { if (!activeTask) showNotice(t.noSessions); else setScopedModelsOpen(true); return true; }
-    if (command === "settings") { setPiSettingsOpen(true); return true; }
+    };
+    else if (command === "import") action = () => importSession();
+    else if (command === "share") action = () => shareSession();
+    else if (command === "copy") action = () => copyLastAssistant();
+    else if (command === "name") action = async () => { if (argument) await renameSession(argument); else if (activeTask) setRenameOpen(true); else showNotice(t.noSessions); };
+    else if (command === "session") action = () => showSessionInfo();
+    else if (command === "changelog") action = async () => { try { showCommandResult(t.changelogTitle, await window.pideck.sessions.changelog()); } catch (error) { showNotice(error instanceof Error ? error.message : String(error)); } };
+    else if (command === "hotkeys") action = () => showHotkeys();
+    else if (command === "trust") action = async () => { if (/^(?:yes|true|trust|on)$/i.test(argument)) await resolveTrust(true); else if (/^(?:no|false|untrust|off)$/i.test(argument)) await resolveTrust(false); else await openProjectTrust(); };
+    else if (command === "resume") action = () => setResumeOpen(true);
+    else if (command === "quit") action = () => window.pideck.app.quit();
+    else if (command === "scoped-models") action = () => { if (!activeTask) showNotice(t.noSessions); else setScopedModelsOpen(true); };
+    else if (command === "settings") action = () => setPiSettingsOpen(true);
     const knownUiCommands = new Set(["fork", "clone", "tree"]);
-    if (knownUiCommands.has(command)) { showNotice(t.pendingPiCommands); return true; }
-    return false;
+    if (!action && knownUiCommands.has(command)) action = () => showNotice(t.pendingPiCommands);
+    if (!action) return false;
+    onAccepted?.();
+    await action();
+    return true;
   }
 
   async function selectPaletteCommand(command: PaletteCommand) {
-    setPaletteOpen(false);
     setQuickSettingsOpen(false);
     try {
       await activatePaletteCommand(command, {
@@ -906,13 +1012,17 @@ export function useAppController() {
       }
       return;
     }
-    if (await handleBuiltinCommand(text)) { setComposer(""); setSuggestionMode(null); return; }
+    if (await handleBuiltinCommand(text, () => {
+      if (activeTask) composerHistoryRef.current.add(activeTask.id, text, promptHistory);
+      setComposer(""); setSuggestionMode(null);
+    })) return;
     const bashMatch = /^(!!|!)([\s\S]*)$/.exec(text);
     if (bashMatch) {
       const command = bashMatch[2].trim();
       if (!command) return;
       const task = activeTask ?? await createTask();
       if (!task) return;
+      composerHistoryRef.current.add(task.id, text, activeTask?.id === task.id ? promptHistory : []);
       setComposer(""); setComposerImages([]); setSuggestionMode(null);
       patchTaskUi(task.id, { isSending: true, isCompacting: false, workingPhase: "tool", toolName: "shell", streamText: "" });
       try {
@@ -933,6 +1043,7 @@ export function useAppController() {
     followLatest();
     const task = activeTask ?? await createTask();
     if (!task) return;
+    composerHistoryRef.current.add(task.id, text, activeTask?.id === task.id ? promptHistory : []);
     const optimisticId = `local-${Date.now()}`;
     const continuingExecution = Boolean(activeTaskUi?.isSending || activeTaskUi?.isCompacting);
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
@@ -999,29 +1110,70 @@ export function useAppController() {
 
   async function abortActive() {
     if (!activeTask) return;
-    try { await window.pideck.agent.abort(activeTask.id, activeProject?.cwd); discardStreamDeltas(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "" }); }
+    try { await window.pideck.agent.abort(activeTask.id, activeProject?.cwd); discardStreamDeltas(activeTask.id); patchTaskUi(activeTask.id, { isSending: false, isCompacting: false, workingPhase: null, streamText: "", retryStatus: undefined }); }
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
-  function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const imageItems = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith("image/"));
-    if (!imageItems.length) return;
-    event.preventDefault();
-    for (const item of imageItems) {
-      const file = item.getAsFile();
-      if (!file) continue;
+  function appendComposerImages(files: File[], fallbackName: string) {
+    for (const file of files.filter((candidate) => candidate.type.startsWith("image/"))) {
       const reader = new FileReader();
       reader.onload = () => {
         const result = typeof reader.result === "string" ? reader.result : "";
         const match = /^data:([^;]+);base64,(.+)$/.exec(result);
         if (!match) return;
-        setComposerImages((current) => [...current, { id: `${Date.now()}-${Math.random()}`, data: match[2], mimeType: match[1], name: file.name || "pasted-image" }]);
+        setComposerImages((current) => [...current, { id: `${Date.now()}-${Math.random()}`, data: match[2], mimeType: match[1], name: file.name || fallbackName }]);
       };
       reader.readAsDataURL(file);
     }
   }
 
-  function updateComposer(value: string) {
+  function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    if (!files.length) return;
+    event.preventDefault();
+    appendComposerImages(files, "pasted-image");
+  }
+
+  async function editComposerExternally() {
+    if (!projectCwd || externalEditing) return;
+    setExternalEditing(true);
+    try {
+      updateComposer(await window.pideck.input.externalEdit(composer, projectCwd));
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      setExternalEditing(false);
+    }
+  }
+
+  function recallComposerHistory(direction: "previous" | "next") {
+    if (!activeTask || queueEdit) return false;
+    const navigation = composerHistoryRef.current.navigate(activeTask.id, direction, composer, promptHistory);
+    if (!navigation.handled) return false;
+    updateComposer(navigation.value ?? "", true);
+    return true;
+  }
+
+  function updateTranscriptQuery(value: string) {
+    setTranscriptSearchQuery(value);
+    setTranscriptSearchRequest((current) => ({ serial: current.serial + 1, direction: "forward", reset: true }));
+  }
+
+  function stepTranscriptSearch(direction: "forward" | "backward") {
+    setTranscriptSearchRequest((current) => ({ serial: current.serial + 1, direction, reset: false }));
+  }
+
+  function closeTranscriptSearch() {
+    setTranscriptSearchOpen(false);
+    setTranscriptSearchQuery("");
+    setTranscriptSearchResult({ current: 0, total: 0 });
+  }
+
+  function updateComposer(value: string, preserveHistory = false) {
+    if (!preserveHistory && activeTask) composerHistoryRef.current.resetNavigation(activeTask.id);
     setComposer(value);
     const mentionMatch = /(?:^|\s)@([^\s]*)$/.exec(value);
     if (mentionMatch) {
@@ -1075,6 +1227,29 @@ export function useAppController() {
       setThinkingLevels(runtimeThinkingLevels);
       setThinkingLevel(runtimeThinkingLevels.includes(next.thinkingLevel) ? next.thinkingLevel : runtimeThinkingLevels[0]);
       setContextUsage(next.contextUsage);
+    } catch (error) {
+      if (requestId === modelSelectionRequestRef.current) showNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function cycleModel(direction: "forward" | "backward") {
+    if (!activeTask) return;
+    const requestId = ++modelSelectionRequestRef.current;
+    try {
+      const next = await window.pideck.agent.cycleModel(activeTask.id, direction, projectCwd);
+      if (requestId !== modelSelectionRequestRef.current) return;
+      const levels = next.thinkingLevels.length ? next.thinkingLevels : ["off"];
+      if (next.model) setActiveModel(next.model);
+      setThinkingLevels(levels);
+      setThinkingLevel(levels.includes(next.thinkingLevel) ? next.thinkingLevel : levels[0]);
+      setContextUsage(next.contextUsage);
+      setCapabilities((current) => current ? {
+        ...current,
+        model: next.model ?? current.model,
+        thinkingLevel: next.thinkingLevel,
+        thinkingLevels: levels,
+        contextUsage: next.contextUsage,
+      } : current);
     } catch (error) {
       if (requestId === modelSelectionRequestRef.current) showNotice(error instanceof Error ? error.message : String(error));
     }
@@ -1177,11 +1352,32 @@ export function useAppController() {
     value: composer,
     onChange: updateComposer,
     onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.nativeEvent.isComposing) return;
+      if (matchesPiKeybinding(event, piKeybindings, "app.editor.external")) { event.preventDefault(); void editComposerExternally(); return; }
+      if (matchesPiKeybinding(event, piKeybindings, "app.thinking.cycle")) {
+        event.preventDefault();
+        const current = Math.max(0, thinkingLevels.indexOf(thinkingLevel));
+        void chooseThinking(thinkingLevels[(current + 1) % thinkingLevels.length] ?? "off");
+        return;
+      }
+      if (matchesPiKeybinding(event, piKeybindings, "app.model.cycleForward") || matchesPiKeybinding(event, piKeybindings, "app.model.cycleBackward")) {
+        event.preventDefault();
+        void cycleModel(matchesPiKeybinding(event, piKeybindings, "app.model.cycleBackward") ? "backward" : "forward");
+        return;
+      }
+      if (matchesPiKeybinding(event, piKeybindings, "app.model.select")) { event.preventDefault(); setModelMenuOpen(true); setThinkingMenuOpen(false); return; }
       if (suggestionMode && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setSuggestionIndex((current) => Math.max(0, Math.min(suggestions.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))); return; }
+      if (suggestionMode && suggestions.length && (event.key === "Tab" || event.key === "Enter")) { event.preventDefault(); applySuggestion(suggestions[suggestionIndex] ?? suggestions[0]); return; }
       if (event.key === "Escape") { if (suggestionMode) setSuggestionMode(null); else if (queueEdit) cancelQueueEdit(); return; }
+      if (!suggestionMode && event.key === "ArrowUp" && event.currentTarget.selectionStart === event.currentTarget.selectionEnd && event.currentTarget.value.lastIndexOf("\n", event.currentTarget.selectionStart - 1) < 0 && recallComposerHistory("previous")) { event.preventDefault(); return; }
+      if (!suggestionMode && event.key === "ArrowDown" && event.currentTarget.selectionStart === event.currentTarget.selectionEnd && event.currentTarget.value.indexOf("\n", event.currentTarget.selectionEnd) < 0 && recallComposerHistory("next")) { event.preventDefault(); return; }
       if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendPrompt(); }
     },
     onPaste: handleComposerPaste,
+    onDropImages: (files: File[]) => appendComposerImages(files, "dropped-image"),
+    onExternalEdit: () => void editComposerExternally(),
+    externalEditing,
+    externalEditorShortcut: firstPiKeybinding(piKeybindings, "app.editor.external"),
     onSend: () => void sendPrompt(),
     onStop: () => void abortActive(),
     isSending,
@@ -1233,18 +1429,20 @@ export function useAppController() {
     language, setLanguage, theme, themePreference, cycleTheme, projectCwd, projects, expandedProjectCwds, tasks,
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, searchQuery, setSearchQuery, createTask, createTaskForProject, chooseProjectDirectory,
-    openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions,
+    selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions,
     loadInitialData, restartHost, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, modelOptions, capabilities, changeReview,
+    transcriptSearchOpen, transcriptSearchQuery, transcriptSearchRequest, transcriptSearchResult,
+    setTranscriptSearchOpen, updateTranscriptQuery, stepTranscriptSearch, closeTranscriptSearch, setTranscriptSearchResult,
     composerProps, jumpToLatest, sendPrompt, abortActive,
-    paletteOpen, paletteCommands, composer, updateComposer, compactSession, exportSession, selectPaletteCommand,
-    quickSettingsOpen, setQuickSettingsOpen, openQuickSettings,
-    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, scopedModelsOpen, setScopedModelsOpen,
-    importSession, renameSession, resolveTrust, saveScopedModels,
+    paletteCommands, composer, updateComposer, compactSession, exportSession, selectPaletteCommand,
+    quickSettingsOpen, quickSettingsPage, setQuickSettingsOpen, openQuickSettings,
+    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, scopedModelsOpen, setScopedModelsOpen,
+    importSession, renameSession, openProjectTrust, resolveTrust, saveScopedModels,
     notices, dismissNotice, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,
     removingProjectCwd, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen, providerFocus, previewImage,
     imageContextMenu, setPendingDelete, setPendingProjectRemove, setContextMenu, setProjectContextMenu,
-    setPackagesOpen, setSettingsOpen, setPiSettingsOpen, setProviderFocus, setPreviewImage, setImageContextMenu, setPaletteOpen,
+    setPackagesOpen, setSettingsOpen, setPiSettingsOpen, setProviderFocus, setPreviewImage, setImageContextMenu,
     setExtensionUiRequest,
     deleteTask, removeProject, refreshModels, showNotice, resolveExtensionUi, handlePermissionStatus, patchTaskUi,
     updateTaskLists, setMessageReload, openImageContextMenu,

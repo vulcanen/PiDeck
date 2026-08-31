@@ -19,7 +19,7 @@ function formatActivityDuration(seconds: number): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[]; language: Language; running: boolean }) {
+function ExecutionSummary({ steps, language, running, toolsExpanded = false }: { steps: ActivityStep[]; language: Language; running: boolean; toolsExpanded?: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!running || !steps.length) return;
@@ -46,7 +46,7 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
     {step.args !== undefined && <div className="execution-value"><span>{t.executionArguments}</span><pre>{activityValue(step.args)}</pre></div>}
     {step.result !== undefined && <div className="execution-value"><span>{t.executionResult}</span><pre>{activityValue(step.result)}</pre></div>}
   </>);
-  return <details className="execution-summary" open={false}>
+  return <details className="execution-summary" open={toolsExpanded || undefined}>
     <summary><span>{timingKnown ? t.executionProcessed(duration) : t.executionProcessedUnknown}</span><Icon name="chevron" size={13} /></summary>
     <div className="execution-details" data-conversation-scroll-island="true">
       {steps.map((step) => {
@@ -61,7 +61,7 @@ function ExecutionSummary({ steps, language, running }: { steps: ActivityStep[];
             {step.detail && <pre>{step.detail}</pre>}
           </div>;
         }
-        return <details className={`execution-step ${step.isError ? "failed" : ""}`} key={step.id}>
+        return <details className={`execution-step ${step.isError ? "failed" : ""}`} key={step.id} open={toolsExpanded || undefined}>
           <summary className="execution-step-heading">{heading}<span className="execution-step-chevron"><Icon name="chevron" size={12} /></span></summary>
           {toolContent(step)}
         </details>;

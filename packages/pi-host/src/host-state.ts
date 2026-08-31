@@ -12,6 +12,7 @@ export const sessionManagers = new Map<string, any>();
 export const sessionFiles = new Map<string, string>();
 export const titledSessions = new Set<string>();
 export const agentSessions = new Map<string, any>();
+export const agentSessionRuntimes = new Map<string, any>();
 export const agentSessionPromises = new Map<string, Promise<any>>();
 export const agentSessionPackageRevisions = new Map<string, number>();
 export const agentSessionRevisions = new Map<string, number>();

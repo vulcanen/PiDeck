@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { PermissionStatus, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewUnavailableReason } from "@pideck/contracts";
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
@@ -36,6 +36,9 @@ interface ConversationPaneSlotProps {
   onResolveApproval: (decision: "allow-once" | "deny") => Promise<void>;
   onPreviewImage: ComposerProps["onPreviewImage"];
   onContextMenuImage: ComposerProps["onContextMenuImage"];
+  transcriptSearchQuery: string;
+  transcriptSearchRequest: { serial: number; direction: "forward" | "backward"; reset: boolean };
+  onTranscriptSearchResult: (result: { current: number; total: number }) => void;
 }
 
 function conversationPaneKey(projectCwd: string, taskId: string): string {
@@ -45,7 +48,7 @@ function conversationPaneKey(projectCwd: string, taskId: string): string {
 function ConversationPaneSlot({
   data, active, language, t, loadError, scrollPositionsRef, scrollHandleRef,
   onTimelineAtEnd, onRetryInitialLoad, onRetryMessages, onResolveApproval,
-  onPreviewImage, onContextMenuImage,
+  onPreviewImage, onContextMenuImage, transcriptSearchQuery, transcriptSearchRequest, onTranscriptSearchResult,
 }: ConversationPaneSlotProps) {
   // Inactive panes keep their last data and DOM mounted and are hidden with
   // `visibility`, never `display: none`. That is what lets the browser preserve
@@ -134,6 +137,8 @@ function ConversationPaneSlot({
       workingVisible={taskUi?.extensionWorkingVisible}
       workingFrames={taskUi?.extensionWorkingFrames}
       workingInterval={taskUi?.extensionWorkingInterval}
+      toolsExpanded={taskUi?.extensionToolsExpanded}
+      retryStatus={taskUi?.retryStatus}
       completedActivity={taskUi?.completedActivity ?? []}
       steeringMessageKeys={steeringMessageKeys}
       taskId={task.id}
@@ -147,6 +152,9 @@ function ConversationPaneSlot({
       footer={taskUi?.approval ? <ApprovalCard approval={taskUi.approval} language={language} onResolve={onResolveApproval} /> : null}
       onPreviewImage={onPreviewImage}
       onContextMenuImage={onContextMenuImage}
+      searchQuery={active ? transcriptSearchQuery : ""}
+      searchRequest={active ? transcriptSearchRequest : undefined}
+      onSearchResult={onTranscriptSearchResult}
     />}
   </div>;
 }
@@ -157,6 +165,8 @@ const MemoConversationPaneSlot = memo(ConversationPaneSlot, (previous, next) =>
   && previous.language === next.language
   && previous.t === next.t
   && (!previous.active || previous.loadError === next.loadError)
+  && (!previous.active || previous.transcriptSearchQuery === next.transcriptSearchQuery)
+  && (!previous.active || previous.transcriptSearchRequest === next.transcriptSearchRequest)
 );
 
 interface ConversationPaneDeckProps extends Omit<ConversationPaneSlotProps, "data" | "active"> {
@@ -250,6 +260,15 @@ export interface AppConversationProps {
   changeReviewIgnoreWhitespace: boolean;
   changeReviewScrollPosition: ChangeReviewScrollPosition;
   composerProps: ComposerProps;
+  transcriptSearchOpen: boolean;
+  transcriptSearchQuery: string;
+  transcriptSearchRequest: { serial: number; direction: "forward" | "backward"; reset: boolean };
+  transcriptSearchResult: { current: number; total: number };
+  onOpenTranscriptSearch: () => void;
+  onTranscriptSearchQuery: (query: string) => void;
+  onStepTranscriptSearch: (direction: "forward" | "backward") => void;
+  onCloseTranscriptSearch: () => void;
+  onTranscriptSearchResult: (result: { current: number; total: number }) => void;
   onTimelineAtEnd: (atEnd: boolean) => void;
   onRetryInitialLoad: () => void | Promise<unknown>;
   onChooseProject: () => void | Promise<unknown>;
@@ -285,7 +304,8 @@ export function AppConversation({
   selectedChangeReviewError, changeReviewWidth, changeReviewFileListWidth,
   changeReviewSelectedPath, changeReviewExpandedPaths, changeReviewFileFilter,
   changeReviewDiffMode, changeReviewWrapLines, changeReviewIgnoreWhitespace,
-  changeReviewScrollPosition, composerProps, onTimelineAtEnd,
+  changeReviewScrollPosition, composerProps, transcriptSearchOpen, transcriptSearchQuery, transcriptSearchRequest, transcriptSearchResult,
+  onOpenTranscriptSearch, onTranscriptSearchQuery, onStepTranscriptSearch, onCloseTranscriptSearch, onTranscriptSearchResult, onTimelineAtEnd,
   onRetryInitialLoad, onChooseProject, onCreateTask, onRetryMessages, onJumpToLatest,
   onResolveApproval, onPermissionStatus, onOpenChangeReview, onCloseChangeReview,
   onSelectChangeReview, onSelectChangeReviewPath, onChangeReviewExpandedPaths,
@@ -296,6 +316,7 @@ export function AppConversation({
 }: AppConversationProps) {
   const layoutRef = useRef<HTMLDivElement>(null);
   const reviewLauncherRef = useRef<HTMLButtonElement>(null);
+  const transcriptSearchInputRef = useRef<HTMLInputElement>(null);
   const [layoutWidth, setLayoutWidth] = useState(0);
   useLayoutEffect(() => {
     const layout = layoutRef.current;
@@ -306,6 +327,7 @@ export function AppConversation({
     observer.observe(layout);
     return () => observer.disconnect();
   }, []);
+  useEffect(() => { if (transcriptSearchOpen) transcriptSearchInputRef.current?.focus(); }, [transcriptSearchOpen]);
   const minimumReviewWidth = 520;
   const maximumReviewWidth = Math.max(minimumReviewWidth, layoutWidth - 400);
   const effectiveReviewWidth = Math.min(maximumReviewWidth, Math.max(minimumReviewWidth, changeReviewWidth));
@@ -325,7 +347,8 @@ export function AppConversation({
     <main className="main-column" id="main-content" tabIndex={-1} inert={backgroundInert} aria-hidden={backgroundInert || undefined}>
       <div ref={layoutRef} className={`conversation-layout ${changeReviewOpen ? "review-open" : ""}`} style={{ "--change-review-width": `${effectiveReviewWidth}px` } as CSSProperties}>
         <section className="conversation-primary" inert={changeReviewOpen && changeReviewDrawer} aria-hidden={changeReviewOpen && changeReviewDrawer || undefined}>
-      {activeTask && <div className="conversation-header"><div className="conversation-title"><div className="breadcrumb"><span>{activeProject?.name ?? "PiDeck"}</span><span>/</span><span>{activeTask.title ?? t.conversation}</span></div><h1>{activeTask.title ?? t.conversation}</h1></div></div>}
+      {activeTask && <div className="conversation-header"><div className="conversation-title"><div className="breadcrumb"><span>{activeProject?.name ?? "PiDeck"}</span><span>/</span><span>{activeTask.title ?? t.conversation}</span></div><h1>{activeTask.title ?? t.conversation}</h1></div><button type="button" className="icon-button transcript-search-trigger" aria-label={t.transcriptSearch} title={t.transcriptSearch} onClick={onOpenTranscriptSearch}><Icon name="search" size={15} /></button></div>}
+      {transcriptSearchOpen && <div className="transcript-search" role="search" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCloseTranscriptSearch(); } else if (event.key === "Enter") { event.preventDefault(); onStepTranscriptSearch(event.shiftKey ? "backward" : "forward"); } }}><Icon name="search" size={14} /><input ref={transcriptSearchInputRef} type="search" value={transcriptSearchQuery} onChange={(event) => onTranscriptSearchQuery(event.target.value)} placeholder={t.transcriptSearchPlaceholder} aria-label={t.transcriptSearch} /><span aria-live="polite">{t.transcriptSearchResult(transcriptSearchResult.current, transcriptSearchResult.total)}</span><button type="button" className="icon-button transcript-search-previous" disabled={!transcriptSearchResult.total} aria-label={t.transcriptSearchPrevious} title={t.transcriptSearchPrevious} onClick={() => onStepTranscriptSearch("backward")}><Icon name="down" size={13} /></button><button type="button" className="icon-button" disabled={!transcriptSearchResult.total} aria-label={t.transcriptSearchNext} title={t.transcriptSearchNext} onClick={() => onStepTranscriptSearch("forward")}><Icon name="down" size={13} /></button><button type="button" className="icon-button" aria-label={t.transcriptSearchClose} title={t.transcriptSearchClose} onClick={onCloseTranscriptSearch}><Icon name="x" size={13} /></button></div>}
       <ConversationPaneDeck
         activeData={activeData}
         tasks={tasks}
@@ -345,6 +368,9 @@ export function AppConversation({
         onResolveApproval={onResolveApproval}
         onPreviewImage={composerProps.onPreviewImage}
         onContextMenuImage={composerProps.onContextMenuImage}
+        transcriptSearchQuery={transcriptSearchQuery}
+        transcriptSearchRequest={transcriptSearchRequest}
+        onTranscriptSearchResult={onTranscriptSearchResult}
       />
       <div className="composer-dock">
         {showJumpToLatest && <button className="jump-latest" onClick={onJumpToLatest}><Icon name="down" size={13} />{t.jumpToLatest}</button>}

@@ -7,6 +7,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
 const { assertKnownProjectCwd, assertTrustedIpcSender } = require("../dist/main/ipc-security.js");
+const { externalEditorCommandForPath } = require("../dist/main/external-editor.js");
 const { windowThemeColors } = require("../dist/main/window-theme.js");
 const { loadQueueForCurrentTask } = require("../dist/renderer/queue-load.js");
 const { isPackagedPiAdapter, modelSummary, packagedPiNodeModules, systemProxyRoutesFromElectronRules } = require("../../../packages/pi-adapter/dist/index.js");
@@ -17,15 +18,58 @@ const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-
 const { buildSessionChangeReview, captureWorkspaceChangeState, inspectGitWorkspaceAvailability, MAX_REVIEW_CAPTURE_PATHS } = require("../../../packages/pi-host/dist/session-change-review.js");
 const { createAgentRunReservation, isExtensionCommand, ManualCompactionPromptQueue, queuePromptDuringCompaction, waitForReservedAgentRun } = require("../../../packages/pi-host/dist/agent-prompt-coordination.js");
 const { updatePiSettings } = require("../../../packages/pi-host/dist/settings-command-handler.js");
+const { replaceQuotedAbsolutePaths } = require("../../../packages/pi-host/dist/external-editor-command.js");
 const { copySessionChangeReviewStore, deleteSessionChangeReviewStore, flushSessionChangeReviewStore, loadSessionChangeReviews, persistSessionChangeReview, sanitizeSessionChangeReview, sessionChangeReviewStorePath, summarizeSessionChangeReview } = require("../../../packages/pi-host/dist/session-change-review-store.js");
 const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/session-transcript.js");
+const { createTrustAwareSettingsManager, readProjectTrustStatus } = require("../../../packages/pi-host/dist/project-trust.js");
 const { buildChangeFileTree, parseUnifiedPatch, reviewTreeKeyboardAction, sideBySideRows } = require("../dist/renderer/change-review-model.js");
+const { ComposerHistory } = require("../dist/renderer/composer-history.js");
 
 test("PiHost DTO validation rejects coercible booleans and unknown fields", () => {
   assert.throws(() => validatePiHostPayload("settings.update", { compactionEnabled: "false" }), /compactionEnabled must be a boolean/);
+  assert.throws(() => validatePiHostPayload("settings.update", { externalEditor: "x".repeat(1001) }), /externalEditor/);
   assert.throws(() => validatePiHostPayload("packages.configure", { source: "demo", enabled: true, unexpected: true }), /unknown field/);
+  assert.throws(() => validatePiHostPayload("agent.cycleModel", { taskId: "task", direction: "next" }), /direction/);
   assert.doesNotThrow(() => validatePiHostPayload("settings.update", { compactionEnabled: false, transport: "auto" }));
+  assert.doesNotThrow(() => validatePiHostPayload("settings.update", { externalEditor: "code --wait" }));
   assert.doesNotThrow(() => validatePiHostPayload("agent.prompt", { taskId: "task", text: "hello", images: undefined, delivery: undefined }));
+  assert.doesNotThrow(() => validatePiHostPayload("agent.cycleModel", { taskId: "task", direction: "backward" }));
+  assert.doesNotThrow(() => validatePiHostPayload("projects.trustStatus", { cwd: "D:/workspace" }));
+});
+
+test("project trust gates Pi resources and reports saved, inherited, and default decisions", () => {
+  const project = path.join(path.parse(process.cwd()).root, "workspace", "project");
+  const parent = path.dirname(project);
+  let hasResources = true;
+  let entry = null;
+  const managerOptions = [];
+  const sdk = {
+    hasTrustRequiringProjectResources: () => hasResources,
+    ProjectTrustStore: class { getEntry() { return entry; } },
+    SettingsManager: {
+      create: (_cwd, _agentDir, options) => {
+        managerOptions.push(options);
+        return { getDefaultProjectTrust: () => "ask", isProjectTrusted: () => options?.projectTrusted };
+      },
+    },
+  };
+
+  assert.deepEqual(readProjectTrustStatus(sdk, project, "agent-dir"), {
+    cwd: path.resolve(project), hasTrustRequiringResources: true, trusted: false, source: "default", defaultPolicy: "ask",
+  });
+  entry = { path: parent, decision: true };
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").source, "inherited");
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").trusted, true);
+  entry = { path: project, decision: false };
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").source, "saved");
+  assert.equal(createTrustAwareSettingsManager(sdk, project, "agent-dir").settingsManager.isProjectTrusted(), false);
+  assert.equal(managerOptions.at(-1).projectTrusted, false);
+  hasResources = false;
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").source, "saved");
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").trusted, false);
+  entry = null;
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").source, "not-required");
+  assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").trusted, false);
 });
 
 test("application menu requests allow only fixed groups and finite bounded anchors", () => {
@@ -51,6 +95,9 @@ test("title-bar menus reuse localized native roles and preserve packaged restric
     assert.deepEqual(macMenu[0].submenu.filter(({ role }) => role).map(({ role }) => role), ["close", "quit"]);
   }
   assert.equal(about, 2);
+  assert.equal(appMenuCopy.zh.aboutBody("1.2.3", "0.84.4"), "PiDeck 1.2.3\nPi 0.84.4");
+  assert.equal(appMenuCopy.en.aboutBody("1.2.3", "0.84.4"), "PiDeck 1.2.3\nPi 0.84.4");
+  assert.doesNotMatch(appMenuCopy.en.aboutBody("1.2.3", "0.84.4"), /Electron|Node/);
   assert.ok(buildApplicationMenuTemplate("en", false, () => {}, "win32").find(({ id }) => id === "view").submenu.some(({ role }) => role === "toggleDevTools"));
   const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
   const preload = fs.readFileSync(path.join(__dirname, "../src/preload/index.ts"), "utf8");
@@ -127,6 +174,64 @@ test("Pi settings handler persists partial defaults without requiring a model", 
   const result = await updatePiSettings(manager, { getModel: () => undefined }, { compactionEnabled: false, transport: "websocket" });
   assert.equal(result.compactionEnabled, false);
   assert.deepEqual(calls, [["transport", "websocket"], ["compaction", false], "flush"]);
+});
+
+test("Pi settings persist a user external editor through Pi locked storage and report its effective source", async () => {
+  let stored = JSON.stringify({ theme: "dark" });
+  let globalSettings = JSON.parse(stored);
+  const storage = {
+    withLock: (scope, update) => {
+      assert.equal(scope, "global");
+      stored = update(stored);
+    },
+  };
+  const manager = {
+    getDefaultProvider: () => undefined,
+    getDefaultModel: () => undefined,
+    getDefaultThinkingLevel: () => "off",
+    getTransport: () => "auto",
+    getCompactionSettings: () => ({ enabled: true }),
+    getSteeringMode: () => "one-at-a-time",
+    getFollowUpMode: () => "one-at-a-time",
+    getGlobalSettings: () => globalSettings,
+    getProjectSettings: () => ({}),
+    getExternalEditorCommand: () => globalSettings.externalEditor ?? "notepad",
+    setDefaultModelAndProvider: () => undefined,
+    setDefaultThinkingLevel: () => undefined,
+    setTransport: () => undefined,
+    setCompactionEnabled: () => undefined,
+    setSteeringMode: () => undefined,
+    setFollowUpMode: () => undefined,
+    flush: async () => undefined,
+    reload: async () => { globalSettings = JSON.parse(stored); },
+  };
+
+  const configured = await updatePiSettings(manager, { getModel: () => undefined }, { externalEditor: "  code --wait  " }, storage);
+  assert.deepEqual(JSON.parse(stored), { theme: "dark", externalEditor: "code --wait" });
+  assert.equal(configured.externalEditor, "code --wait");
+  assert.equal(configured.effectiveExternalEditor, "code --wait");
+  assert.equal(configured.externalEditorSource, "user");
+
+  const automatic = await updatePiSettings(manager, { getModel: () => undefined }, { externalEditor: "" }, storage);
+  assert.deepEqual(JSON.parse(stored), { theme: "dark" });
+  assert.equal(automatic.externalEditor, undefined);
+  await assert.rejects(updatePiSettings(manager, { getModel: () => undefined }, { externalEditor: "code\n--wait" }, storage), /line breaks/);
+});
+
+test("native editor selections produce cross-platform Pi commands and alias quoted Unix paths", () => {
+  assert.equal(externalEditorCommandForPath("C:\\Program Files\\Editor\\Editor.exe", "win32"), '"C:\\Program Files\\Editor\\Editor.exe"');
+  assert.equal(externalEditorCommandForPath("/Applications/Visual Studio Code.app", "darwin"), 'open -W -a "/Applications/Visual Studio Code.app"');
+  assert.equal(externalEditorCommandForPath("/opt/Visual Editor/editor", "linux"), '"/opt/Visual Editor/editor"');
+  assert.throws(() => externalEditorCommandForPath("/opt/a'\"b/editor", "linux"), /quote characters/);
+
+  const targets = [];
+  const macCommand = replaceQuotedAbsolutePaths('open -W -a "/Applications/Visual Studio Code.app"', "darwin", (target) => {
+    targets.push(target);
+    return "/tmp/pideck-editor/target-0.app";
+  });
+  assert.equal(macCommand, "open -W -a /tmp/pideck-editor/target-0.app");
+  assert.deepEqual(targets, ["/Applications/Visual Studio Code.app"]);
+  assert.equal(replaceQuotedAbsolutePaths('"C:\\Program Files\\Editor\\Editor.exe" --wait', "win32", () => "unused"), '"C:\\Program Files\\Editor\\Editor.exe" --wait');
 });
 
 function readText(filePath) {
@@ -238,6 +343,11 @@ test("Extension UI maps serializable presentation APIs and reports TUI-only capa
   const events = [];
   const engine = new PermissionEngine({ emitApproval: () => undefined, emitEvent: (_taskId, event) => events.push(event) });
   const ui = engine.createUi("task");
+  const boundUi = { ...ui };
+  assert.equal(boundUi.theme.fg("accent", "Ready"), "Ready");
+  assert.equal(boundUi.theme.bg("selectedBg", "Selected"), "Selected");
+  assert.equal(boundUi.theme.bold("Strong"), "Strong");
+  assert.equal(boundUi.theme.getThinkingBorderColor("high")("Thinking"), "Thinking");
   ui.setStatus("sync", "Ready");
   ui.setWorkingMessage("Indexing");
   ui.setWorkingVisible(false);
@@ -251,6 +361,35 @@ test("Extension UI maps serializable presentation APIs and reports TUI-only capa
   engine.resetUi("task");
   assert.deepEqual(events.filter((event) => event.type === "extension.ui.presentation").map((event) => event.action), ["status", "working-message", "working-visible", "working-indicator", "widget", "title", "editor-text", "reset"]);
   assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "setFooter").length, 1);
+  assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "theme").length, 0);
+});
+
+test("language switch button presents the target language", () => {
+  const { languageSwitchTarget } = require("../dist/renderer/use-preferences.js");
+  assert.deepEqual(languageSwitchTarget("zh"), { language: "en", label: "EN" });
+  assert.deepEqual(languageSwitchTarget("en"), { language: "zh", label: "中" });
+});
+
+test("composer history preserves exact Skill, prompt, built-in, and extension command submissions", () => {
+  const history = new ComposerHistory();
+  const taskId = "task";
+  const persisted = ["older message"];
+  history.add(taskId, "/skill:review fix this", persisted);
+  history.add(taskId, "/compact keep decisions", persisted);
+  history.add(taskId, "/release-notes beta", persisted);
+  history.add(taskId, "/permission-system strict", persisted);
+
+  // Pi persists expanded Skill/template contents after submission. A later
+  // message refresh must not replace the raw editor history captured above.
+  const expanded = ["older message", '<skill name="review">full SKILL.md contents</skill>'];
+  assert.equal(history.navigate(taskId, "previous", "draft", expanded).value, "/permission-system strict");
+  assert.equal(history.navigate(taskId, "previous", "draft", expanded).value, "/release-notes beta");
+  assert.equal(history.navigate(taskId, "previous", "draft", expanded).value, "/compact keep decisions");
+  assert.equal(history.navigate(taskId, "previous", "draft", expanded).value, "/skill:review fix this");
+  assert.equal(history.navigate(taskId, "next", "draft", expanded).value, "/compact keep decisions");
+  assert.equal(history.navigate(taskId, "next", "draft", expanded).value, "/release-notes beta");
+  assert.equal(history.navigate(taskId, "next", "draft", expanded).value, "/permission-system strict");
+  assert.equal(history.navigate(taskId, "next", "draft", expanded).value, "draft");
 });
 
 test("Extension commands report completion without clearing an existing model run", () => {

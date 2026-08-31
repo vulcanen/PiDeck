@@ -21,6 +21,8 @@ Provider API Key、OAuth、Token 刷新和 Session 文件仍由 Pi Runtime 管�
 
 Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.4`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.4 会应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时传入 `{ persist: true }`，因此模型和思考等级变更会写入 Pi 的用户级设置；`/thinking [level]` 映射到桌面思考等级选择器，`/settings` 编辑同一份 SettingsManager 默认值。Pi 0.84.4 新增的 `ui_prompt_start` / `ui_prompt_end` 会在 PiHost 边界归一化为可序列化 Agent 事件；桌面更丰富的队列编辑仍使用直接 AgentSession 队列 API，SDK 的 RPC `clear_queue` 不属于当前直连 Host 传输。
 
+项目 Pi 资源遵循 Pi 的授权模型，不把“已打开项目”等同于自动允许加载。当项目存在受保护的设置、Extension、Skill、Prompt、主题、包、系统提示或项目 `.agents/skills` 时，PiDeck 会显示项目保存、父目录继承或全局默认的最终决定，并将其传给 `SettingsManager.create(..., { projectTrusted })`。在全局策略为 `ask` 且新增项目尚无决定时打开询问界面；同一项目级入口保留在项目右键菜单中。
+
 当前可运行结构：
 
 ```text
@@ -51,7 +53,7 @@ apps/desktop/
       ├─ app-view.tsx            # 工作区壳层与全局布局
       ├─ app-sidebar.tsx         # 项目/Session 侧栏
       ├─ app-conversation.tsx    # 会话 pane 与 Composer
-      ├─ app-overlays.tsx        # 命令面板与对话框浮层
+      ├─ app-overlays.tsx        # 快捷设置与对话框浮层
       ├─ use-app-controller.tsx  # 状态与动作编排
       ├─ use-session-data.ts     # Session 数据加载
       ├─ use-runtime-events.ts   # PiHost 事件归一化
@@ -65,7 +67,7 @@ apps/desktop/
       ├─ message-utils.ts        # 消息合并与 identity
       ├─ types.ts                # Renderer 状态与辅助类型
       ├─ image-cache.ts · pi-capabilities.ts · styles.css · vite-env.d.ts
-      └─ ui/                     # 时间线、消息、Composer、命令面板、对话框、设置等展示组件
+      └─ ui/                     # 时间线、消息、Composer、分层快捷设置、对话框、设置等展示组件
 
 packages/
 ├─ contracts/                    # Bridge/IPC 类型，纯类型包无 dist
@@ -93,15 +95,18 @@ packages/
 8. 通过 `@file` 引用工作区文件。
 9. 压缩上下文并导出 JSONL/HTML，导入 Pi JSONL 会话、重命名和查看会话统计。
 10. 使用 Pi slash command catalog、Prompt、Skill 和 Extension command 建议。
-    命令面板点击/回车直接执行已映射命令，模板明确标注并保留编辑流程。顶栏齿轮和 `Ctrl/Cmd + ,` 统一提供 Pi 设置、Provider 认证、Pi 包管理、模型范围、工作区信任和快捷键入口；Provider 认证使用独立大脑图标，设置抽屉从共享顶栏下方展开，头部紧凑，连续切换弹层后可恢复焦点。
+    快捷设置保留精简首页，将任务操作与可搜索 Pi 命令放入子页；`Ctrl/Cmd + K` 直接打开命令子页，顶栏齿轮与 `Ctrl/Cmd + ,` 打开首页。命令通过点击/回车执行，模板继续明确标注并保留编辑流程；设置抽屉从共享顶栏下方展开，头部紧凑，连续切换弹层后可恢复焦点。
 11. 使用 Provider API Key/OAuth 本地认证；OpenAI Codex 浏览器登录默认使用 Pi 的本地回调，手动输入回调地址仅作为兜底，成功后自动聚焦 PiDeck。PiHost 网络请求依次遵循显式代理环境变量、Pi 全局 `httpProxy` 和跨平台系统代理。
 12. 切换中文/英文和浅色/深色主题。
     Windows 在“工作台”右侧显示原生编辑/查看/帮助菜单，窄窗口合并为“菜单”；macOS 保留系统菜单栏。复用现有原生动作，支持编辑选区保留、键盘访问与中英文文案。
 13. 使用 Steering / Follow-up 队列（包括运行中 prompt 自动压缩期间提交消息时进入 Pi 原生队列）、批处理模式和队列消息面板。
 14. 对长会话使用"普通文档流 + 早期消息折叠"（只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后），并按 Session 缓存消息 pane、滚动位置和 follow 状态。
-15. 使用 `/copy`、`/share`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models` 的桌面映射；`/share` 依赖本机 `gh` CLI。
+15. 使用 `/copy`、`/share`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models` 的桌面映射；项目 Pi 资源授权同时放在项目右键菜单中，全局默认策略为 `ask` 时，没有项目保存或父目录继承决定的新项目会询问一次；`/share` 依赖本机 `gh` CLI。
 16. 在 Pi Session 自定义 entry 中持久化每次 Agent 运行的精确起止时间，关闭并重启后保持“已处理”耗时一致。
 17. 从 Composer 摘要打开有界的 Git 单轮变更审查：响应式无障碍面板、详情延迟加载、轮次/文件/目录恢复、筛选、统一/Codex 风格拆分 diff、变更块导航，以及明确的可用性、错误与截断状态。
+18. 配置带顺序和单模型 thinking 等级的模型范围；管理单个 Pi Package 资源、检查/执行更新并刷新同一 Pi Runtime 的模型目录。
+19. 使用提示历史、Tab/Enter 资源补全、Pi 配置的外部编辑器、图片粘贴/拖放、Pi `keybindings.json` 驱动的模型/thinking/搜索/编辑器快捷键，以及可展开折叠消息的当前会话搜索。Pi 设置页明确区分自动优先级与自定义用户命令，显示当前生效来源，并可通过系统应用选择器填充命令（Windows 可执行程序、macOS 应用或可执行文件）。选中的命令仍通过 Pi 自带的锁定设置存储持久化；清除覆盖后恢复自动优先级。对于 Unix 上包含空格的已选绝对路径，PiHost 仅在一次编辑期间创建别名，以兼容 Pi 0.84.4 的外部编辑器 helper。
+20. 通过 `npm run cli -- <参数>` / `pideck-cli` 使用无头兼容入口；Print、JSON、RPC、stdin JSONL 与 Auth Print 全部直接委托给 Pi 官方 `main()`。
 
 ## 4. 消息与对话行为
 
@@ -124,17 +129,19 @@ packages/
 ```text
 app.setLanguage/setWindowTheme/quit
 runtime.status
-projects.list/chooseDirectory/remove/setTrust
+projects.list/chooseDirectory/remove/trustStatus/setTrust
 sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
-models.list
+models.list/refresh
 workspace.snapshot
+input.keybindings/externalEdit
+settings.get/update/chooseExternalEditor
 providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl
-agent.prompt/abort/setThinkingLevel/setModel/setScopedModels
-agent.queue/setQueueModes/clearQueue/promoteQueue
+agent.prompt/abort/setThinkingLevel/setModel/cycleModel/setScopedModels
+agent.queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue
 approvals.resolve
 events.subscribe
 extensions.resolveUi
-packages.list/install/remove/update/configure
+packages.list/install/remove/update/configure/configureResource/checkUpdates
 permissions.status/setMode
 ```
 
@@ -154,7 +161,8 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 - `/reload` → 重载 Pi 资源/重新读取初始数据。
 - `/import`、`/name`、`/session`、`/share` → 通过 Electron 原生 JSONL 选择器完成 PiHost 会话导入、命名、统计和 GitHub Gist 分享。
 - `/copy`、`/changelog`、`/hotkeys`、`/resume`、`/quit` → Renderer/Electron 桌面操作。
-- `/trust`、`/scoped-models` → Pi 项目信任存储和模型范围设置。
+- `/trust` → 由 Pi `ProjectTrustStore` 支持的项目级 Pi 资源状态与授权界面；项目右键菜单和全局默认策略为 `ask` 时的新项目引导使用同一界面。
+- `/scoped-models` → Pi 模型范围设置。
 - `/fork`、`/clone`、`/tree` → 暂不显示，列入待支持列表。
 
 没有稳定 Bridge 的命令不得让模型把它当普通 Prompt 执行，也不得伪装成已经完成。UI 应显示可操作的“当前桌面端尚未支持”提示。
@@ -195,9 +203,8 @@ PiDeck 已将 `@gotgenes/pi-permission-system@25.4.0` 作为桌面 PiHost 的 Ex
 
 以下仍是计划，不是当前产品承诺：
 
-- Print、JSON、RPC、stdin、Auth Print 兼容通道。
 - Monaco Diff、任务级基线和逐块审阅。
-- Extension 的 TUI 专属 `custom` 组件、主题、Widget、Footer、Header 等无法跨进程传递组件实例的能力。
+- Extension 的 TUI 专属 `custom`、主题/组件 Widget、terminal input、同步 editor component、autocomplete provider、Footer、Header 等无法跨进程传递组件实例的能力。
 
 ## 9. 技术与安全约束
 
@@ -225,6 +232,8 @@ npm ls --depth=0 --workspaces
 npm run typecheck
 npm run test:renderer
 npm run build
+npm run smoke:runtime
+npm run smoke:cli
 ```
 
 Release Tag 还会验证 Tag commit 属于 `main` 并锁定其 SHA，在 Linux 上执行同一套验证，再分别在匹配的原生 GitHub Runner 上构建 Windows x64、macOS arm64 和 macOS x64 安装包。工作流从每个平台最终包生成独立 SBOM，并创建包含 SHA-256 校验和的 Draft Release；可信公开分发还需要在受保护的 `release-signing` Environment 中配置平台签名和 macOS 公证 Secret。
@@ -239,6 +248,7 @@ providers.list
 sessions.create
 sessions.runMetadata
 sessions.capabilities
+agent.cycleModel
 workspace.snapshot
 ```
 

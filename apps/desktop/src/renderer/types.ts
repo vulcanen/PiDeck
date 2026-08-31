@@ -1,7 +1,15 @@
 export type Theme = "light" | "dark";
 export type ThemePreference = "system" | Theme;
 export type SuggestionMode = "slash" | "mention" | null;
-export type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | null;
+export type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | "retrying" | "summarizing" | null;
+export type RetryStatus = {
+  kind: "agent" | "summarization";
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  errorMessage?: string;
+  source?: "branchSummary" | "compaction";
+};
 export type MessageLoad = { status: "idle" | "loading" | "ready" | "error"; error?: string };
 export type ActivityStep = {
   id: string;
@@ -31,6 +39,8 @@ export type TaskUiState = {
   extensionWorkingFrames?: string[];
   extensionWorkingInterval?: number;
   extensionHiddenThinkingLabel?: string;
+  extensionToolsExpanded?: boolean;
+  retryStatus?: RetryStatus;
   approval?: { requestId: string; toolName: string; args?: unknown };
 };
 export type AuthPromptOption = { id: string; label: string; description?: string };

@@ -646,7 +646,7 @@ function ChangeReviewPanel({
               />
               <nav className="change-review-files" aria-label={t.changeReviewFileList}>
                 <div className="change-review-files-title"><span>{t.changeReviewFileList}</span><small>{selectedReview.fileCountTruncated ? `${selectedReview.files.length}+` : selectedReview.files.length}</small></div>
-                <label className="change-review-file-filter"><Icon name="search" size={12} /><input value={fileFilter} onChange={(event) => onFileFilter(event.target.value)} placeholder={t.changeReviewFilterFiles} aria-label={t.changeReviewFilterFiles} /></label>
+                <label className="change-review-file-filter"><Icon name="search" size={12} /><input type="search" value={fileFilter} onChange={(event) => onFileFilter(event.target.value)} placeholder={t.changeReviewFilterFiles} aria-label={t.changeReviewFilterFiles} /></label>
                 <ChangeReviewFileTree files={selectedReview.files} selectedPath={selectedFile?.path ?? null} expandedPaths={expandedPaths} query={fileFilter} language={language} onExpandedPaths={onExpandedPaths} onSelect={onSelectPath} />
                 {selectedReview.fileCountTruncated && <div className="change-review-list-warning"><Icon name="alert" size={12} /><span>{selectedReview.omittedFiles ? t.changeReviewOmittedFiles(selectedReview.omittedFiles) : t.changeReviewCollectionTruncated}</span></div>}
               </nav>

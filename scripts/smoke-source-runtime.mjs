@@ -1,5 +1,5 @@
 import { fork } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -12,12 +12,37 @@ const expectedPermissionVersion = JSON.parse(readFileSync(path.join(root, "node_
 const hostPath = path.join(root, "packages", "pi-host", "dist", "index.js");
 const piModulePath = path.join(root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
 const agentDir = mkdtempSync(path.join(os.tmpdir(), "pideck-source-smoke-"));
+const extensionDir = path.join(agentDir, "extensions");
+const packageWorkspace = path.join(agentDir, "package-workspace");
+const packageSource = path.join(packageWorkspace, "demo-package");
+const projectExtensionDir = path.join(packageWorkspace, ".pi", "extensions");
+mkdirSync(extensionDir, { recursive: true });
+mkdirSync(packageWorkspace, { recursive: true });
+mkdirSync(packageSource, { recursive: true });
+mkdirSync(projectExtensionDir, { recursive: true });
+writeFileSync(path.join(packageSource, "package.json"), JSON.stringify({ name: "pideck-package-state-smoke", version: "1.0.0" }), "utf8");
+writeFileSync(path.join(extensionDir, "pideck-runtime-smoke.ts"), `
+export default function pideckRuntimeSmoke(pi) {
+  pi.registerCommand("pideck-runtime-smoke", {
+    description: "Verify PiDeck extension runtime bindings",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "rpc") throw new Error(\`Expected rpc extension mode, received \${ctx.mode}\`);
+      await ctx.waitForIdle();
+      ctx.ui.notify("pideck-runtime-smoke:rpc", "info");
+      const result = await ctx.newSession();
+      if (result.cancelled) throw new Error("Extension-created session was cancelled");
+    },
+  });
+}
+`, "utf8");
 
 await new Promise((resolve, reject) => {
   let stderr = "";
   let requested = false;
   let settled = false;
   let taskId;
+  let extensionModeSeen = false;
+  let extensionReplacementSeen = false;
   const child = fork(hostPath, [], {
     cwd: root,
     env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PIDECK_HOST_PROCESS: "1", PIDECK_PI_MODULE: piModulePath },
@@ -39,6 +64,15 @@ await new Promise((resolve, reject) => {
     if (!settled) finish(new Error(`Source PiHost exited before completing smoke (code ${code ?? "null"}, signal ${signal ?? "none"})`));
   });
   child.on("message", (message) => {
+    if (message?.type === "agent.event" && message.event?.type === "session.replaced") {
+      extensionReplacementSeen = Boolean(message.event.task?.id && message.event.previousTaskId === taskId);
+      if (message.event.task?.id) taskId = message.event.task.id;
+      return;
+    }
+    if (message?.type === "agent.event" && message.event?.type === "extension.ui.notify" && message.event.message === "pideck-runtime-smoke:rpc") {
+      extensionModeSeen = true;
+      return;
+    }
     if (message?.type === "runtime.status" && message.payload === "connected" && !requested) {
       requested = true;
       child.send({ id: "runtime-status", command: "runtime.status" });
@@ -63,6 +97,64 @@ await new Promise((resolve, reject) => {
     if (message?.id === "permission-status") {
       if (!message.ok || message.result?.source !== "pi-permission-system" || !String(message.result?.configPath ?? "").startsWith(agentDir)) {
         finish(new Error(`Unexpected permission status: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "project-trust-before", command: "projects.trustStatus", payload: { cwd: packageWorkspace } });
+      return;
+    }
+    if (message?.id === "project-trust-before") {
+      if (!message.ok || message.result?.hasTrustRequiringResources !== true || message.result?.trusted !== false || message.result?.source !== "default") {
+        finish(new Error(`Unexpected unresolved project trust: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "project-trust-save", command: "projects.setTrust", payload: { cwd: packageWorkspace, trusted: true } });
+      return;
+    }
+    if (message?.id === "project-trust-save") {
+      if (!message.ok || message.result?.trusted !== true || message.result?.source !== "saved") {
+        finish(new Error(`Project trust was not persisted: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "package-disable", command: "packages.configure", payload: { source: packageSource, enabled: false, local: true, cwd: packageWorkspace } });
+      return;
+    }
+    if (message?.id === "package-disable") {
+      if (!message.ok) {
+        finish(new Error(`Could not disable smoke package: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "package-filter", command: "packages.configureResource", payload: { source: packageSource, type: "extension", path: "extension.js", enabled: false, local: true, cwd: packageWorkspace } });
+      return;
+    }
+    if (message?.id === "package-filter") {
+      if (!message.ok) {
+        finish(new Error(`Could not configure smoke package resource: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "package-list-disabled", command: "packages.list", payload: { cwd: packageWorkspace } });
+      return;
+    }
+    if (message?.id === "package-list-disabled") {
+      const configured = Array.isArray(message.result) ? message.result.find((item) => item?.source === packageSource && item.scope === "project") : undefined;
+      if (!message.ok || configured?.disabled !== true || configured?.filtered !== true) {
+        finish(new Error(`Disabled package state was not reported: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "package-enable", command: "packages.configure", payload: { source: packageSource, enabled: true, local: true, cwd: packageWorkspace } });
+      return;
+    }
+    if (message?.id === "package-enable") {
+      if (!message.ok) {
+        finish(new Error(`Could not enable smoke package: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "package-list-enabled", command: "packages.list", payload: { cwd: packageWorkspace } });
+      return;
+    }
+    if (message?.id === "package-list-enabled") {
+      const configured = Array.isArray(message.result) ? message.result.find((item) => item?.source === packageSource && item.scope === "project") : undefined;
+      if (!message.ok || configured?.disabled !== false || configured?.filtered !== true) {
+        finish(new Error(`Enabled filtered package state was not reported: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "projects-list", command: "projects.list", payload: { knownCwds: [root] } });
@@ -148,6 +240,14 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Permission Extension did not load with its command source metadata: ${JSON.stringify(message)}`));
         return;
       }
+      child.send({ id: "agent-cycle-model", command: "agent.cycleModel", payload: { taskId, cwd: root, direction: "forward" } });
+      return;
+    }
+    if (message?.id === "agent-cycle-model") {
+      if (!message.ok || typeof message.result?.thinkingLevel !== "string" || !Array.isArray(message.result?.thinkingLevels)) {
+        finish(new Error(`Unexpected agent.cycleModel response: ${JSON.stringify(message)}`));
+        return;
+      }
       child.send({ id: "agent-queue", command: "agent.queue", payload: { taskId, cwd: root } });
       return;
     }
@@ -183,8 +283,16 @@ await new Promise((resolve, reject) => {
       return;
     }
     if (message?.id === "settings-get") {
-      if (!message.ok || !message.result || typeof message.result.compactionEnabled !== "boolean") {
+      if (!message.ok || !message.result || typeof message.result.compactionEnabled !== "boolean" || typeof message.result.effectiveExternalEditor !== "string") {
         finish(new Error(`Unexpected settings.get response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "settings-update-editor", command: "settings.update", payload: { cwd: root, externalEditor: "pideck-smoke-editor --wait" } });
+      return;
+    }
+    if (message?.id === "settings-update-editor") {
+      if (!message.ok || message.result?.externalEditor !== "pideck-smoke-editor --wait" || message.result?.effectiveExternalEditor !== "pideck-smoke-editor --wait" || message.result?.externalEditorSource !== "user") {
+        finish(new Error(`Unexpected external editor settings update: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "session-reload", command: "sessions.reload", payload: { taskId, cwd: root } });
@@ -201,6 +309,14 @@ await new Promise((resolve, reject) => {
     if (message?.id === "workspace-snapshot") {
       if (!message.ok || !message.result || !Array.isArray(message.result.files)) {
         finish(new Error(`Unexpected workspace.snapshot response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "extension-runtime-command", command: "agent.prompt", payload: { taskId, cwd: root, text: "/pideck-runtime-smoke" } });
+      return;
+    }
+    if (message?.id === "extension-runtime-command") {
+      if (!message.ok || message.result?.disposition !== "extension-command" || !extensionModeSeen || !extensionReplacementSeen) {
+        finish(new Error(`Extension runtime bindings did not execute through rpc mode and AgentSessionRuntime: ${JSON.stringify({ message, extensionModeSeen, extensionReplacementSeen })}`));
         return;
       }
       finish();

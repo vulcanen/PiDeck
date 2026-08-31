@@ -1,14 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session as electronSession, shell, Tray } from "electron";
 import { fork as forkNode, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { AppLanguage, PiHostRequest, PiHostResponse, WindowTheme } from "@pideck/contracts";
+import type { AppLanguage, PiHostRequest, PiHostResponse, PiPackageResourceType, ScopedModelSelection, WindowTheme } from "@pideck/contracts";
 import { appMenuCopy, copy } from "@pideck/i18n";
 import { assertKnownProjectCwd, assertTrustedIpcSender } from "./ipc-security";
 import { windowThemeColors } from "./window-theme";
 import { buildApplicationMenuTemplate, popupApplicationMenu } from "./application-menu";
+import { externalEditorCommandForPath } from "./external-editor";
 
 app.setName("PiDeck");
 
@@ -126,8 +127,6 @@ async function showAboutDialog() {
   const detail = t.aboutBody(
     app.getVersion(),
     piSdk,
-    process.versions.electron ?? "",
-    process.versions.node,
   );
   const options: Electron.MessageBoxOptions = {
     type: "info",
@@ -268,7 +267,7 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
       // signaled by agent_settled, not by the RPC response, so a fixed timeout
       // would only ever misreport a long-but-healthy run as failed. Leave it
       // unbounded; a crashed PiHost still rejects via the exit handler.
-      : command === "agent.prompt"
+      : command === "agent.prompt" || command === "input.externalEdit"
         ? 0
         : command.startsWith("packages.")
           ? 10 * 60_000
@@ -380,6 +379,7 @@ function registerIpcHandlers() {
     hideProjectCwd(requireKnownProjectCwd(cwd));
     return null;
   });
+  registerTrustedIpcHandler("projects:trust-status", (_event, cwd: string) => requestHost("projects.trustStatus", { cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("projects:set-trust", (_event, cwd: string, trusted: boolean) => requestHost("projects.setTrust", { cwd: requireKnownProjectCwd(cwd), trusted }));
   registerTrustedIpcHandler("sessions:list", (_event, projectId?: string) => requestHost("sessions.list", { cwd: requireKnownProjectCwd(projectId) }));
   registerTrustedIpcHandler("sessions:create", (_event, input?: { cwd?: string; name?: string }) => requestHost("sessions.create", { ...input, cwd: requireKnownProjectCwd(input?.cwd) }));
@@ -409,7 +409,10 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("sessions:share", (_event, taskId: string, cwd?: string) => requestHost("sessions.share", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:changelog", () => requestHost("app.changelog"));
   registerTrustedIpcHandler("models:list", () => requestHost("models.list"));
+  registerTrustedIpcHandler("models:refresh", () => requestHost("models.refresh"));
   registerTrustedIpcHandler("workspace:snapshot", (_event, cwd: string) => requestHost("workspace.snapshot", { cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("input:keybindings", (_event, cwd?: string) => requestHost("input.keybindings", { cwd: optionalKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("input:external-edit", (_event, content: string, cwd?: string) => requestHost("input.externalEdit", { content, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("providers:list", () => requestHost("providers.list"));
   registerTrustedIpcHandler("providers:login", async (_event, providerId: string, method: "api-key" | "oauth", secret?: string, authOperationId?: string) => {
     await requestHost("providers.login", { providerId, method, secret, authOperationId });
@@ -429,7 +432,8 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("agent:abort", (_event, taskId: string, cwd?: string) => requestHost("agent.abort", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-thinking-level", (_event, taskId: string, level: string, cwd?: string) => requestHost("agent.setThinkingLevel", { taskId, level, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-model", (_event, taskId: string, providerId: string, modelId: string, cwd?: string) => requestHost("agent.setModel", { taskId, providerId, modelId, cwd: requireKnownProjectCwd(cwd) }));
-  registerTrustedIpcHandler("agent:set-scoped-models", (_event, taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string) => requestHost("agent.setScopedModels", { taskId, modelIds, persist, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:cycle-model", (_event, taskId: string, direction: "forward" | "backward", cwd?: string) => requestHost("agent.cycleModel", { taskId, direction, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("agent:set-scoped-models", (_event, taskId: string, models: ScopedModelSelection[] | null, persist?: boolean, cwd?: string) => requestHost("agent.setScopedModels", { taskId, models, persist, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:queue", (_event, taskId: string, cwd?: string) => requestHost("agent.queue", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("agent:set-queue-modes", (_event, taskId: string, modes: { steeringMode?: "all" | "one-at-a-time"; followUpMode?: "all" | "one-at-a-time" }, cwd?: string) => requestHost("agent.setQueueModes", { taskId, cwd: requireKnownProjectCwd(cwd), ...modes }));
   registerTrustedIpcHandler("agent:clear-queue", (_event, taskId: string, cwd?: string) => requestHost("agent.clearQueue", { taskId, cwd: requireKnownProjectCwd(cwd) }));
@@ -438,12 +442,37 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("agent:delete-queue", (_event, taskId: string, messageId: string, cwd?: string) => requestHost("agent.deleteQueue", { taskId, messageId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("settings:get", (_event, cwd?: string) => requestHost("settings.get", { cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("settings:update", (_event, settings: Record<string, unknown>, cwd?: string) => requestHost("settings.update", { ...settings, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("settings:choose-external-editor", async () => {
+    if (!hostWindow) return null;
+    const result = await dialog.showOpenDialog(hostWindow, {
+      title: copy[currentLanguage].piExternalEditorDialogTitle,
+      properties: ["openFile"],
+      filters: process.platform === "win32"
+        ? [{ name: copy[currentLanguage].piExternalEditorApplications, extensions: ["exe", "com", "cmd", "bat"] }]
+        : undefined,
+    });
+    const editorPath = result.canceled ? undefined : result.filePaths[0];
+    if (!editorPath) return null;
+    const isMacApplication = process.platform === "darwin" && path.extname(editorPath).toLowerCase() === ".app";
+    try {
+      if (!isMacApplication) accessSync(editorPath, fsConstants.X_OK);
+    } catch {
+      throw new Error(copy[currentLanguage].piExternalEditorNotExecutable);
+    }
+    try {
+      return externalEditorCommandForPath(editorPath);
+    } catch {
+      throw new Error(copy[currentLanguage].piExternalEditorPathUnsupported);
+    }
+  });
   registerTrustedIpcHandler("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
   registerTrustedIpcHandler("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
   registerTrustedIpcHandler("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
   registerTrustedIpcHandler("packages:remove", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.remove", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
   registerTrustedIpcHandler("packages:update", (_event, source?: string, cwd?: string) => requestHost("packages.update", { source, cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
   registerTrustedIpcHandler("packages:configure", (_event, source: string, enabled: boolean, local?: boolean, cwd?: string) => requestHost("packages.configure", { source, enabled, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
+  registerTrustedIpcHandler("packages:configure-resource", (_event, source: string, type: PiPackageResourceType, resourcePath: string, enabled: boolean, local?: boolean, cwd?: string) => requestHost("packages.configureResource", { source, type, path: resourcePath, enabled, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
+  registerTrustedIpcHandler("packages:check-updates", (_event, cwd?: string) => requestHost("packages.checkUpdates", { cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
   registerTrustedIpcHandler("approval:resolve", (_event, requestId: string, decision: "allow-once" | "deny") => requestHost("approval.resolve", { requestId, decision }));
   registerTrustedIpcHandler("permissions:status", () => requestHost("permissions.status"));
   registerTrustedIpcHandler("permissions:set-mode", (_event, mode: "ask" | "allow" | "deny" | "yolo") => requestHost("permissions.setMode", { mode }));

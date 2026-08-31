@@ -26,7 +26,6 @@ export interface AppSidebarProps {
   shortcut: (key: string) => string;
   onCloseMobile: () => void;
   onToggleSidebar: () => void;
-  onOpenCommandPalette: () => void;
   onCreateTask: () => void | Promise<unknown>;
   onCreateTaskForProject: (project: ProjectSummary) => void | Promise<unknown>;
   onChooseProject: () => void | Promise<unknown>;
@@ -43,7 +42,7 @@ export interface AppSidebarProps {
 export function AppSidebar({
   language, t, sidebarRef, searchInputRef, mobileSidebarOpen, sidebarCollapsed, backgroundInert = false, projectCwd, projects,
   projectTasksByCwd, projectTaskLoads, expandedProjectCwds, searchQuery, activeTask,
-  initialLoading, runtimeStatus, shortcut, onCloseMobile, onOpenCommandPalette, onCreateTask, onCreateTaskForProject,
+  initialLoading, runtimeStatus, shortcut, onCloseMobile, onCreateTask, onCreateTaskForProject,
   onToggleSidebar, onChooseProject, onSearchQuery, onSelectProject, onOpenProjectContext, onSelectTask,
   onOpenTaskContext, onTaskMenu, onLoadProjectSessions, onRetry,
 }: AppSidebarProps) {
@@ -52,7 +51,7 @@ export function AppSidebar({
     <aside ref={sidebarRef} id="workspace-sidebar" className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} aria-label={t.openNavigation} inert={backgroundInert} aria-hidden={backgroundInert || undefined}>
       <div className="sidebar-mobile-header"><strong>{t.projects}</strong><button className="icon-button" type="button" title={t.closeNavigation} aria-label={t.closeNavigation} onClick={onCloseMobile}><Icon name="x" /></button></div>
       <button className="new-task" type="button" title={t.newTask} aria-label={t.newTask} disabled={!projectCwd || initialLoading} onClick={() => { onCloseMobile(); void onCreateTask(); }}><span className="new-task-icon"><Icon name="plus" /></span><span>{t.newTask}</span><kbd>{shortcut("N")}</kbd></button>
-      <label className="search-box"><Icon name="search" size={15} /><input ref={searchInputRef} value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder={t.search} aria-label={t.search} /><kbd>/</kbd></label>
+      <label className="search-box"><Icon name="search" size={15} /><input ref={searchInputRef} type="search" value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder={t.search} aria-label={t.search} /><kbd>/</kbd></label>
       <div className="sidebar-scroll">
         <div className="section-label"><span>{t.projects}</span><button className="sidebar-collapse-toggle" type="button" title={sidebarCollapsed ? t.expandSidebar : t.collapseSidebar} aria-label={sidebarCollapsed ? t.expandSidebar : t.collapseSidebar} aria-expanded={!sidebarCollapsed} aria-controls="workspace-sidebar" onClick={onToggleSidebar}><Icon name="chevron" size={14} /></button><button className="project-add" type="button" title={t.openProject} aria-label={t.openProject} disabled={initialLoading} onClick={() => void onChooseProject()}><Icon name="plus" size={13} /></button></div>
         <div className="project-list">
@@ -84,7 +83,6 @@ export function AppSidebar({
         </div>
       </div>
       <div className="sidebar-footer">
-        <button className="sidebar-command" type="button" title={t.command} aria-label={t.command} onClick={() => { onCloseMobile(); onOpenCommandPalette(); }}><Icon name="command" /><span>{t.command}</span><kbd>{shortcut("K")}</kbd></button>
         <div className={`runtime-status ${runtimeStatus}`} aria-label={runtimeStatus === "connected" ? t.connected : runtimeStatus === "starting" ? t.runtimeStarting : t.runtimeDisconnected}><span className="status-dot" /><span>{runtimeStatus === "connected" ? t.connected : runtimeStatus === "starting" ? t.runtimeStarting : t.runtimeDisconnected}</span>{runtimeStatus === "disconnected" && <button type="button" title={t.retry} aria-label={t.retry} onClick={() => void onRetry()}>{t.retry}</button>}</div>
       </div>
     </aside>

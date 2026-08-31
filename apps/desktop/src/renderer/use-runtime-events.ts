@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import type { AgentQueueState, ContextUsage, ExtensionUiRequest, PiDeckRuntimeEvent, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewUnavailableReason, SessionRunRecord } from "@pideck/contracts";
 import type { TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
@@ -24,14 +24,14 @@ export interface RuntimeEventsOptions {
   queueModes: Partial<Pick<AgentQueueState, "steeringMode" | "followUpMode">>;
   queueState: AgentQueueState | null;
   setRuntimeStatus: (status: "connected" | "starting" | "disconnected") => void;
-  showNotice: (message: string) => void;
+  showNotice: (message: string, kind?: "info" | "error") => void;
   patchTaskUi: (taskId: string, patch: Partial<TaskUiState>) => void;
   updateTaskLists: (update: (tasks: TaskSummary[]) => TaskSummary[]) => void;
   discardStreamDeltas: (taskId: string) => void;
   queueStreamDelta: (taskId: string, delta: string) => void;
   updateActivity: (taskId: string, update: (steps: ActivityStep[]) => ActivityStep[]) => void;
   setQueueState: (state: AgentQueueState | null) => void;
-  setExtensionUiRequest: (request: ExtensionUiRequest | null) => void;
+  setExtensionUiRequest: React.Dispatch<React.SetStateAction<ExtensionUiRequest | null>>;
   setSteeringMessageKeysByTask: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
   setMessagesByTask: React.Dispatch<React.SetStateAction<Record<string, any[]>>>;
   setTaskUi: React.Dispatch<React.SetStateAction<Record<string, TaskUiState>>>;
@@ -43,6 +43,7 @@ export interface RuntimeEventsOptions {
   onChangeReviewUpdated: (taskId: string, review: SessionChangeReview) => void;
   onChangeReviewStatus: (taskId: string, availability: SessionChangeReviewAvailability, reason?: SessionChangeReviewUnavailableReason) => void;
   onExtensionEditorText: (text: string) => void;
+  onSessionReplaced: (task: TaskSummary, previousTaskId: string) => void;
 }
 
 export function useRuntimeEvents({
@@ -51,7 +52,10 @@ export function useRuntimeEvents({
   setQueueState, setExtensionUiRequest, setSteeringMessageKeysByTask, setMessagesByTask,
   setTaskUi, setMessageLoads, setContextUsage, setActiveTask, refreshWorkspace,
   onQueueActivity, onChangeReviewUpdated, onChangeReviewStatus, onExtensionEditorText,
+  onSessionReplaced,
 }: RuntimeEventsOptions) {
+  const replacementTaskIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => { replacementTaskIdRef.current = undefined; }, [activeTaskId]);
   // Context usage only belongs to the conversation currently on screen; a
   // background task in another project must not overwrite it. Fetching per
   // event is also cheap to skip: refresh only on boundaries worth reflecting.
@@ -75,13 +79,13 @@ export function useRuntimeEvents({
       return;
     }
     if (runtimeEvent.type === "extension.ui.notify") {
-      const event = runtimeEvent.event as { message?: string } | undefined;
-      if (event?.message) showNotice(event.message);
+      const event = runtimeEvent.event as { message?: string; level?: string } | undefined;
+      if (event?.message) showNotice(event.message, event.level === "error" ? "error" : "info");
       return;
     }
     if (runtimeEvent.type === "agent.event" && (runtimeEvent.event as any)?.type === "extension.ui.notify") {
-      const event = runtimeEvent.event as { message?: string } | undefined;
-      if (event?.message) showNotice(event.message);
+      const event = runtimeEvent.event as { message?: string; level?: string } | undefined;
+      if (event?.message) showNotice(event.message, event.level === "error" ? "error" : "info");
       return;
     }
     const taskId = runtimeEvent.taskId;
@@ -100,9 +104,43 @@ export function useRuntimeEvents({
     }
     if (runtimeEvent.type !== "agent.event") return;
     const event = runtimeEvent.event as any;
+    if (event?.type === "session.replaced" && event.task && typeof event.task === "object") {
+      const nextTask = event.task as TaskSummary;
+      const previousTaskId = typeof event.previousTaskId === "string" ? event.previousTaskId : taskId;
+      if (activeTaskId === previousTaskId) replacementTaskIdRef.current = nextTask.id;
+      setMessagesByTask((current) => current[nextTask.id] ? current : { ...current, [nextTask.id]: [] });
+      setMessageLoads((current) => ({ ...current, [nextTask.id]: { status: "loading" } }));
+      setTaskUi((current) => ({ ...current, [nextTask.id]: current[nextTask.id] ?? createDefaultTaskUiState() }));
+      setQueueState(null);
+      onSessionReplaced(nextTask, previousTaskId);
+      return;
+    }
+    if (event?.type === "extension.shutdown.requested") {
+      void window.pideck.app.quit();
+      return;
+    }
+    if (event?.type === "extension.error") {
+      const message = typeof event.error === "string" ? event.error : copy[language].extensionErrorUnknown;
+      showNotice(copy[language].extensionError(message), "error");
+      return;
+    }
+    if (event?.type === "extension.diagnostics" && Array.isArray(event.diagnostics) && event.diagnostics.length > 0) {
+      const first = event.diagnostics.find((diagnostic: any) => diagnostic?.type === "error") ?? event.diagnostics[0];
+      const detail = typeof first?.message === "string" ? first.message : copy[language].extensionErrorUnknown;
+      showNotice(copy[language].extensionDiagnostics(detail, event.diagnostics.length), event.diagnostics.some((diagnostic: any) => diagnostic?.type === "error") ? "error" : "info");
+      return;
+    }
+    if (event?.type === "model.fallback" && typeof event.message === "string") {
+      showNotice(event.message);
+      return;
+    }
+    if (event?.type === "extension.ui.dismiss" && typeof event.requestId === "string") {
+      setExtensionUiRequest((current) => current?.requestId === event.requestId ? null : current);
+      return;
+    }
     if (event?.type === "extension.ui.presentation") {
       if (event.action === "reset" && taskId === activeTaskId) document.title = "PiDeck";
-      if (event.action === "editor-text" && taskId === activeTaskId && typeof event.text === "string") onExtensionEditorText(event.text);
+      if (event.action === "editor-text" && (taskId === activeTaskId || taskId === replacementTaskIdRef.current) && typeof event.text === "string") onExtensionEditorText(event.text);
       if (event.action === "title" && taskId === activeTaskId && typeof event.title === "string" && event.title.trim()) document.title = event.title.trim();
       setTaskUi((current) => {
         const previous = current[taskId] ?? createDefaultTaskUiState();
@@ -126,6 +164,7 @@ export function useRuntimeEvents({
           return { ...current, [taskId]: { ...previous, extensionWorkingFrames: frames, extensionWorkingInterval: interval } };
         }
         if (event.action === "hidden-thinking-label") return { ...current, [taskId]: { ...previous, extensionHiddenThinkingLabel: typeof event.label === "string" ? event.label : undefined } };
+        if (event.action === "tools-expanded") return { ...current, [taskId]: { ...previous, extensionToolsExpanded: event.expanded === true } };
         return current;
       });
       return;
@@ -180,9 +219,25 @@ export function useRuntimeEvents({
         const freshActivity = [{ id: `${taskId}:thinking:${startedAt}`, kind: "thinking" as const, label: copy[language].executionThinking, startedAt }];
         return { ...current, [taskId]: { ...previous, isSending: true, isCompacting: false, workingPhase: "thinking", streamText: "", toolName: undefined, activity: freshActivity, completedActivity: hasCompletedWork ? [...previous.completedActivity, previous.activity] : previous.completedActivity } };
       });
-    } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined });
-    else if (event?.type === "compaction_start") patchTaskUi(taskId, { isCompacting: true, workingPhase: "compacting", toolName: undefined });
-    else if (event?.type === "compaction_end") { patchTaskUi(taskId, { isCompacting: false, workingPhase: "thinking" }); if (taskId === activeTaskId) refreshContextUsage(taskId); }
+    } else if (event?.type === "turn_start") patchTaskUi(taskId, { workingPhase: "thinking", toolName: undefined, retryStatus: undefined });
+    else if (event?.type === "compaction_start") patchTaskUi(taskId, { isCompacting: true, workingPhase: "compacting", toolName: undefined, retryStatus: undefined });
+    else if (event?.type === "compaction_end") { patchTaskUi(taskId, { isCompacting: false, workingPhase: "thinking", retryStatus: undefined }); if (taskId === activeTaskId) refreshContextUsage(taskId); }
+    else if (event?.type === "auto_retry_start") {
+      patchTaskUi(taskId, { isSending: true, workingPhase: "retrying", toolName: undefined, retryStatus: { kind: "agent", attempt: Number(event.attempt) || 1, maxAttempts: Number(event.maxAttempts) || 1, delayMs: Number(event.delayMs) || 0, errorMessage: typeof event.errorMessage === "string" ? event.errorMessage : undefined } });
+    }
+    else if (event?.type === "auto_retry_end") {
+      patchTaskUi(taskId, { retryStatus: undefined, workingPhase: event.success ? "thinking" : null });
+      if (!event.success && typeof event.finalError === "string") showNotice(copy[language].autoRetryFailed(event.finalError), "error");
+    }
+    else if (event?.type === "summarization_retry_scheduled") {
+      patchTaskUi(taskId, { isCompacting: true, workingPhase: "summarizing", retryStatus: { kind: "summarization", attempt: Number(event.attempt) || 1, maxAttempts: Number(event.maxAttempts) || 1, delayMs: Number(event.delayMs) || 0, errorMessage: typeof event.errorMessage === "string" ? event.errorMessage : undefined } });
+    }
+    else if (event?.type === "summarization_retry_attempt_start") {
+      setTaskUi((current) => { const previous = current[taskId] ?? createDefaultTaskUiState(); return { ...current, [taskId]: { ...previous, isCompacting: true, workingPhase: "summarizing", retryStatus: previous.retryStatus ? { ...previous.retryStatus, source: event.source === "branchSummary" ? "branchSummary" : "compaction", delayMs: 0 } : { kind: "summarization", attempt: 1, maxAttempts: 1, delayMs: 0, source: event.source === "branchSummary" ? "branchSummary" : "compaction" } } }; });
+    }
+    else if (event?.type === "summarization_retry_finished") {
+      patchTaskUi(taskId, { retryStatus: undefined, workingPhase: "compacting" });
+    }
     else if (event?.type === "message_start" || event?.type === "message_end") {
       if (taskId === activeTaskId) refreshContextUsage(taskId);
     }
@@ -242,7 +297,7 @@ export function useRuntimeEvents({
       discardStreamDeltas(taskId);
       const endedAt = Date.now();
       updateActivity(taskId, (steps) => steps.map((step) => step.endedAt ? step : { ...step, endedAt }));
-      setTaskUi((current) => { const previous = current[taskId] ?? createDefaultTaskUiState(); const completedActivity = previous.activity.length > 0 ? [...previous.completedActivity, previous.activity.map((step) => step.endedAt ? step : { ...step, endedAt })] : previous.completedActivity; return { ...current, [taskId]: { ...previous, isSending: false, isCompacting: false, workingPhase: null, streamText: "", toolName: undefined, activity: [], completedActivity } }; });
+      setTaskUi((current) => { const previous = current[taskId] ?? createDefaultTaskUiState(); const completedActivity = previous.activity.length > 0 ? [...previous.completedActivity, previous.activity.map((step) => step.endedAt ? step : { ...step, endedAt })] : previous.completedActivity; return { ...current, [taskId]: { ...previous, isSending: false, isCompacting: false, workingPhase: null, streamText: "", toolName: undefined, retryStatus: undefined, activity: [], completedActivity } }; });
       void window.pideck.sessions.messages(taskId, projectCwd).then((next) => { setMessagesByTask((current) => ({ ...current, [taskId]: mergeMessageSnapshot(current[taskId] ?? [], next as any[], true) })); setMessageLoads((current) => ({ ...current, [taskId]: { status: "ready" } })); }).catch((error) => setMessageLoads((current) => ({ ...current, [taskId]: { status: "error", error: error instanceof Error ? error.message : String(error) } })));
       // Read back the record PiHost just appended so the completed view and a
       // later restart use the same authoritative duration value.

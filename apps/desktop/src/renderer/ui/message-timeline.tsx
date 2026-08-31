@@ -1,7 +1,7 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { copy, type Language } from "@pideck/i18n";
-import type { ActivityStep, PreviewImage, WorkingPhase } from "../types";
-import { messageIdentity } from "../message-utils";
+import type { ActivityStep, PreviewImage, RetryStatus, WorkingPhase } from "../types";
+import { messageIdentity, messageSearchText } from "../message-utils";
 import { buildMessageTimelineItems } from "../timeline-utils";
 import type { ConversationScrollHandle, ConversationScrollSnapshot } from "../use-conversation-scroll";
 import { ExecutionSummary } from "./execution-summary";
@@ -45,6 +45,8 @@ interface MessageTimelineProps {
   workingVisible?: boolean;
   workingFrames?: string[];
   workingInterval?: number;
+  toolsExpanded?: boolean;
+  retryStatus?: RetryStatus;
   completedActivity: ActivityStep[][];
   steeringMessageKeys: string[];
   taskId: string;
@@ -58,6 +60,16 @@ interface MessageTimelineProps {
   footer?: ReactNode;
   onPreviewImage: (image: PreviewImage) => void;
   onContextMenuImage: (event: React.MouseEvent, image: PreviewImage) => void;
+  searchQuery?: string;
+  searchRequest?: { serial: number; direction: "forward" | "backward"; reset: boolean };
+  onSearchResult?: (result: { current: number; total: number }) => void;
+}
+
+function timelineItemSearchText(item: any): string {
+  if (item?.type === "message") return messageSearchText(item.message);
+  if (item?.type === "live") return item.text ?? "";
+  if (item?.type === "execution") return item.steps?.map((step: any) => JSON.stringify(step)).join("\n") ?? "";
+  return "";
 }
 
 // This component is the single owner of timeline scrolling. Position is owned
@@ -65,7 +77,7 @@ interface MessageTimelineProps {
 // switches (inactive panes are `visibility: hidden`, never unmounted), and the
 // container enables native scroll anchoring so a diagram resolving above the
 // viewport does not move what the reader is looking at.
-function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, workingMessage, workingVisible = true, workingFrames, workingInterval, completedActivity, steeringMessageKeys, taskId, scrollKey, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage }: MessageTimelineProps) {
+function MessageTimeline({ messages, language, running, activeActivity, streamText, workingPhase, toolName, workingMessage, workingVisible = true, workingFrames, workingInterval, toolsExpanded = false, retryStatus, completedActivity, steeringMessageKeys, taskId, scrollKey, active, messageReady, conversationRef, scrollPositionsRef, scrollHandleRef, onAtEndChange, footer, onPreviewImage, onContextMenuImage, searchQuery = "", searchRequest, onSearchResult }: MessageTimelineProps) {
   const items = useMemo(() => buildMessageTimelineItems({ messages, language, running, completedActivity, steeringMessageKeys, taskId, liveText: streamText, activeActivity, workingPhase, toolName }), [activeActivity, completedActivity, language, messages, running, steeringMessageKeys, streamText, taskId, toolName, workingPhase]);
   const initialSnapshotRef = useRef<ConversationScrollSnapshot | undefined>(scrollPositionsRef.current[scrollKey]);
   const initializedRef = useRef(false);
@@ -87,8 +99,51 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   // a growing conversation always keeps the newest messages rendered without
   // ever touching this state.
   const [visibleCount, setVisibleCount] = useState(FOLD_WINDOW);
+  const [activeSearchPosition, setActiveSearchPosition] = useState(-1);
+  const activeSearchPositionRef = useRef(-1);
+  const processedSearchRequestRef = useRef<number | null>(null);
   const firstVisibleIndex = Math.max(0, items.length - visibleCount);
   const hiddenCount = firstVisibleIndex;
+  // Message extraction (especially execution-step serialization) is much more
+  // expensive than substring matching. Build the normalized corpus only when
+  // the timeline changes so typing another character never re-parses every row.
+  const searchableItems = useMemo(() => items.map((item) => timelineItemSearchText(item).toLocaleLowerCase()), [items]);
+  const searchMatches = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (!query) return [];
+    const matches: number[] = [];
+    for (let index = 0; index < searchableItems.length; index += 1) {
+      if (searchableItems[index]?.includes(query)) matches.push(index);
+    }
+    return matches;
+  }, [searchableItems, searchQuery]);
+
+  useEffect(() => {
+    if (!active || !searchRequest) return;
+    if (processedSearchRequestRef.current === searchRequest.serial) return;
+    processedSearchRequestRef.current = searchRequest.serial;
+    if (searchMatches.length === 0) {
+      activeSearchPositionRef.current = -1;
+      setActiveSearchPosition(-1);
+      if (searchQuery.trim()) onSearchResult?.({ current: 0, total: 0 });
+      return;
+    }
+    const current = activeSearchPositionRef.current;
+    const next = searchRequest.reset || current < 0 || current >= searchMatches.length
+      ? searchRequest.direction === "backward" ? searchMatches.length - 1 : 0
+      : (current + (searchRequest.direction === "backward" ? -1 : 1) + searchMatches.length) % searchMatches.length;
+    activeSearchPositionRef.current = next;
+    setActiveSearchPosition(next);
+    onSearchResult?.({ current: next + 1, total: searchMatches.length });
+    const itemIndex = searchMatches[next];
+    setVisibleCount((count) => Math.max(count, items.length - itemIndex));
+  }, [active, items.length, onSearchResult, searchMatches, searchQuery, searchRequest]);
+
+  useLayoutEffect(() => {
+    if (!active || activeSearchPosition < 0) return;
+    const itemIndex = searchMatches[activeSearchPosition];
+    hostRef.current?.querySelector<HTMLElement>(`[data-timeline-index="${itemIndex}"]`)?.scrollIntoView({ block: "center" });
+  }, [active, activeSearchPosition, searchMatches, visibleCount]);
 
   const getItemKey = useCallback((index: number) => {
     const item = items[index];
@@ -266,16 +321,16 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     const item = items[index];
     if (!item) return null;
     return item.type === "execution"
-      ? <ExecutionSummary steps={item.steps} language={language} running={Boolean(item.running)} />
+      ? <ExecutionSummary steps={item.steps} language={language} running={Boolean(item.running)} toolsExpanded={toolsExpanded} />
       : item.type === "live"
         ? <article className="message assistant-message live-message">
             <LiveActivity steps={item.activitySteps} language={language} />
             {item.text
               ? <div className={`message-content live-response-content ${item.activitySteps.length ? "after-activity" : ""}`}><MarkdownContent text={item.text} language={language} /></div>
-              : workingVisible ? <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} message={workingMessage} frames={workingFrames} interval={workingInterval} /> : null}
+              : workingVisible ? <WorkingIndicator language={language} phase={item.phase} toolName={item.toolName} message={workingMessage} frames={workingFrames} interval={workingInterval} retryStatus={retryStatus} /> : null}
           </article>
         : <MemoMessageView message={item.message} language={language} onPreviewImage={onPreviewImage} onContextMenuImage={onContextMenuImage} />;
-  }, [items, language, onContextMenuImage, onPreviewImage, workingFrames, workingInterval, workingMessage, workingVisible]);
+  }, [items, language, onContextMenuImage, onPreviewImage, retryStatus, toolsExpanded, workingFrames, workingInterval, workingMessage, workingVisible]);
 
   const visibleIndexes = useMemo(() => {
     const list: number[] = [];
@@ -288,11 +343,11 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     {hiddenCount > 0 && <button type="button" className="timeline-show-earlier" onClick={showEarlier}>
       {copy[language].showEarlierMessages(hiddenCount)}
     </button>}
-    {visibleIndexes.map((index) => <div key={getItemKey(index)} className={`timeline-item timeline-item-${items[index]?.type ?? "unknown"} ${isAssistantTimelineItem(items[index]) && isAssistantTimelineItem(items[index + 1]) ? "assistant-continues" : ""}`}>{renderItem(index)}</div>)}
+    {visibleIndexes.map((index) => <div data-timeline-index={index} key={getItemKey(index)} className={`timeline-item timeline-item-${items[index]?.type ?? "unknown"} ${isAssistantTimelineItem(items[index]) && isAssistantTimelineItem(items[index + 1]) ? "assistant-continues" : ""} ${searchMatches[activeSearchPosition] === index ? "is-search-match" : ""}`}>{renderItem(index)}</div>)}
     {footer ? <div className="timeline-item">{footer}</div> : null}
   </div>;
 }
 
-const MemoMessageTimeline = memo(MessageTimeline, (previous, next) => previous.messages === next.messages && previous.language === next.language && previous.running === next.running && previous.activeActivity === next.activeActivity && previous.streamText === next.streamText && previous.workingPhase === next.workingPhase && previous.toolName === next.toolName && previous.completedActivity === next.completedActivity && previous.steeringMessageKeys === next.steeringMessageKeys && previous.taskId === next.taskId && previous.scrollKey === next.scrollKey && previous.active === next.active && previous.messageReady === next.messageReady && previous.conversationRef === next.conversationRef && previous.scrollPositionsRef === next.scrollPositionsRef && previous.scrollHandleRef === next.scrollHandleRef && previous.onAtEndChange === next.onAtEndChange && previous.footer === next.footer && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage);
+const MemoMessageTimeline = memo(MessageTimeline, (previous, next) => previous.messages === next.messages && previous.language === next.language && previous.running === next.running && previous.activeActivity === next.activeActivity && previous.streamText === next.streamText && previous.workingPhase === next.workingPhase && previous.toolName === next.toolName && previous.toolsExpanded === next.toolsExpanded && previous.retryStatus === next.retryStatus && previous.completedActivity === next.completedActivity && previous.steeringMessageKeys === next.steeringMessageKeys && previous.taskId === next.taskId && previous.scrollKey === next.scrollKey && previous.active === next.active && previous.messageReady === next.messageReady && previous.conversationRef === next.conversationRef && previous.scrollPositionsRef === next.scrollPositionsRef && previous.scrollHandleRef === next.scrollHandleRef && previous.onAtEndChange === next.onAtEndChange && previous.footer === next.footer && previous.onPreviewImage === next.onPreviewImage && previous.onContextMenuImage === next.onContextMenuImage && previous.searchQuery === next.searchQuery && previous.searchRequest === next.searchRequest && previous.onSearchResult === next.onSearchResult);
 
 export { MemoMessageTimeline };

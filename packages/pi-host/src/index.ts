@@ -1,6 +1,6 @@
-import { validatePiHostPayload, type PermissionMode, type PiHostRequest, type PiHostResponse, type PiSettingsUpdate, type SessionChangeReview, type SessionChangeReviewCollection, type SessionRunRecord } from "@pideck/contracts";
+import { validatePiHostPayload, type PermissionMode, type PiHostRequest, type PiHostResponse, type PiPackageResourceType, type PiSettingsUpdate, type ScopedModelSelection, type SessionChangeReview, type SessionChangeReviewCollection, type SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
-import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel } from "@pideck/pi-adapter";
+import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel, type PiSdk } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -18,10 +18,12 @@ import {
   waitForReservedAgentRun,
 } from "./agent-prompt-coordination.js";
 import { normalizeAgentEvent } from "./agent-event-adapter.js";
+import { withExternalEditorPathAliases } from "./external-editor-command.js";
 import {
   activeChangeReviews,
   activeProviderLoginByProvider,
   activeProviderLogins,
+  agentSessionRuntimes,
   agentRunReservations,
   agentSessionPackageRevisions,
   agentSessionPromises,
@@ -54,6 +56,7 @@ import {
   summarizeSessionChangeReview,
 } from "./session-change-review-store.js";
 import { sessionTranscriptMessages } from "./session-transcript.js";
+import { createTrustAwareSettingsManager, readProjectTrustStatus } from "./project-trust.js";
 
 function execFileText(file: string, args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -856,7 +859,7 @@ async function createPackageManagerContext(cwd: string): Promise<{ manager: any;
   const sdk = await loadPiSdk();
   if (!sdk.DefaultPackageManager || !sdk.SettingsManager) throw new Error("Pi PackageManager is not available in this Pi runtime");
   const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
-  const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
+  const { settingsManager } = createTrustAwareSettingsManager(sdk, cwd, agentDir);
   return { manager: new sdk.DefaultPackageManager({ cwd, agentDir, settingsManager }), settingsManager };
 }
 
@@ -864,11 +867,15 @@ async function createPackageManager(cwd: string): Promise<any> {
   return (await createPackageManagerContext(cwd)).manager;
 }
 
-async function settingsManagerFor(cwd: string): Promise<any> {
+async function settingsContextFor(cwd: string): Promise<{ sdk: PiSdk; agentDir: string; settingsManager: any }> {
   const sdk = await loadPiSdk();
   if (!sdk.SettingsManager) throw new Error("Pi SettingsManager is not available in this Pi runtime");
   const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
-  return sdk.SettingsManager.create(cwd, agentDir);
+  return { sdk, agentDir, settingsManager: createTrustAwareSettingsManager(sdk, cwd, agentDir).settingsManager };
+}
+
+async function settingsManagerFor(cwd: string): Promise<any> {
+  return (await settingsContextFor(cwd)).settingsManager;
 }
 
 function packageSourceString(value: unknown): string | undefined {
@@ -980,6 +987,74 @@ async function listSlashCommands(session: any) {
   return { builtins: jsonSafe([...builtins, ...extensionCommands]), prompts: jsonSafe(prompts), skills: jsonSafe(skills) };
 }
 
+const packageResourceSettingKey: Record<PiPackageResourceType, "extensions" | "skills" | "prompts" | "themes"> = {
+  extension: "extensions",
+  skill: "skills",
+  prompt: "prompts",
+  theme: "themes",
+};
+
+function configurePackageResource(settingsManager: any, source: string, type: PiPackageResourceType, resourcePath: string, enabled: boolean, local: boolean): boolean {
+  const normalizedPath = resourcePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!normalizedPath || path.posix.isAbsolute(normalizedPath) || normalizedPath.split("/").includes("..")) {
+    throw new Error("Package resource path must stay inside the package");
+  }
+  const settings = local ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings();
+  const packages = [...(settings[packageSettingsKey(local)] ?? [])];
+  const index = packages.findIndex((entry) => packageSourceString(entry) === source);
+  if (index < 0) throw new Error(`Package is not configured in this scope: ${source}`);
+  const current = packages[index];
+  const next = typeof current === "string" ? { source: current } : { ...current };
+  const settingKey = packageResourceSettingKey[type];
+  const includePattern = `+${normalizedPath}`;
+  const excludePattern = `-${normalizedPath}`;
+  const patterns = Array.isArray(next[settingKey])
+    ? next[settingKey].filter((pattern: string) => pattern !== includePattern && pattern !== excludePattern)
+    : [];
+  patterns.push(enabled ? includePattern : excludePattern);
+  next[settingKey] = patterns;
+  packages[index] = next;
+  if (local) settingsManager.setProjectPackages(packages);
+  else settingsManager.setPackages(packages);
+  return true;
+}
+
+async function listPackageResources(manager: any, configuredPackage: any): Promise<Array<{ type: PiPackageResourceType; path: string; enabled: boolean }>> {
+  let unfiltered: any;
+  try {
+    unfiltered = await manager.resolveExtensionSources([configuredPackage.source], { local: configuredPackage.scope === "project" });
+  } catch {
+    return [];
+  }
+  let effective: any = { extensions: [], skills: [], prompts: [], themes: [] };
+  try { effective = await manager.resolve(async () => "skip"); } catch { /* Keep installed resources visible even when another package is missing. */ }
+  const effectiveByPath = new Map<string, boolean>();
+  for (const plural of ["extensions", "skills", "prompts", "themes"] as const) {
+    for (const resource of effective?.[plural] ?? []) effectiveByPath.set(path.resolve(resource.path), resource.enabled !== false);
+  }
+  const types: Array<[PiPackageResourceType, "extensions" | "skills" | "prompts" | "themes"]> = [
+    ["extension", "extensions"], ["skill", "skills"], ["prompt", "prompts"], ["theme", "themes"],
+  ];
+  return types.flatMap(([type, plural]) => (unfiltered?.[plural] ?? []).flatMap((resource: any) => {
+    const baseDir = resource.metadata?.baseDir ?? configuredPackage.installedPath;
+    if (!baseDir) return [];
+    const relativePath = path.relative(baseDir, resource.path).replaceAll("\\", "/");
+    if (!relativePath || relativePath === ".." || relativePath.startsWith("../")) return [];
+    return [{ type, path: relativePath, enabled: effectiveByPath.get(path.resolve(resource.path)) === true }];
+  }));
+}
+
+function scopedModelSelections(session: any): ScopedModelSelection[] {
+  if (!Array.isArray(session.scopedModels)) return [];
+  return session.scopedModels.flatMap((item: any) => item?.model?.provider && item?.model?.id
+    ? [{
+        providerId: item.model.provider,
+        modelId: item.model.id,
+        ...(typeof item.thinkingLevel === "string" ? { thinkingLevel: item.thinkingLevel } : {}),
+      }]
+    : []);
+}
+
 function firstUserText(manager: any): string {
   for (const entry of manager.getEntries?.() ?? []) {
     if (entry?.type === "message" && entry.message?.role === "user") {
@@ -1019,8 +1094,11 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
     }
     // Do not interrupt an active turn. Once idle, recreate against the new
     // extension configuration while keeping the same Pi SessionManager/file.
-    existing.dispose?.();
+    const existingRuntime = agentSessionRuntimes.get(stateKey);
+    if (existingRuntime?.dispose) await existingRuntime.dispose();
+    else existing.dispose?.();
     agentSessions.delete(stateKey);
+    agentSessionRuntimes.delete(stateKey);
     agentSessionRevisions.delete(stateKey);
     agentSessionPackageRevisions.delete(stateKey);
     // Queue contents live only on AgentSession. Drop renderer-side queue
@@ -1036,6 +1114,9 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   const creationRevision = permissionEngine.revision;
   const creation = (async () => {
     const sdk = await loadPiSdk();
+    if (!sdk.AgentSessionRuntime) throw new Error("The installed Pi SDK does not expose AgentSessionRuntime");
+    const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+    const modelRuntime = await getModelRuntime();
     let manager = sessionManagers.get(stateKey);
     if (!manager) {
       const sessionPath = sessionFiles.get(stateKey);
@@ -1043,85 +1124,211 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       sessionManagers.set(stateKey, manager);
     }
     normalizeSessionImages(manager);
-    const permissionExtensionPath = resolvePermissionExtensionPath();
-    const resourceLoader = sdk.DefaultResourceLoader && permissionExtensionPath
-      ? new sdk.DefaultResourceLoader({ cwd, agentDir: sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent"), additionalExtensionPaths: [permissionExtensionPath] })
-      : undefined;
-    await resourceLoader?.reload?.();
-    const { session } = await sdk.createAgentSession({
-      cwd,
-      sessionManager: manager,
-      modelRuntime: await getModelRuntime(),
-      resourceLoader,
-    });
-    const permissionExtensionLoaded = Boolean(permissionExtensionPath && session.extensionRunner?.getRegisteredCommands?.().some((command: any) => (command.invocationName ?? command.name) === "permission-system"));
-    // Give every loaded Pi extension the desktop UI bridge. The permission
-    // extension uses the same select/input/confirm primitives as other
-    // extensions, so it no longer needs a separate TUI-only implementation.
-    await session.bindExtensions?.({ uiContext: permissionEngine.createUi(taskId, stateKey) });
-    const previousBeforeToolCall = session.agent.beforeToolCall;
-    session.agent.beforeToolCall = (context: any, signal?: AbortSignal) => permissionEngine.beforeToolCallWithExtension(
-      taskId,
-      context,
-      previousBeforeToolCall,
-      permissionExtensionLoaded,
-      signal,
-      stateKey,
-    );
-    session.subscribe((event: any) => {
+
+    const createRuntime = async (options: { cwd: string; agentDir: string; sessionManager: any; sessionStartEvent?: any }) => {
+      const { settingsManager } = createTrustAwareSettingsManager(sdk, options.cwd, options.agentDir);
+      const permissionExtensionPath = resolvePermissionExtensionPath();
+      const resourceLoader = sdk.DefaultResourceLoader
+        ? new sdk.DefaultResourceLoader({
+            cwd: options.cwd,
+            agentDir: options.agentDir,
+            settingsManager,
+            additionalExtensionPaths: permissionExtensionPath ? [permissionExtensionPath] : undefined,
+          })
+        : undefined;
+      await resourceLoader?.reload?.();
+      const modelPatterns = settingsManager?.getEnabledModels?.();
+      const scopeResult = Array.isArray(modelPatterns) && modelPatterns.length > 0 && sdk.resolveModelScopeWithDiagnostics
+        ? await sdk.resolveModelScopeWithDiagnostics(modelPatterns, modelRuntime, { signal: AbortSignal.timeout(15_000) })
+        : { scopedModels: [], diagnostics: [] };
+      const created = await sdk.createAgentSession({
+        cwd: options.cwd,
+        agentDir: options.agentDir,
+        sessionManager: options.sessionManager,
+        modelRuntime,
+        resourceLoader,
+        settingsManager,
+        scopedModels: scopeResult.scopedModels,
+        sessionStartEvent: options.sessionStartEvent,
+      });
+      const extensionErrors = created.extensionsResult?.errors ?? created.session.resourceLoader?.getExtensions?.().errors ?? [];
+      const diagnostics = [
+        ...scopeResult.diagnostics,
+        ...extensionErrors.map((error: { path: string; error: string }) => ({ type: "error", message: error.error, path: error.path })),
+      ];
+      return {
+        ...created,
+        services: {
+          cwd: options.cwd,
+          agentDir: options.agentDir,
+          modelRuntime,
+          settingsManager: settingsManager ?? created.session.settingsManager,
+          resourceLoader: resourceLoader ?? created.session.resourceLoader,
+          diagnostics,
+        },
+        diagnostics,
+      };
+    };
+
+    const initial = await createRuntime({ cwd, agentDir, sessionManager: manager });
+    const runtime = new sdk.AgentSessionRuntime(initial.session, initial.services, createRuntime, initial.diagnostics, initial.modelFallbackMessage);
+    const binding = { taskId, cwd, stateKey };
+
+    const resourceDiagnostics = (session: any, baseDiagnostics: any[] = []) => {
+      const diagnostics = [...baseDiagnostics];
+      for (const getter of ["getSkills", "getPrompts", "getThemes"] as const) {
+        const result = session.resourceLoader?.[getter]?.();
+        if (Array.isArray(result?.diagnostics)) diagnostics.push(...result.diagnostics);
+      }
+      const extensions = session.resourceLoader?.getExtensions?.();
+      for (const error of extensions?.errors ?? []) diagnostics.push({ type: "error", message: error.error, path: error.path });
+      diagnostics.push(...(session.extensionRunner?.getCommandDiagnostics?.() ?? []));
+      diagnostics.push(...(session.extensionRunner?.getShortcutDiagnostics?.() ?? []));
+      const seen = new Set<string>();
+      return diagnostics.filter((diagnostic: any) => {
+        const key = JSON.stringify([diagnostic?.type, diagnostic?.message, diagnostic?.path]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
+    const emitSessionSnapshot = (replace = true) => {
+      emit(binding.taskId, {
+        type: "message.snapshot",
+        replace,
+        messages: jsonSafe(sessionTranscriptMessages(runtime.session, sdk.sessionEntryToContextMessages)),
+      });
+    };
+
+    const reloadExtensions = async () => {
+      const session = runtime.session;
+      if (session.isStreaming || session.isCompacting || agentRunReservations.has(binding.stateKey)) {
+        throw new Error("Wait for the current agent run or compaction to finish before reloading extensions");
+      }
+      await session.reload({ beforeSessionStart: () => permissionEngine.resetUi(binding.taskId) });
+      agentSessionPackageRevisions.set(binding.stateKey, packageConfigRevision);
+      agentSessionRevisions.set(binding.stateKey, permissionEngine.revision);
+      const diagnostics = resourceDiagnostics(session, runtime.diagnostics as any[]);
+      if (diagnostics.length) emit(binding.taskId, { type: "extension.diagnostics", diagnostics: jsonSafe(diagnostics) });
+      emitSessionSnapshot(true);
+    };
+
+    const bindSession = async (session: any, diagnostics: any[] = []) => {
+      const boundTaskId = binding.taskId;
+      const boundCwd = binding.cwd;
+      const boundStateKey = binding.stateKey;
+      const permissionExtensionPath = resolvePermissionExtensionPath();
+      const permissionExtensionLoaded = Boolean(permissionExtensionPath && session.extensionRunner?.getRegisteredCommands?.().some((command: any) => (command.invocationName ?? command.name) === "permission-system"));
+      // Desktop dialogs are RPC-style serializable UI. Declaring rpc here is
+      // important: extensions can guard terminal-only components with ctx.mode.
+      await session.bindExtensions?.({
+        uiContext: permissionEngine.createUi(boundTaskId, boundStateKey),
+        mode: "rpc",
+        commandContextActions: {
+          waitForIdle: () => runtime.session.waitForIdle(),
+          newSession: async (options: any) => {
+            const result = await runtime.newSession(options);
+            if (!result.cancelled) emitSessionSnapshot(true);
+            return result;
+          },
+          fork: async (entryId: string, options: any) => {
+            const result = await runtime.fork(entryId, options);
+            if (!result.cancelled) {
+              if (result.selectedText) emit(binding.taskId, { type: "extension.ui.presentation", action: "editor-text", text: result.selectedText });
+              emitSessionSnapshot(true);
+            }
+            return { cancelled: result.cancelled };
+          },
+          navigateTree: async (targetId: string, options: any) => {
+            const result = await runtime.session.navigateTree(targetId, options);
+            if (!result.cancelled) {
+              if (result.editorText) emit(binding.taskId, { type: "extension.ui.presentation", action: "editor-text", text: result.editorText });
+              emitSessionSnapshot(true);
+            }
+            return { cancelled: result.cancelled };
+          },
+          switchSession: async (sessionPath: string, options: any) => {
+            const result = await runtime.switchSession(sessionPath, options);
+            if (!result.cancelled) emitSessionSnapshot(true);
+            return result;
+          },
+          reload: reloadExtensions,
+        },
+        shutdownHandler: () => emit(binding.taskId, { type: "extension.shutdown.requested" }),
+        onError: (error: any) => emit(binding.taskId, {
+          type: "extension.error",
+          extensionPath: error?.extensionPath,
+          event: error?.event,
+          error: publicRuntimeError(error?.error ?? "Unknown extension error"),
+        }),
+      });
+      const previousBeforeToolCall = session.agent.beforeToolCall;
+      session.agent.beforeToolCall = (context: any, signal?: AbortSignal) => permissionEngine.beforeToolCallWithExtension(
+        boundTaskId,
+        context,
+        previousBeforeToolCall,
+        permissionExtensionLoaded,
+        signal,
+        boundStateKey,
+      );
+      const loadedDiagnostics = resourceDiagnostics(session, diagnostics);
+      if (loadedDiagnostics.length) emit(boundTaskId, { type: "extension.diagnostics", diagnostics: jsonSafe(loadedDiagnostics) });
+
+      session.subscribe((event: any) => {
       try {
         if (event.type === "queue_update") {
           // A clear-and-rebuild mutation is exposed atomically through its IPC
           // response; suppress Pi's intermediate empty/partial queue events so
           // the Renderer cannot edit or promote a transient row.
-          if (queueRebuilds.has(stateKey)) return;
+          if (queueRebuilds.has(boundStateKey)) return;
           const steering = Array.isArray(event.steering) ? event.steering : [];
           const followUp = Array.isArray(event.followUp) ? event.followUp : [];
-          recordQueueDeliveryHints(stateKey, steering, followUp);
-          reconcileQueuedPromptImages(stateKey, steering, followUp);
-          emit(taskId, { type: "queue_update", ...queueStateWithDetails(session, stateKey) });
+          recordQueueDeliveryHints(boundStateKey, steering, followUp);
+          reconcileQueuedPromptImages(boundStateKey, steering, followUp);
+          emit(boundTaskId, { type: "queue_update", ...queueStateWithDetails(session, boundStateKey) });
           return;
         }
         // A delivery hint is only meaningful until the current agent run is
         // settled. If Pi aborts or drops a queued message without emitting its
         // message_start event, discard the hint so a later identical prompt
         // cannot inherit the wrong steering/follow-up classification.
-        if (event.type === "agent_settled") queueDeliveryHints.delete(stateKey);
+        if (event.type === "agent_settled") queueDeliveryHints.delete(boundStateKey);
         if (event.type === "agent_start") {
           const startedAt = Date.now();
-          executionGroupStarts.set(stateKey, startedAt);
-          startChangeReview(stateKey, taskId, cwd, startedAt, sdk.generateUnifiedPatch);
+          executionGroupStarts.set(boundStateKey, startedAt);
+          startChangeReview(boundStateKey, boundTaskId, boundCwd, startedAt, sdk.generateUnifiedPatch);
         }
         if (event.type === "agent_settled") {
           const endedAt = Date.now();
-          finishExecutionGroup(session, stateKey, taskId, endedAt);
-          finishChangeReview(session, stateKey, taskId, cwd, endedAt, sdk.generateUnifiedPatch);
+          finishExecutionGroup(session, boundStateKey, boundTaskId, endedAt);
+          finishChangeReview(session, boundStateKey, boundTaskId, boundCwd, endedAt, sdk.generateUnifiedPatch);
         }
         if (event.type === "message_start" && event.message?.role === "user") {
-          const queueDelivery = consumeQueueDeliveryHint(stateKey, queueMessageText(event.message));
+          const queueDelivery = consumeQueueDeliveryHint(boundStateKey, queueMessageText(event.message));
           if (queueDelivery === "followUp") {
             const boundary = Date.now();
-            finishExecutionGroup(session, stateKey, taskId, boundary);
-            executionGroupStarts.set(stateKey, boundary);
-            rotateChangeReview(session, stateKey, taskId, cwd, boundary, sdk.generateUnifiedPatch);
-          } else if (!executionGroupStarts.has(stateKey)) {
+            finishExecutionGroup(session, boundStateKey, boundTaskId, boundary);
+            executionGroupStarts.set(boundStateKey, boundary);
+            rotateChangeReview(session, boundStateKey, boundTaskId, boundCwd, boundary, sdk.generateUnifiedPatch);
+          } else if (!executionGroupStarts.has(boundStateKey)) {
             const startedAt = Date.now();
-            executionGroupStarts.set(stateKey, startedAt);
-            startChangeReview(stateKey, taskId, cwd, startedAt, sdk.generateUnifiedPatch);
+            executionGroupStarts.set(boundStateKey, startedAt);
+            startChangeReview(boundStateKey, boundTaskId, boundCwd, startedAt, sdk.generateUnifiedPatch);
           }
-          emit(taskId, normalizeAgentEvent(event, queueDelivery));
+          emit(boundTaskId, normalizeAgentEvent(event, queueDelivery));
           return;
         }
-        if (event.type === "message_end") updateChangeReviewOutcome(stateKey, event.message);
+        if (event.type === "message_end") updateChangeReviewOutcome(boundStateKey, event.message);
         if (event.type === "agent_end" && Array.isArray(event.messages)) {
-          updateChangeReviewOutcome(stateKey, [...event.messages].reverse().find((message: any) => message?.role === "assistant"));
+          updateChangeReviewOutcome(boundStateKey, [...event.messages].reverse().find((message: any) => message?.role === "assistant"));
         }
         if (event.type === "tool_execution_end" && /^(?:edit|write|bash|powershell)$/i.test(event.toolName ?? "")) {
-          previewChangeReview(stateKey, taskId, cwd, sdk.generateUnifiedPatch);
+          previewChangeReview(boundStateKey, boundTaskId, boundCwd, sdk.generateUnifiedPatch);
         }
-        emit(taskId, normalizeAgentEvent(event));
+        emit(boundTaskId, normalizeAgentEvent(event));
       } catch (error) {
-        console.error(`PiHost agent event handler failed for ${taskId}`, error);
+        console.error(`PiHost agent event handler failed for ${boundTaskId}`, error);
       }
     });
     session.subscribe((event: any) => {
@@ -1130,25 +1337,75 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
           // AgentSession persists the message immediately after notifying its
           // subscribers. Defer the snapshot one tick so the renderer receives
           // the completed assistant reply before the next queued message starts.
-          setTimeout(() => emit(taskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) }), 0);
+          setTimeout(() => emit(boundTaskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) }), 0);
         } else if (event.type === "agent_settled") {
-          emit(taskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
+          emit(boundTaskId, { type: "message.snapshot", messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         } else if (event.type === "compaction_end") {
           // AgentSession.messages now contains only the compacted model context,
           // but the display transcript still comes from every persisted entry
           // on the active Session branch. Replace the Renderer snapshot so a
           // branch/compaction boundary is applied authoritatively without
           // hiding the summarized prefix after a later restart.
-          emit(taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
+          emit(boundTaskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, sdk.sessionEntryToContextMessages)) });
         }
       } catch (error) {
-        console.error(`PiHost message snapshot handler failed for ${taskId}`, error);
+        console.error(`PiHost message snapshot handler failed for ${boundTaskId}`, error);
       }
     });
-    agentSessions.set(stateKey, session);
+    };
+
+    runtime.setBeforeSessionInvalidate?.(() => {
+      permissionEngine.resetUi(binding.taskId);
+      permissionEngine.dispose(binding.stateKey);
+    });
+    runtime.setRebindSession?.(async (session: any) => {
+      const previousTaskId = binding.taskId;
+      const previousStateKey = binding.stateKey;
+      const nextCwd = runtime.cwd;
+      const nextTaskId = session.sessionId;
+      const nextStateKey = sessionStateKey(nextTaskId, nextCwd);
+      binding.taskId = nextTaskId;
+      binding.cwd = nextCwd;
+      binding.stateKey = nextStateKey;
+      agentSessions.delete(previousStateKey);
+      agentSessionRuntimes.delete(previousStateKey);
+      agentSessionRevisions.delete(previousStateKey);
+      agentSessionPackageRevisions.delete(previousStateKey);
+      queuedPromptImages.delete(previousStateKey);
+      queueDeliveryHints.delete(previousStateKey);
+      queueRebuilds.delete(previousStateKey);
+      clearAgentRunReservation(previousStateKey);
+      sessionManagers.set(nextStateKey, session.sessionManager);
+      const nextSessionFile = session.sessionFile;
+      if (nextSessionFile) sessionFiles.set(nextStateKey, nextSessionFile);
+      agentSessions.set(nextStateKey, session);
+      agentSessionRuntimes.set(nextStateKey, runtime);
+      agentSessionRevisions.set(nextStateKey, permissionEngine.revision);
+      agentSessionPackageRevisions.set(nextStateKey, packageConfigRevision);
+      await bindSession(session, runtime.diagnostics as any[]);
+      const titleSource = session.sessionName || firstUserText(session.sessionManager);
+      emit(previousTaskId, {
+        type: "session.replaced",
+        previousTaskId,
+        task: {
+          id: nextTaskId,
+          title: deriveSessionTitle(titleSource) || session.sessionName || nextTaskId.slice(0, 8),
+          projectId: nextCwd,
+          state: "idle",
+          model: session.model ? `${session.model.provider}/${session.model.id}` : "No model selected",
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      if (runtime.modelFallbackMessage) emit(nextTaskId, { type: "model.fallback", message: runtime.modelFallbackMessage });
+    });
+
+    await bindSession(initial.session, initial.diagnostics);
+    agentSessions.set(stateKey, initial.session);
+    agentSessionRuntimes.set(stateKey, runtime);
     agentSessionRevisions.set(stateKey, creationRevision);
     agentSessionPackageRevisions.set(stateKey, packageConfigRevision);
-    return session;
+    if (initial.modelFallbackMessage) emit(taskId, { type: "model.fallback", message: initial.modelFallbackMessage });
+    return initial.session;
   })();
   agentSessionPromises.set(stateKey, creation);
   try {
@@ -1158,7 +1415,7 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   }
 }
 
-function invalidatePackageSessions(): void {
+function invalidateResourceSessions(): void {
   packageConfigRevision += 1;
   capabilitySessions.clear();
 }
@@ -1167,10 +1424,25 @@ async function ensureCapabilitySession(cwd: string): Promise<any> {
   const existing = capabilitySessions.get(cwd);
   if (existing) return existing;
   const sdk = await loadPiSdk();
+  const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+  const { settingsManager } = createTrustAwareSettingsManager(sdk, cwd, agentDir);
+  const permissionExtensionPath = resolvePermissionExtensionPath();
+  const resourceLoader = sdk.DefaultResourceLoader
+    ? new sdk.DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager,
+        additionalExtensionPaths: permissionExtensionPath ? [permissionExtensionPath] : undefined,
+      })
+    : undefined;
+  await resourceLoader?.reload?.();
   const { session } = await sdk.createAgentSession({
     cwd,
+    agentDir,
     sessionManager: sdk.SessionManager.inMemory(cwd),
     modelRuntime: await getModelRuntime(),
+    settingsManager,
+    resourceLoader,
   });
   capabilitySessions.set(cwd, session);
   return session;
@@ -1264,6 +1536,14 @@ async function handle(request: PiHostRequest): Promise<void> {
         });
         return;
       }
+      case "projects.trustStatus": {
+        const payload = request.payload as { cwd?: string } | undefined;
+        if (!payload?.cwd) throw new Error("cwd is required");
+        const sdk = await loadPiSdk();
+        const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
+        send({ id: request.id, ok: true, result: readProjectTrustStatus(sdk, payload.cwd, agentDir) });
+        return;
+      }
       case "projects.setTrust": {
         const payload = request.payload as { cwd?: string; trusted?: boolean } | undefined;
         if (!payload?.cwd || typeof payload.trusted !== "boolean") throw new Error("cwd and trusted are required");
@@ -1271,7 +1551,8 @@ async function handle(request: PiHostRequest): Promise<void> {
         const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
         if (!sdk.ProjectTrustStore) throw new Error("Pi project trust is not available in this runtime");
         new sdk.ProjectTrustStore(agentDir).set(payload.cwd, payload.trusted);
-        send({ id: request.id, ok: true, result: { cwd: payload.cwd, trusted: payload.trusted } });
+        invalidateResourceSessions();
+        send({ id: request.id, ok: true, result: readProjectTrustStatus(sdk, payload.cwd, agentDir) });
         return;
       }
       case "sessions.list": {
@@ -1312,6 +1593,19 @@ async function handle(request: PiHostRequest): Promise<void> {
         send({ id: request.id, ok: true, result: jsonSafe(models) });
         return;
       }
+      case "models.refresh": {
+        const runtime = await getModelRuntime();
+        const refresh = await runtime.refresh({ signal: AbortSignal.timeout(30_000), allowNetwork: true });
+        if (refresh?.aborted) throw new Error("Model catalog refresh was cancelled");
+        const errors = refresh?.errors instanceof Map ? [...refresh.errors.values()] : [];
+        if (errors.length) throw new Error(`Model catalog refresh failed: ${publicRuntimeError(errors[0])}`);
+        const models = runtime.getProviders().flatMap((provider: any) => {
+          const auth = runtime.getProviderAuthStatus(provider.id);
+          return runtime.getModels(provider.id).map((model: any) => modelSummary(provider, model, Boolean(auth.configured)));
+        });
+        send({ id: request.id, ok: true, result: jsonSafe(models) });
+        return;
+      }
       case "workspace.snapshot": {
         const payload = request.payload as { cwd?: string } | undefined;
         const cwd = payload?.cwd ?? resolveWorkspaceCwd();
@@ -1325,6 +1619,31 @@ async function handle(request: PiHostRequest): Promise<void> {
             refreshedAt: new Date().toISOString(),
           },
         });
+        return;
+      }
+      case "input.keybindings": {
+        const sdk = await loadPiSdk();
+        if (!sdk.KeybindingsManager) throw new Error("This Pi runtime does not expose configurable keybindings");
+        const bindings = sdk.KeybindingsManager.create(sdk.getAgentDir?.()).getEffectiveConfig();
+        send({
+          id: request.id,
+          ok: true,
+          result: Object.fromEntries(Object.entries(bindings).map(([action, keys]) => [action, Array.isArray(keys) ? keys : [keys]])),
+        });
+        return;
+      }
+      case "input.externalEdit": {
+        const payload = request.payload as { content?: string; cwd?: string } | undefined;
+        const cwd = payload?.cwd ?? resolveWorkspaceCwd();
+        const sdk = await loadPiSdk();
+        const editInExternalEditor = sdk.editInExternalEditor;
+        if (!editInExternalEditor) throw new Error("This Pi runtime does not expose the external editor helper");
+        const settingsManager = await settingsManagerFor(cwd);
+        const command = settingsManager.getExternalEditorCommand?.();
+        if (!command) throw new Error("No external editor is configured. Set externalEditor in Pi settings or set VISUAL/EDITOR.");
+        const result = await withExternalEditorPathAliases(command, (adaptedCommand) => editInExternalEditor({ command: adaptedCommand, content: payload?.content ?? "" }));
+        if (result.status !== "complete") throw new Error(`External editor failed to complete: ${command}`);
+        send({ id: request.id, ok: true, result: result.content });
         return;
       }
       case "sessions.create": {
@@ -1418,7 +1737,7 @@ async function handle(request: PiHostRequest): Promise<void> {
             slashCommands: slash.builtins,
             prompts: slash.prompts,
             skills: slash.skills,
-            scopedModels: Array.isArray(session.scopedModels) ? session.scopedModels.map((item: any) => `${item.model?.provider}/${item.model?.id}`).filter((value: string) => !value.includes("undefined")) : [],
+            scopedModels: scopedModelSelections(session),
             contextUsage: jsonSafe(session.getContextUsage?.()),
           },
         });
@@ -1465,7 +1784,7 @@ async function handle(request: PiHostRequest): Promise<void> {
           slashCommands: slash.builtins,
           prompts: slash.prompts,
           skills: slash.skills,
-          scopedModels: Array.isArray(session.scopedModels) ? session.scopedModels.map((item: any) => `${item.model?.provider}/${item.model?.id}`).filter((value: string) => !value.includes("undefined")) : [],
+          scopedModels: scopedModelSelections(session),
           contextUsage: jsonSafe(session.getContextUsage?.()),
         };
         send({ id: request.id, ok: true, result: capabilities });
@@ -1724,7 +2043,9 @@ async function handle(request: PiHostRequest): Promise<void> {
         session?.abortBash?.();
         if (session?.isStreaming) await session.abort();
         await Promise.allSettled([...(pendingChangeReviewWritesBySession.get(stateKey) ?? [])]);
-        await session?.dispose?.();
+        const agentRuntime = agentSessionRuntimes.get(stateKey);
+        if (agentRuntime?.dispose) await agentRuntime.dispose();
+        else await session?.dispose?.();
         if (sessionPath) await deleteSessionChangeReviewStore(sessionPath);
         else if (session) await deleteSessionChangeReviewStore(session);
         if (sessionPath && existsSync(sessionPath)) await unlink(sessionPath);
@@ -1732,6 +2053,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         titledSessions.delete(stateKey);
         sessionManagers.delete(stateKey);
         agentSessions.delete(stateKey);
+        agentSessionRuntimes.delete(stateKey);
         agentSessionPackageRevisions.delete(stateKey);
         agentSessionRevisions.delete(stateKey);
         queuedPromptImages.delete(stateKey);
@@ -1780,20 +2102,49 @@ async function handle(request: PiHostRequest): Promise<void> {
         send({ id: request.id, ok: true, result: { providerId: model.provider, modelId: model.id, name: model.name } });
         return;
       }
+      case "agent.cycleModel": {
+        const payload = request.payload as { taskId?: string; direction?: "forward" | "backward"; cwd?: string } | undefined;
+        if (!payload?.taskId || payload.direction !== "forward" && payload.direction !== "backward") throw new Error("taskId and direction are required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        await session.cycleModel(payload.direction);
+        const runtime = await getModelRuntime();
+        const activeModel = session.model;
+        const provider = activeModel ? runtime.getProvider(activeModel.provider) : undefined;
+        const auth = provider ? runtime.getProviderAuthStatus(provider.id) : undefined;
+        send({
+          id: request.id,
+          ok: true,
+          result: {
+            model: activeModel && provider ? modelSummary(provider, activeModel, Boolean(auth?.configured)) : undefined,
+            thinkingLevel: session.thinkingLevel,
+            thinkingLevels: session.getAvailableThinkingLevels(),
+            contextUsage: jsonSafe(session.getContextUsage?.()),
+          },
+        });
+        return;
+      }
       case "agent.setScopedModels": {
-        const payload = request.payload as { taskId?: string; modelIds?: string[] | null; persist?: boolean; cwd?: string } | undefined;
-        if (!payload?.taskId || !Array.isArray(payload.modelIds) && payload.modelIds !== null) throw new Error("taskId and modelIds are required");
+        const payload = request.payload as { taskId?: string; models?: ScopedModelSelection[] | null; persist?: boolean; cwd?: string } | undefined;
+        if (!payload?.taskId || !Array.isArray(payload.models) && payload.models !== null) throw new Error("taskId and models are required");
         const cwd = payload.cwd ?? resolveWorkspaceCwd();
         const session = await ensureAgentSession(payload.taskId, cwd);
         const runtime = await getModelRuntime();
-        const ids = payload.modelIds ?? [];
-        const scoped = [];
-        for (const reference of ids) {
-          const separator = reference.indexOf("/");
-          if (separator <= 0 || separator === reference.length - 1) throw new Error(`Invalid model reference: ${reference}`);
-          const model = runtime.getModel(reference.slice(0, separator), reference.slice(separator + 1));
+        const selections = payload.models ?? [];
+        const scoped: Array<{ model: any; thinkingLevel?: string }> = [];
+        const seen = new Set<string>();
+        for (const selection of selections) {
+          const reference = `${selection.providerId}/${selection.modelId}`;
+          if (seen.has(reference)) throw new Error(`Duplicate scoped model: ${reference}`);
+          seen.add(reference);
+          const model = runtime.getModel(selection.providerId, selection.modelId);
           if (!model) throw new Error(`Unknown model: ${reference}`);
-          scoped.push({ model });
+          const provider = runtime.getProvider(selection.providerId);
+          if (!provider) throw new Error(`Unknown provider: ${selection.providerId}`);
+          const availableThinkingLevels = modelSummary(provider, model, true).thinkingLevels;
+          if (selection.thinkingLevel && !availableThinkingLevels.includes(selection.thinkingLevel)) {
+            throw new Error(`Thinking level ${selection.thinkingLevel} is not available for ${reference}`);
+          }
+          scoped.push({ model, ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}) });
         }
         session.setScopedModels(scoped);
         if (payload.persist) {
@@ -1801,9 +2152,10 @@ async function handle(request: PiHostRequest): Promise<void> {
           if (!sdk.SettingsManager) throw new Error("Pi settings are not available in this runtime");
           const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
           const settings = sdk.SettingsManager.create(cwd, agentDir);
-          settings.setEnabledModels(ids.length > 0 ? [...ids] : undefined);
+          const patterns = selections.map((selection) => `${selection.providerId}/${selection.modelId}${selection.thinkingLevel ? `:${selection.thinkingLevel}` : ""}`);
+          settings.setEnabledModels(patterns.length > 0 ? patterns : undefined);
         }
-        send({ id: request.id, ok: true, result: ids });
+        send({ id: request.id, ok: true, result: scopedModelSelections(session) });
         return;
       }
       case "agent.queue": {
@@ -2054,9 +2406,11 @@ async function handle(request: PiHostRequest): Promise<void> {
       }
       case "settings.update": {
         const payload = request.payload as (PiSettingsUpdate & { cwd?: string }) | undefined;
-        const manager = await settingsManagerFor(typeof payload?.cwd === "string" ? payload.cwd : resolveWorkspaceCwd());
+        const cwd = typeof payload?.cwd === "string" ? payload.cwd : resolveWorkspaceCwd();
+        const { sdk, agentDir, settingsManager } = await settingsContextFor(cwd);
         const runtime = await getModelRuntime();
-        send({ id: request.id, ok: true, result: await updatePiSettings(manager, runtime, payload ?? {}) });
+        const storage = sdk.FileSettingsStorage ? new sdk.FileSettingsStorage(cwd, agentDir) : undefined;
+        send({ id: request.id, ok: true, result: await updatePiSettings(settingsManager, runtime, payload ?? {}, storage) });
         return;
       }
       case "extension.ui.resolve": {
@@ -2068,18 +2422,28 @@ async function handle(request: PiHostRequest): Promise<void> {
       }
       case "packages.list": {
         const payload = request.payload as { cwd?: string } | undefined;
-        const manager = await createPackageManager(payload?.cwd ?? resolveWorkspaceCwd());
+        const { manager, settingsManager } = await createPackageManagerContext(payload?.cwd ?? resolveWorkspaceCwd());
         const packages = manager.listConfiguredPackages?.() ?? [];
-        send({ id: request.id, ok: true, result: jsonSafe(packages.map((item: any) => ({
+        const disabledPackageKeys = new Set<string>();
+        for (const [scope, configured] of [
+          ["user", settingsManager.getGlobalSettings().packages ?? []],
+          ["project", settingsManager.getProjectSettings().packages ?? []],
+        ] as const) {
+          for (const entry of configured) {
+            if (entry && typeof entry === "object" && entry.autoload === false) disabledPackageKeys.add(`${scope}:${entry.source}`);
+          }
+        }
+        const summaries = await Promise.all(packages.map(async (item: any) => ({
           source: item.source,
           scope: item.scope,
           filtered: Boolean(item.filtered),
-          // Pi represents an autoload-disabled package as a filtered package.
-          // Keep the renderer-facing name explicit while preserving compatibility
-          // with a future SDK that may expose a dedicated disabled field.
-          disabled: item.disabled === true || item.filtered === true,
+          // Pi's `filtered` flag covers every object-form package entry, including
+          // resource-only filters. Only autoload=false disables the whole package.
+          disabled: item.disabled === true || disabledPackageKeys.has(`${item.scope}:${item.source}`),
           installedPath: item.installedPath,
-        }))) });
+          resources: await listPackageResources(manager, item),
+        })));
+        send({ id: request.id, ok: true, result: jsonSafe(summaries) });
         return;
       }
       case "packages.install": {
@@ -2088,7 +2452,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
         const source = normalizePackageInstallSource(payload.source);
         await manager.installAndPersist(source, { local: payload.local === true });
-        invalidatePackageSessions();
+        invalidateResourceSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -2097,7 +2461,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.source?.trim()) throw new Error("source is required");
         const manager = await createPackageManager(payload.cwd ?? resolveWorkspaceCwd());
         await manager.removeAndPersist(payload.source.trim(), { local: payload.local === true });
-        invalidatePackageSessions();
+        invalidateResourceSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -2105,7 +2469,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { source?: string; cwd?: string } | undefined;
         const manager = await createPackageManager(payload?.cwd ?? resolveWorkspaceCwd());
         await manager.update(payload?.source?.trim() || undefined);
-        invalidatePackageSessions();
+        invalidateResourceSessions();
         send({ id: request.id, ok: true, result: undefined });
         return;
       }
@@ -2114,8 +2478,25 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!payload?.source?.trim()) throw new Error("source is required");
         const { settingsManager } = await createPackageManagerContext(payload.cwd ?? resolveWorkspaceCwd());
         const changed = configurePackageSource(settingsManager, payload.source.trim(), payload.enabled === true, payload.local === true);
-        if (changed) invalidatePackageSessions();
+        if (changed) invalidateResourceSessions();
         send({ id: request.id, ok: true, result: { changed } });
+        return;
+      }
+      case "packages.configureResource": {
+        const payload = request.payload as { source?: string; type?: PiPackageResourceType; path?: string; enabled?: boolean; local?: boolean; cwd?: string } | undefined;
+        if (!payload?.source?.trim() || !payload.type || !payload.path?.trim() || typeof payload.enabled !== "boolean") throw new Error("source, type, path and enabled are required");
+        const { settingsManager } = await createPackageManagerContext(payload.cwd ?? resolveWorkspaceCwd());
+        configurePackageResource(settingsManager, payload.source.trim(), payload.type, payload.path.trim(), payload.enabled, payload.local === true);
+        invalidateResourceSessions();
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "packages.checkUpdates": {
+        const payload = request.payload as { cwd?: string } | undefined;
+        const manager = await createPackageManager(payload?.cwd ?? resolveWorkspaceCwd());
+        if (typeof manager.checkForAvailableUpdates !== "function") throw new Error("This Pi runtime cannot check package updates");
+        const updates = await manager.checkForAvailableUpdates();
+        send({ id: request.id, ok: true, result: updates.map((update: any) => update.source) });
         return;
       }
       case "providers.list": {

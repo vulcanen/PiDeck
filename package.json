@@ -2,6 +2,9 @@
   "name": "pideck",
   "productName": "PiDeck",
   "private": true,
+  "bin": {
+    "pideck-cli": "packages/pi-host/dist/cli.js"
+  },
   "version": "0.1.3",
   "license": "MIT",
   "author": {
@@ -29,6 +32,8 @@
     "packages/*"
   ],
   "scripts": {
+    "precli": "npm --workspace @pideck/pi-adapter run build && npm --workspace @pideck/pi-host run build",
+    "cli": "node packages/pi-host/dist/cli.js",
     "dev": "npm --workspace @pideck/desktop run dev",
     "build": "npm --workspace @pideck/desktop run build",
     "lint": "eslint .",
@@ -44,6 +49,7 @@
     "release:check": "node scripts/verify-release-version.mjs",
     "verify:package": "node scripts/verify-package-contents.mjs",
     "smoke:runtime": "node scripts/smoke-source-runtime.mjs && node scripts/smoke-session-isolation.mjs",
+    "smoke:cli": "node scripts/smoke-cli.mjs",
     "smoke:package": "node scripts/smoke-packaged-runtime.mjs",
     "sbom:package": "node scripts/generate-packaged-sbom.mjs"
   },

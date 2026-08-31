@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ExtensionUiRequest, ModelSummary } from "@pideck/contracts";
+import type { ExtensionUiRequest, ModelSummary, ProjectTrustStatus, ScopedModelSelection } from "@pideck/contracts";
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
 import { isDefaultSessionTitle } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
@@ -39,32 +39,88 @@ function ResumeSessionDialog({ language, project, tasks, activeTaskId, onSelect,
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-title"><span className="eyebrow">Pi</span><h2 id="resume-title">{t.resumeTitle}</h2><p>{t.resumeDescription}</p>{!project || tasks.length === 0 ? <p>{t.noSessions}</p> : <div className="resume-list">{tasks.map((task) => <button type="button" className={`resume-row${task.id === activeTaskId ? " selected" : ""}`} key={task.id} onClick={() => onSelect(task)}><strong>{displayTitle(task.title)}</strong><small>{displayModel(task.model)}</small></button>)}</div>}<div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button></div></div></div>;
 }
 
-function TrustDialog({ language, onResolve, onClose }: { language: Language; onResolve: (trusted: boolean) => void; onClose: () => void }) {
+function TrustDialog({ language, project, status, busy, onResolve, onClose }: { language: Language; project: ProjectSummary; status: ProjectTrustStatus; busy: boolean; onResolve: (trusted: boolean) => void; onClose: () => void }) {
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose);
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="trust-title"><span className="eyebrow">Pi</span><h2 id="trust-title">{t.trustTitle}</h2><p>{t.trustDescription}</p><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(false)}>{t.untrustProject}</button><button type="button" className="button primary" onClick={() => onResolve(true)}>{t.trustProject}</button></div></div></div>;
+  const state = status.source === "not-required" ? "not-required" : status.trusted ? "trusted" : "untrusted";
+  const stateLabel = state === "not-required" ? t.trustStatusNotRequired : state === "trusted" ? t.trustStatusTrusted : t.trustStatusUntrusted;
+  const sourceLabel = status.source === "saved"
+    ? t.trustSourceSaved
+    : status.source === "inherited"
+      ? t.trustSourceInherited(status.sourcePath ?? "")
+      : status.source === "default"
+        ? t.trustSourceDefault(status.defaultPolicy)
+        : t.trustSourceNotRequired;
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog trust-dialog" role="dialog" aria-modal="true" aria-labelledby="trust-title" aria-busy={busy}><span className="eyebrow">Pi</span><h2 id="trust-title">{t.trustProjectTitle(project.name)}</h2><p>{t.trustDescription}</p><div className={`trust-status-card ${state}`} data-trust-status={state} role="status"><span>{t.trustCurrentStatus}</span><strong>{stateLabel}</strong><small>{sourceLabel}</small></div>{status.hasTrustRequiringResources ? <p className="trust-safety-note">{t.trustSafetyNote}</p> : <p>{t.trustNoResources}</p>}<div className="dialog-actions"><button type="button" className="button ghost" data-trust-action="deny" disabled={busy} onClick={() => onResolve(false)}>{t.untrustProject}</button><button type="button" className="button primary" data-trust-action="allow" disabled={busy} onClick={() => onResolve(true)}>{busy ? t.loading : t.trustProject}</button></div></div></div>;
 }
 
-function ScopedModelsDialog({ language, models, selectedIds, onSave, onClose }: { language: Language; models: ModelSummary[]; selectedIds: string[]; onSave: (modelIds: string[] | null, persist: boolean) => void; onClose: () => void }) {
+function ScopedModelsDialog({ language, models, selectedModels, onSave, onClose }: { language: Language; models: ModelSummary[]; selectedModels: ScopedModelSelection[]; onSave: (models: ScopedModelSelection[] | null, persist: boolean) => void; onClose: () => void }) {
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [selected, setSelected] = useState(() => new Set(selectedIds));
+  const [selected, setSelected] = useState<ScopedModelSelection[]>(selectedModels);
   const [persist, setPersist] = useState(false);
+  const [query, setQuery] = useState("");
   useDialogFocus(dialogRef, onClose);
-  function toggle(id: string) { setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
-  const allSelected = models.length > 0 && selected.size === models.length;
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="scoped-models-title"><span className="eyebrow">Pi</span><h2 id="scoped-models-title">{t.scopedModelsTitle}</h2><p>{t.scopedModelsDescription}</p><div className="model-scope-list">{models.map((model) => { const id = `${model.providerId}/${model.id}`; return <label key={id} className="model-scope-row"><input type="checkbox" checked={selected.has(id)} onChange={() => toggle(id)} /><span><strong>{model.name}</strong><small>{id}</small></span></label>; })}</div><label className="model-scope-persist"><input type="checkbox" checked={persist} onChange={(event) => setPersist(event.target.checked)} />{t.scopedModelsPersist}</label><div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" disabled={models.length === 0} onClick={() => onSave(allSelected || selected.size === 0 ? null : [...selected], persist)}>{t.scopedModelsSave}</button></div></div></div>;
+  const keyOf = (value: { providerId: string; modelId?: string; id?: string }) => `${value.providerId}/${value.modelId ?? value.id}`;
+  const selectedKeys = new Set(selected.map(keyOf));
+  const modelByKey = new Map(models.map((model) => [keyOf(model), model]));
+  const providers = Array.from(new Map(models.map((model) => [model.providerId, model.providerName])).entries());
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredModels = normalizedQuery
+    ? models.filter((model) => `${model.name} ${model.providerName} ${model.providerId}/${model.id}`.toLowerCase().includes(normalizedQuery))
+    : models;
+  function toggle(model: ModelSummary) {
+    const key = keyOf(model);
+    setSelected((current) => current.some((item) => keyOf(item) === key)
+      ? current.filter((item) => keyOf(item) !== key)
+      : [...current, { providerId: model.providerId, modelId: model.id }]);
+  }
+  function toggleProvider(providerId: string) {
+    const providerModels = models.filter((model) => model.providerId === providerId);
+    const allSelected = providerModels.every((model) => selectedKeys.has(keyOf(model)));
+    setSelected((current) => allSelected
+      ? current.filter((item) => item.providerId !== providerId)
+      : [...current, ...providerModels.filter((model) => !selectedKeys.has(keyOf(model))).map((model) => ({ providerId: model.providerId, modelId: model.id }))]);
+  }
+  function move(index: number, direction: -1 | 1) {
+    setSelected((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+  function setThinking(index: number, thinkingLevel: string) {
+    setSelected((current) => current.map((item, itemIndex) => itemIndex === index
+      ? { ...item, thinkingLevel: thinkingLevel || undefined }
+      : item));
+  }
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={dialogRef} className="extension-ui-dialog scoped-models-dialog" role="dialog" aria-modal="true" aria-labelledby="scoped-models-title"><span className="eyebrow">Pi</span><h2 id="scoped-models-title">{t.scopedModelsTitle}</h2><p>{t.scopedModelsDescription}</p>
+    <label className="model-scope-search"><Icon name="search" size={14} /><input autoFocus type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.searchModels} aria-label={t.searchModels} /></label>
+    <section className="model-scope-selected" aria-label={t.scopedModelsOrder}>{selected.length === 0 ? <p className="model-scope-empty">{t.scopedModelsUseAll}</p> : selected.map((item, index) => { const model = modelByKey.get(keyOf(item)); if (!model) return null; return <div className="model-scope-selected-row" key={keyOf(item)}><span className="model-scope-order">{index + 1}</span><span><strong>{model.name}</strong><small>{keyOf(item)}</small></span><select aria-label={t.scopedModelsThinking(model.name)} value={item.thinkingLevel ?? ""} onChange={(event) => setThinking(index, event.target.value)}><option value="">{t.scopedModelsInheritThinking}</option>{model.thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}</select><span className="model-scope-move"><button type="button" className="icon-button" disabled={index === 0} title={t.moveUp} aria-label={t.moveUp} onClick={() => move(index, -1)}><Icon name="down" size={12} /></button><button type="button" className="icon-button" disabled={index === selected.length - 1} title={t.moveDown} aria-label={t.moveDown} onClick={() => move(index, 1)}><Icon name="down" size={12} /></button></span></div>; })}</section>
+    <div className="model-scope-list">{providers.map(([providerId, providerName]) => { const providerModels = filteredModels.filter((model) => model.providerId === providerId); if (!providerModels.length) return null; const allProviderSelected = models.filter((model) => model.providerId === providerId).every((model) => selectedKeys.has(keyOf(model))); return <section className="model-scope-provider" key={providerId}><div className="model-scope-provider-heading"><strong>{providerName}</strong><button type="button" className="button ghost" aria-pressed={allProviderSelected} onClick={() => toggleProvider(providerId)}>{allProviderSelected ? t.scopedModelsClearProvider : t.scopedModelsSelectProvider}</button></div>{providerModels.map((model) => { const id = keyOf(model); return <label key={id} className="model-scope-row"><input type="checkbox" checked={selectedKeys.has(id)} onChange={() => toggle(model)} /><span><strong>{model.name}</strong><small>{id}</small></span></label>; })}</section>; })}</div>
+    <label className="model-scope-persist"><input type="checkbox" checked={persist} onChange={(event) => setPersist(event.target.checked)} />{t.scopedModelsPersist}</label><div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" disabled={models.length === 0} onClick={() => onSave(selected.length > 0 ? selected : null, persist)}>{t.scopedModelsSave}</button></div></div></div>;
 }
 
 function ExtensionUiDialog({ language, request, onResolve }: { language: Language; request: ExtensionUiRequest; onResolve: (value: string | boolean | undefined) => void }) {
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
   const [value, setValue] = useState("");
+  const [remainingMs, setRemainingMs] = useState<number | undefined>(request.timeoutMs);
   useEffect(() => setValue(request.prefill ?? ""), [request.requestId, request.prefill]);
+  useEffect(() => {
+    if (!request.timeoutMs) { setRemainingMs(undefined); return; }
+    const deadline = Date.now() + request.timeoutMs;
+    const update = () => setRemainingMs(Math.max(0, deadline - Date.now()));
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [request.requestId, request.timeoutMs]);
   useDialogFocus(dialogRef, () => onResolve(request.kind === "confirm" ? false : undefined));
   const titleParts = request.title.split(/\r?\n/);
-  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="extension-ui-title"><span className="eyebrow">Pi Extension</span><h2 id="extension-ui-title">{titleParts[0]}</h2>{titleParts.slice(1).map((line, index) => <p key={index}>{line}</p>)}{request.message && <p>{request.message}</p>}{request.kind === "select" && <div className="extension-ui-options">{(request.options ?? []).map((option) => <button type="button" className="button ghost" key={option} onClick={() => onResolve(option)}>{option}</button>)}</div>}{request.kind === "confirm" && <div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(false)}>{t.reject}</button><button type="button" className="button primary" onClick={() => onResolve(true)}>{t.approve}</button></div>}{(request.kind === "input" || request.kind === "editor") && <><textarea autoFocus value={value} onChange={(event) => setValue(event.target.value)} placeholder={request.placeholder} rows={request.kind === "editor" ? 8 : 3} /><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(undefined)}>{t.cancel}</button><button type="button" className="button primary" onClick={() => onResolve(value)}>{t.submit}</button></div></>}</div></div>;
+  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="extension-ui-title"><span className="eyebrow">Pi Extension</span><h2 id="extension-ui-title">{titleParts[0]}</h2>{titleParts.slice(1).map((line, index) => <p key={index}>{line}</p>)}{request.message && <p>{request.message}</p>}{remainingMs !== undefined && <p className="extension-ui-timeout" role="status">{t.extensionUiTimeRemaining(Math.ceil(remainingMs / 1000))}</p>}{request.kind === "select" && <div className="extension-ui-options">{(request.options ?? []).map((option) => <button type="button" className="button ghost" key={option} onClick={() => onResolve(option)}>{option}</button>)}</div>}{request.kind === "confirm" && <div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(false)}>{t.reject}</button><button type="button" className="button primary" onClick={() => onResolve(true)}>{t.approve}</button></div>}{(request.kind === "input" || request.kind === "editor") && <><textarea autoFocus value={value} onChange={(event) => setValue(event.target.value)} placeholder={request.placeholder} rows={request.kind === "editor" ? 8 : 3} /><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(undefined)}>{t.cancel}</button><button type="button" className="button primary" onClick={() => onResolve(value)}>{t.submit}</button></div></>}</div></div>;
 }
 
 function ImageContextMenu({ language, x, y, onCopy }: { language: Language; x: number; y: number; onCopy: () => void }) {

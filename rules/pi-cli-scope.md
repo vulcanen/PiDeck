@@ -19,7 +19,7 @@ Do not duplicate a "similar-looking" Agent, model catalog, auth store, or sessio
 
 ## UI Mapping Rules
 
-- Pi slash command -> composer suggestion / command palette.
+- Pi slash command -> Composer suggestion / searchable Pi commands subpage in Quick settings.
 - Pi `@file` / resource -> workspace resource suggestion.
 - Pi model/provider/auth -> PiDeck model/provider UI.
 - Pi agent event -> conversation stream / tool result / approval state.

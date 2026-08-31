@@ -5,6 +5,7 @@ import { AppConversation } from "./app-conversation";
 import { AppOverlays } from "./app-overlays";
 import { AppSidebar } from "./app-sidebar";
 import { PaneResizeHandle } from "./ui";
+import { languageSwitchTarget } from "./use-preferences";
 import type { AppController } from "./use-app-controller";
 
 const MINIMUM_SIDEBAR_WIDTH = 190;
@@ -39,6 +40,7 @@ export function AppView({ controller }: { controller: AppController }) {
   }, []);
   const effectiveSidebarWidth = Math.min(sidebarMaximumWidth, Math.max(MINIMUM_SIDEBAR_WIDTH, sidebarWidth));
   const renderedSidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : effectiveSidebarWidth;
+  const languageTarget = languageSwitchTarget(controller.language);
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
     localStorage.setItem("pideck.sidebar-collapsed", String(next));
@@ -48,19 +50,21 @@ export function AppView({ controller }: { controller: AppController }) {
     language, setLanguage, theme, themePreference, cycleTheme, projectCwd, projects, expandedProjectCwds, tasks,
     projectTasksByCwd, projectTaskLoads, activeTask, initialLoading, projectSwitching, runtimeStatus, shortcut, t, isMac,
     sidebarRef, searchInputRef, mobileSidebarOpen, setMobileSidebarOpen, createTask, chooseProjectDirectory,
-    openCommandPalette, selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions, createTaskForProject,
+    selectProject, openProjectContextMenu, selectTask, openContextMenu, loadProjectSessions, createTaskForProject,
     searchQuery, setSearchQuery,
     loadInitialData, scrollPositionsRef, scrollHandleRef, handleTimelineAtEnd, activeProject, loadError, messageLoad, messages, isWorking, streamText,
     workingPhase, activeTaskUi, steeringMessageKeysByTask, showJumpToLatest, permissionStatus, changeReview,
+    transcriptSearchOpen, transcriptSearchQuery, transcriptSearchRequest, transcriptSearchResult,
+    setTranscriptSearchOpen, updateTranscriptQuery, stepTranscriptSearch, closeTranscriptSearch, setTranscriptSearchResult,
     composerProps, jumpToLatest,
-    setMessageReload, showNotice, handlePermissionStatus, openProviderSettings, openQuickSettings, quickSettingsOpen,
+    setMessageReload, showNotice, handlePermissionStatus, openQuickSettings, quickSettingsOpen,
     patchTaskUi, updateTaskLists, restartHost,
-    paletteOpen, pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen,
+    pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen,
     commandDialog, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, previewImage,
   } = controller;
   const reviewDrawerOpen = changeReview.reviewOpen && reviewDrawer;
   const modalOverlayOpen = Boolean(
-    paletteOpen || quickSettingsOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen || piSettingsOpen
+    quickSettingsOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen || piSettingsOpen
     || commandDialog || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || previewImage,
   );
   return <>
@@ -77,11 +81,9 @@ export function AppView({ controller }: { controller: AppController }) {
       <div className="window-drag" />
       <div className="titlebar-actions">
         <button className="icon-button mobile-nav-trigger" type="button" title={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-label={mobileSidebarOpen ? t.closeNavigation : t.openNavigation} aria-expanded={mobileSidebarOpen} aria-controls="workspace-sidebar" onClick={() => setMobileSidebarOpen((current) => !current)}><Icon name="folder" /></button>
-        <button className="quiet-button" onClick={openCommandPalette}><Icon name="command" />{t.command}<kbd>{shortcut("K")}</kbd></button>
-        <button className="lang-button" aria-label={t.switchLanguage} title={t.switchLanguage} onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中" : "EN"}</button>
+        <button className="lang-button" aria-label={languageTarget.language === "en" ? t.switchToEnglish : t.switchToChinese} title={languageTarget.language === "en" ? t.switchToEnglish : t.switchToChinese} onClick={() => setLanguage(languageTarget.language)}>{languageTarget.label}</button>
         <button className="icon-button" title={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} aria-label={themePreference === "system" ? t.themeToLight : theme === "light" ? t.themeToDark : t.themeToSystem} onClick={cycleTheme}><Icon name={themePreference === "system" ? "auto" : theme === "light" ? "moon" : "sun"} /></button>
-        <button className="icon-button" title={t.providerSettings} aria-label={t.providerSettings} onClick={() => openProviderSettings()}><Icon name="brain" /></button>
-        <button className="icon-button" title={`${t.quickSettings} (${shortcut(",")})`} aria-label={t.quickSettings} aria-haspopup="dialog" aria-expanded={quickSettingsOpen} aria-controls={quickSettingsOpen ? "quick-settings-panel" : undefined} onClick={openQuickSettings}><Icon name="settings" /></button>
+        <button className="icon-button" title={`${t.quickSettings} (${shortcut(",")})`} aria-label={t.quickSettings} aria-haspopup="dialog" aria-expanded={quickSettingsOpen} aria-controls={quickSettingsOpen ? "quick-settings-panel" : undefined} onClick={() => openQuickSettings()}><Icon name="settings" /></button>
       </div>
     </header>
 
@@ -110,7 +112,6 @@ export function AppView({ controller }: { controller: AppController }) {
         onCreateTask={createTask}
         onCreateTaskForProject={createTaskForProject}
         onChooseProject={chooseProjectDirectory}
-        onOpenCommandPalette={openCommandPalette}
         onSearchQuery={setSearchQuery}
         onSelectProject={selectProject}
         onOpenProjectContext={openProjectContextMenu}
@@ -175,6 +176,15 @@ export function AppView({ controller }: { controller: AppController }) {
         changeReviewIgnoreWhitespace={changeReview.ignoreWhitespace}
         changeReviewScrollPosition={changeReview.diffScrollPosition}
         composerProps={composerProps}
+        transcriptSearchOpen={transcriptSearchOpen}
+        transcriptSearchQuery={transcriptSearchQuery}
+        transcriptSearchRequest={transcriptSearchRequest}
+        transcriptSearchResult={transcriptSearchResult}
+        onOpenTranscriptSearch={() => setTranscriptSearchOpen(true)}
+        onTranscriptSearchQuery={updateTranscriptQuery}
+        onStepTranscriptSearch={stepTranscriptSearch}
+        onCloseTranscriptSearch={closeTranscriptSearch}
+        onTranscriptSearchResult={setTranscriptSearchResult}
         onTimelineAtEnd={handleTimelineAtEnd}
         onRetryInitialLoad={runtimeStatus === "disconnected" ? restartHost : loadInitialData}
         onChooseProject={chooseProjectDirectory}

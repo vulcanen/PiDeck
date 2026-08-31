@@ -21,6 +21,8 @@ Provider API keys, OAuth, token refresh, and session files remain managed by the
 
 Pi SDK baseline: `@earendil-works/pi-coding-agent@0.84.4`. PiDeck leaves `createAgentSession.tools` unset, so Pi 0.84.4 applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes persist through Pi's user settings because PiDeck calls `setModel()` / `setThinkingLevel()` with `{ persist: true }`; `/thinking [level]` maps to the desktop thinking selector. The `/settings` sheet edits the same user-wide defaults through `SettingsManager`. Pi 0.84.4's additive `ui_prompt_start` / `ui_prompt_end` events are normalized as serializable Agent events, while PiDeck's richer queue mutations continue to use the direct `AgentSession` queue API (the SDK's RPC `clear_queue` remains outside the desktop's direct-host transport).
 
+Project Pi resources follow Pi's trust model rather than treating “opened” as implicit trust. When protected project settings, Extensions, Skills, Prompts, themes, packages, system prompts, or project `.agents/skills` exist, PiDeck reports the effective saved/inherited/default decision and passes it to `SettingsManager.create(..., { projectTrusted })`. Adding an unresolved project under the `ask` policy opens the decision UI; the same project-scoped entry remains in the project context menu.
+
 Current runnable topology:
 
 ```text
@@ -51,7 +53,7 @@ apps/desktop/
       ├─ app-view.tsx            # Workspace shell and global layout
       ├─ app-sidebar.tsx         # Project/Session sidebar
       ├─ app-conversation.tsx    # Session pane and Composer
-      ├─ app-overlays.tsx        # Command palette and dialog overlays
+      ├─ app-overlays.tsx        # Quick settings and dialog overlays
       ├─ use-app-controller.tsx  # State and action orchestration
       ├─ use-session-data.ts     # Session data loading
       ├─ use-runtime-events.ts   # PiHost event normalization
@@ -65,7 +67,7 @@ apps/desktop/
       ├─ message-utils.ts        # Message merging and identity
       ├─ types.ts                # Renderer state and helper types
       ├─ image-cache.ts · pi-capabilities.ts · styles.css · vite-env.d.ts
-      └─ ui/                     # Timeline, message, Composer, command palette, dialog, settings components
+      └─ ui/                     # Timeline, message, Composer, hierarchical Quick settings, dialog, settings components
 
 packages/
 ├─ contracts/                    # Bridge/IPC types, type-only package without dist
@@ -93,15 +95,18 @@ Currently supported:
 8. Reference workspace files via `@file`.
 9. Compact context and export JSONL/HTML; import Pi JSONL sessions, rename, and view session stats.
 10. Use Pi slash command catalog, Prompt, Skill, and Extension command suggestions.
-    Command-palette click/Enter executes mapped commands immediately; templates are explicitly labeled and remain editable. The header gear and `Ctrl/Cmd + ,` expose Pi settings, Provider auth, Pi packages, scoped models, workspace trust, and shortcuts from one launcher. Provider auth has its own brain icon; settings drawers open below the shared toolbar with compact headers and restore focus across chained overlays.
+    Quick settings keeps a compact root and moves task actions and searchable Pi commands to child pages; `Ctrl/Cmd + K` opens the command child directly, while the header gear and `Ctrl/Cmd + ,` open the root. Commands execute on click/Enter, and templates remain explicitly labeled and editable. Settings drawers open below the shared toolbar with compact headers and restore focus across chained overlays.
 11. Authenticate locally with Provider API keys/OAuth; OpenAI Codex browser login uses Pi's loopback callback by default, exposes manual callback entry only as a fallback, and refocuses PiDeck after success. Closing Provider settings aborts an unfinished OAuth operation, so a later attempt starts a fresh browser flow. PiHost network calls honor explicit proxy environment variables, Pi's global `httpProxy`, and the cross-platform system proxy in that order.
 12. Switch Chinese/English and light/dark themes.
     Windows exposes native Edit/View/Help menus after Workspace (one Menu button on narrow windows); macOS keeps the system menu bar. Existing native actions, edit selection, keyboard access, and localized labels are reused.
 13. Use Steering/Follow-up queues, including Pi-native queueing for prompts submitted during a running prompt's automatic compaction, batch mode with checked current-mode and in-flight feedback, and a compact Composer-attached queue stack with image thumbnails, promotion, re-editing in the original queue position, and deletion of any pending row; the queue trigger remains single-line and available when change review compresses the conversation pane.
 14. Use a plain document-flow list with earlier-message folding for long sessions (only the most recent 200 messages stay mounted; older ones fold behind a "show earlier" button), caching message panes, scroll positions, and follow state per Session.
-15. Desktop mappings of `/copy`, `/share`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`; `/share` requires a local `gh` CLI.
+15. Desktop mappings of `/copy`, `/share`, `/changelog`, `/hotkeys`, `/trust`, `/resume`, `/quit`, and `/scoped-models`; project Pi-resource trust is also available from the project context menu, and a new project without a saved/inherited decision is asked once under the default `ask` policy; `/share` requires a local `gh` CLI.
 16. Persist precise per-run start/end times in Pi Session custom entries so "processed" durations stay consistent across restarts.
 17. Review each run's bounded Git worktree changes from the Composer summary in a responsive, accessible pane with lazy detail loading, run/file/tree restoration, filtering, unified/Codex-style split diff options, hunk navigation, and explicit availability/error/truncation states.
+18. Configure an ordered scoped-model list with per-model thinking levels; manage individual Pi package resources, check/update packages, and refresh the model catalog from the same Pi runtime.
+19. Use prompt history, Tab/Enter resource completion, Pi's configured external editor, pasted or dropped images, Pi-configured model/thinking/search/editor shortcuts, and a current-session transcript search that can reveal folded messages. Pi settings separates automatic precedence from a custom user command, shows the effective source, and can populate the command through the operating system's application picker (Windows executables and macOS applications/executables). The selected command is still persisted through Pi's locked settings storage; clearing the override restores automatic precedence. PiHost aliases quoted absolute paths on Unix only for the lifetime of an edit so Pi's 0.84.4 external-editor helper can launch selected applications whose paths contain spaces.
+20. Run Pi's headless compatibility surface through `npm run cli -- <args>` / `pideck-cli`; the wrapper delegates Print, JSON, RPC, stdin JSONL, and Auth Print behavior directly to Pi's official `main()`.
 
 ## 4. Message and Conversation Behavior
 
@@ -117,6 +122,7 @@ Currently supported:
 - Switching Sessions immediately jumps to the session's latest or saved position without cross-session scroll animations.
 - When the user manually leaves the bottom, a "jump to latest" affordance appears; scroll position is never force-restored.
 - Queue message additions, insertions, edits, deletions, and processing auto-scroll only while the user is still following; scrolling up exits follow immediately. Queue entries are presented as a compact inset stack attached to the Composer and expose PiHost-held image thumbnails. Editing or deleting any row validates its stable ID and atomically rebuilds the remaining Pi queue through `clearQueue()` plus ordered `steer()`/`followUp()` calls, restoring the original queue if rebuilding fails.
+- Automatic retry and summarization retry events are preserved as explicit working phases with attempt count, delay, completion, and final failure feedback. Extension-driven Session replacement rebinds the Renderer to Pi's new Session identity instead of leaving stale task state behind.
 
 ## 5. Current Bridge Contract
 
@@ -125,17 +131,19 @@ Currently supported:
 ```text
 app.setLanguage/setWindowTheme/quit
 runtime.status
-projects.list/chooseDirectory/remove/setTrust
+projects.list/chooseDirectory/remove/trustStatus/setTrust
 sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
-models.list
+models.list/refresh
 workspace.snapshot
+input.keybindings/externalEdit
+settings.get/update/chooseExternalEditor
 providers.list/login/cancelLogin/logout/setApiKey/resolveAuth/openAuthUrl
-agent.prompt/abort/setThinkingLevel/setModel/setScopedModels
+agent.prompt/abort/setThinkingLevel/setModel/cycleModel/setScopedModels
 agent.queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue
 approvals.resolve
 events.subscribe
 extensions.resolveUi
-packages.list/install/remove/update/configure
+packages.list/install/remove/update/configure/configureResource/checkUpdates
 permissions.status/setMode
 ```
 
@@ -155,7 +163,8 @@ Commands currently mapped or to be mapped to native UI:
 - `/reload` → reload Pi resources / re-read initial data.
 - `/import`, `/name`, `/session`, `/share` → PiHost session import through Electron's native JSONL picker, naming, stats, and GitHub Gist sharing.
 - `/copy`, `/changelog`, `/hotkeys`, `/resume`, `/quit` → Renderer/Electron desktop operations.
-- `/trust`, `/scoped-models` → Pi project trust storage and model scoping.
+- `/trust` → the project-scoped Pi-resource status and decision UI backed by Pi `ProjectTrustStore`; the same UI is available in the project context menu and during new-project onboarding under the default `ask` policy.
+- `/scoped-models` → Pi model scoping.
 - `/fork`, `/clone`, `/tree` → not shown yet; on the to-support list.
 
 Commands without a stable Bridge must not be executed by the model as plain prompts, nor be faked as completed. The UI should show an actionable "not yet supported on the desktop" message.
@@ -196,9 +205,8 @@ Integration constraints:
 
 Still planned, not current product promises:
 
-- Print, JSON, RPC, stdin, and Auth Print compatibility channels.
 - Chunk-by-chunk accept/revert and an editable Monaco merge workflow on top of the integrated task-baseline unified diff review.
-- Extension TUI-only `custom` components, themes, Widgets, Footers, Headers — anything that cannot pass component instances across processes.
+- Extension TUI-only `custom` components, theme/component Widgets, terminal input, live synchronous editor components, autocomplete providers, Footers, and Headers — anything that cannot pass component instances across processes.
 
 ## 9. Technical and Security Constraints
 
@@ -226,6 +234,8 @@ npm ls --depth=0 --workspaces
 npm run typecheck
 npm run test:renderer
 npm run build
+npm run smoke:runtime
+npm run smoke:cli
 ```
 
 Release tags must resolve to a commit contained in `main`; the workflow pins that SHA, runs the same verification on Linux, then builds the Windows x64, macOS arm64, and macOS x64 installers on matching native GitHub runners. It generates a separate SBOM from each final package and creates a draft release with SHA-256 checksums; trusted public distribution additionally requires platform signing and macOS notarization secrets in the protected `release-signing` Environment.
@@ -240,6 +250,7 @@ providers.list
 sessions.create
 sessions.runMetadata
 sessions.capabilities
+agent.cycleModel
 agent.queue
 agent.deleteQueue (missing stable ID must fail without mutation)
 workspace.snapshot

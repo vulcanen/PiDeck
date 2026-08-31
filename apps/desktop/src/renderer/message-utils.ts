@@ -16,6 +16,8 @@ export function resetExtensionPresentation(state: TaskUiState): TaskUiState {
     extensionWorkingFrames: undefined,
     extensionWorkingInterval: undefined,
     extensionHiddenThinkingLabel: undefined,
+    extensionToolsExpanded: false,
+    retryStatus: undefined,
   };
 }
 
@@ -50,6 +52,13 @@ export function bashExecutionDetails(message: any): {
     cancelled: Boolean(message.cancelled),
     failed: Boolean(message.cancelled || (typeof message.exitCode === "number" && message.exitCode !== 0)),
   };
+}
+
+/** Returns the text a user can actually see in one persisted message row. */
+export function messageSearchText(message: any): string {
+  const bash = bashExecutionDetails(message);
+  if (bash) return `${bash.excludeFromContext ? "!!" : "!"}${bash.command}\n${bash.output}`;
+  return [textFromMessage(message), messageErrorText(message)].filter(Boolean).join("\n");
 }
 
 // A failed model call (usage limits, provider/auth errors) surfaces as an

@@ -119,6 +119,14 @@ npm ci
 npm run dev
 ```
 
+需要 Pi 的无头兼容通道时，使用同一锁定 Runtime 的透明 CLI 入口；其 Print、JSON、RPC、stdin JSONL 和 `auth print-*` 行为由 Pi 官方 `main()` 直接提供：
+
+```bash
+npm run cli -- --help
+npm run cli -- --mode rpc --no-session
+npm run cli -- auth print-api-key --provider openai
+```
+
 运行项目检查：
 
 ```bash
@@ -127,6 +135,7 @@ npm run typecheck
 npm run test:renderer
 npm run build
 npm run smoke:runtime
+npm run smoke:cli
 npm run notices:check
 npm ls --all
 ```

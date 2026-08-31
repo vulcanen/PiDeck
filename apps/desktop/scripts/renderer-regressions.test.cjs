@@ -7,6 +7,7 @@ const {
   bashExecutionDetails,
   mergeMessageSnapshot,
   messageIdentity,
+  messageSearchText,
   resetExtensionPresentation,
 } = require("../dist/renderer/message-utils.js");
 const {
@@ -31,6 +32,39 @@ const rendererSource = (relativePath) => fs.readFileSync(
   path.join(__dirname, "../src/renderer", relativePath),
   "utf8",
 );
+
+test("model cycling delegates to Pi so scoped order and Thinking remain authoritative", () => {
+  const controller = rendererSource("use-app-controller.tsx");
+  const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  assert.match(controller, /window\.pideck\.agent\.cycleModel\(activeTask\.id, direction, projectCwd\)/);
+  assert.doesNotMatch(controller, /const next = \(base \+ direction \+ modelOptions\.length\)/);
+  assert.match(host, /case "agent\.cycleModel":[\s\S]*?await session\.cycleModel\(payload\.direction\)/);
+});
+
+test("project trust is project-scoped, prompted on add, and enforced by PiHost resource creation", () => {
+  const controller = rendererSource("use-app-controller.tsx");
+  const overlays = rendererSource("app-overlays.tsx");
+  const quickSettings = rendererSource("ui/quick-settings.tsx");
+  const host = fs.readFileSync(path.join(__dirname, "../../../packages/pi-host/src/index.ts"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
+  const preload = fs.readFileSync(path.join(__dirname, "../src/preload/index.ts"), "utf8");
+  assert.match(controller, /const status = await window\.pideck\.projects\.trustStatus\(project\.cwd\)/);
+  assert.match(controller, /\(status\.source === "default" \|\| status\.source === "not-required"\) && status\.defaultPolicy === "ask"/);
+  assert.match(overlays, /data-project-action="trust"/);
+  assert.doesNotMatch(quickSettings, /id: "trust"/);
+  assert.match(main, /"projects:trust-status"[\s\S]*?"projects\.trustStatus"/);
+  assert.match(preload, /trustStatus: \(cwd: string\) => ipcRenderer\.invoke\("projects:trust-status", cwd\)/);
+  assert.match(host, /createTrustAwareSettingsManager\(sdk, options\.cwd, options\.agentDir\)/);
+  assert.match(host, /case "projects\.trustStatus"/);
+  assert.match(host, /case "projects\.setTrust"[\s\S]*?invalidateResourceSessions\(\)/);
+});
+
+test("accepted built-in commands clear the Composer before asynchronous work settles", () => {
+  const controller = rendererSource("use-app-controller.tsx");
+  assert.match(controller, /async function handleBuiltinCommand\(text: string, onAccepted\?: \(\) => void\)/);
+  assert.match(controller, /if \(!action\) return false;\s*onAccepted\?\.\(\);\s*await action\(\);/);
+  assert.match(controller, /if \(await handleBuiltinCommand\(text, \(\) => \{[\s\S]*?setComposer\(""\); setSuggestionMode\(null\);\s*\}\)\) return;/);
+});
 
 function message(id, role, text, timestamp) {
   return { id, role, content: text, timestamp };
@@ -96,6 +130,21 @@ test("persisted user shell commands remain visible with their command and output
     cancelled: false,
     failed: false,
   });
+  assert.equal(messageSearchText(bashMessage), "!dir\nfile.txt\n");
+});
+
+test("transcript search indexes visible shell command and output fields", () => {
+  const bashMessage = {
+    role: "bashExecution",
+    command: "echo UI_SEARCH_ALPHA",
+    output: "UI_SEARCH_ALPHA\n",
+    exitCode: 0,
+    cancelled: false,
+    timestamp: 10,
+    excludeFromContext: false,
+  };
+  assert.match(messageSearchText(bashMessage), /UI_SEARCH_ALPHA/);
+  assert.equal(messageSearchText({ role: "assistant", stopReason: "error", errorMessage: "Provider unavailable", content: "" }), "Provider unavailable");
 });
 
 test("shell result UI stays compact, accessible, and actionable", () => {
@@ -280,7 +329,7 @@ test("name command opens an editable rename dialog without an argument", () => {
   );
   const dialogs = rendererSource("ui/dialogs.tsx");
 
-  assert.match(controller, /command === "name"\) \{ if \(argument\) await renameSession\(argument\); else if \(activeTask\) setRenameOpen\(true\)/);
+  assert.match(controller, /command === "name"\) action = async \(\) => \{ if \(argument\) await renameSession\(argument\); else if \(activeTask\) setRenameOpen\(true\)/);
   assert.match(dialogs, /function RenameSessionDialog/);
 });
 
@@ -306,7 +355,9 @@ test("package enable/disable edits Pi autoload state instead of re-adding source
 
   assert.match(host, /function configurePackageSource/);
   assert.match(host, /manager\.listConfiguredPackages\?\.\(\)/);
-  assert.match(host, /disabled: item\.disabled === true \|\| item\.filtered === true/);
+  assert.match(host, /entry\.autoload === false/);
+  assert.match(host, /disabled: item\.disabled === true \|\| disabledPackageKeys\.has/);
+  assert.doesNotMatch(host, /disabled: item\.disabled === true \|\| item\.filtered === true/);
   assert.match(host, /packageConfigRevision/);
   assert.doesNotMatch(host, /function listConfiguredPackages/);
   assert.match(host, /autoload: false/);
@@ -884,9 +935,9 @@ test("model menu hides its scrollbar without disabling overflow scrolling", () =
 
   assert.match(styles, /\.inline-menu, \.suggestion-popover \{[^}]*overflow:\s*auto/);
   assert.match(styles, /\.inline-menu \{[^}]*max-height:\s*min\(360px, 52vh\)/);
-  assert.match(styles, /\.model-menu \{[^}]*scrollbar-width:\s*none/);
-  assert.match(styles, /\.model-menu::-webkit-scrollbar \{[^}]*display:\s*none/);
-  assert.doesNotMatch(styles, /\.model-menu\s*\{[^}]*overflow(?:-[xy])?:\s*(?:hidden|clip)/);
+  assert.match(styles, /\.model-menu-list \{[^}]*overflow:\s*auto;[^}]*scrollbar-width:\s*none/);
+  assert.match(styles, /\.model-menu-list::-webkit-scrollbar \{[^}]*display:\s*none/);
+  assert.doesNotMatch(styles, /\.model-menu-list\s*\{[^}]*overflow(?:-[xy])?:\s*(?:hidden|clip)/);
 });
 
 test("renderer controls share theme tokens across surfaces and modes", () => {

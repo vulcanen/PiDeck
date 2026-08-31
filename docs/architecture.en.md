@@ -29,10 +29,12 @@ Sandboxed React Renderer
 
 The current implementation uses plain Node `child_process.fork` with `process.send/process.on("message")` — not Electron `utilityProcess`, not MessagePort. The fork targets the Electron executable itself with `ELECTRON_RUN_AS_NODE=1`, i.e. Electron's bundled Node: when the bundled Node satisfies the Pi SDK engines there is no WebIDL/undici compatibility issue, and it reads the asar archive transparently, so node_modules are fully packed into the asar with only native `.node` modules and `apps/desktop/assets` unpacked via `asarUnpack`. If the bundled Node is below the Pi SDK requirement, an external system Node must be used with node_modules fully unpacked (a system Node cannot read asar).
 
+The headless `pideck-cli` / `npm run cli -- <args>` entry follows a separate direct path: `packages/pi-host/dist/cli.js` loads the selected Pi SDK and calls Pi's official `main(args)`. Print, JSON, RPC, stdin JSONL, and Auth Print therefore retain Pi's own stdout/stderr and protocol semantics without entering the Renderer/Main IPC topology.
+
 Two runtime resolution entry points:
 
 - `PIDECK_NODE_EXECUTABLE`: explicitly sets the Node executable used by PiHost; defaults to `process.execPath` (Electron bundled Node).
-- `PIDECK_PI_MODULE`: explicitly sets the Pi SDK entry file. Packaged builds otherwise require the lockfile-pinned SDK inside `app.asar`; development builds may additionally discover a global Pi installation.
+- `PIDECK_PI_MODULE`: explicitly sets the Pi SDK entry file. Packaged builds otherwise require the lockfile-pinned SDK inside `app.asar`. Development resolves the repository's lockfile-pinned dependency before optionally falling back to a global Pi installation, preventing an unrelated older global CLI from silently changing the API surface.
 
 `packages/pi-host` posts messages to both `process.send` and the `worker_threads` `parentPort`, so the process host can be swapped, but Main currently only uses `child_process.fork`.
 
@@ -46,13 +48,13 @@ Main is only responsible for:
 - Starting, listening to, and stopping PiHost. Lifecycle callbacks are bound to the process instance that emitted them, so a late `exit` from a replaced Host cannot tear down its replacement; restart resolves only after a real `runtime.status` IPC round trip.
 - Resolving the operating-system proxy through an internal Main/PiHost bridge for each request URL when neither explicit proxy environment variables nor Pi `httpProxy` are set.
 - Orchestrating between Renderer IPC and PiHost requests.
-- Setting timeouts for requests (default 60s; `providers.login`, `sessions.share` 15min; `packages.*` 10min; `agent.prompt` unbounded — its completion is signaled by `agent_settled`, not the RPC response) and handling Host disconnects.
+- Setting timeouts for requests (default 60s; `providers.login`, `sessions.share` 15min; `packages.*` 10min; `agent.prompt` and `input.externalEdit` unbounded because completion is externally/event driven) and handling Host disconnects.
 - Opening protocol-validated HTTP(S) URLs in the system browser and rejecting in-window navigation.
 - Recording project directory references, hidden references, and their display order in Electron `userData/projects.json`.
 - Building the application menu and switching menu language via `app:set-language`; copy comes from `@pideck/i18n`.
 - On Windows, Electron Window Controls Overlay keeps the themed Renderer surface behind the system controls. Edit/View/Help triggers follow the Workspace label and reuse the native application menu; below 1100px they collapse into one Menu button. At 560px and below, actions move to a second toolbar row to preserve the native 48px caption-control hit area. Settings drawers start below the complete toolbar (normally 48px, 96px in the narrow Windows layout). macOS keeps its system menu bar. `app:set-window-theme` synchronizes the native background/control-symbol colors with the Renderer theme.
 - `app:popup-menu` is a trusted Main-only IPC endpoint, exposed as `PideckBridge.app.popupMenu({ menu, x, y })`. Its strict contract allows only all/edit/view/help and finite bounded CSS-pixel anchors. Main resolves the existing native menu by stable ID, scales/clamps coordinates to content bounds, and resolves after dismissal; Renderer never sends menu actions or executable templates. Pointer activation preserves edit selection; keyboard activation restores the previous content focus before opening and returns to the trigger on dismissal. Failures surface a localized retry/restart notice.
-- Opening native dialogs for directory picking, session import, etc.
+- Opening native dialogs for directory picking, session import, and external-editor application selection. Main validates a selected executable (or a macOS `.app`) and returns only a Pi-compatible command string; the Renderer never receives general filesystem access.
 - Setting the Dock icon on macOS and attempting to load `pideck-miniwindow.node` for the minimized-window icon; failures degrade to a warning.
 
 The project directory list stores only `cwd`, never Session or workspace content. Clicking a project in the Renderer expands its session list on demand via `sessions.list(cwd)`, keeping other projects' expansion states independent and leaving the central session untouched; only clicking a specific session switches the workspace. Every expanded group renders from its own `projectTasksByCwd[cwd]` cache, so the intermediate render of a cross-project switch cannot place the previous project's Sessions under the newly selected project. Right-click "remove" on a project only adds `cwd` to hidden references and never deletes project files or Pi Sessions. Main never creates `AgentSession`, never stores Provider credentials, and never executes user Shell commands.
@@ -70,15 +72,18 @@ Preload exposes a capability-scoped `window.pideck` via `contextBridge`. The Ren
 PiHost is responsible for:
 
 - Orchestrating `@pideck/pi-adapter`, SessionManager, AgentSession, and ModelRuntime.
+- Resolving project Pi-resource access through Pi `ProjectTrustStore` and `hasTrustRequiringProjectResources()`, then constructing project `SettingsManager` and `ResourceLoader` instances with the effective saved, inherited, or default trust decision.
 - Reading/restoring Pi Sessions, projecting the complete active `SessionManager.getBranch()` as the desktop transcript while leaving `AgentSession.messages` as Pi's compacted model context, and writing `pideck.execution-run` run metadata via `SessionManager.appendCustomEntry()`.
 - Forwarding Agent events, Approval events, Auth events, and Extension UI requests. The orchestration entry remains in `index.ts`; process-local registries are isolated in `host-state.ts`, and Pi Agent event-to-bridge normalization is isolated in `agent-event-adapter.ts` so later domain splits can preserve the current IPC contract.
+- Owning Pi `AgentSessionRuntime` so Extension commands receive RPC mode, official command-context actions, Session replacement/rebinding, diagnostics, async errors, shutdown requests, and cancellable/timeout-bound Extension UI requests.
 - Executing Pi built-in tools, Bash, Provider login, Pi package management, permission-mode reads/writes, and session operations.
+- Reading Pi's effective keybindings and invoking Pi's configured external-editor helper for the Renderer input adaptation; the Pi settings surface reads the effective command/source and writes the user command through Pi's locked `FileSettingsStorage`. Pi 0.84.4 splits editor commands on spaces before spawning, so on macOS/Linux PiHost temporarily replaces quoted selected absolute paths with no-space symlink aliases, calls the same Pi helper, then removes the aliases. The Renderer never spawns editors or reads Pi config files directly.
 - Initializing Pi's own proxy-aware HTTP dispatcher before reporting `runtime.status=connected`, so OAuth token exchange, model requests, and Provider HTTP calls share the same PiHost route. Package-manager subprocesses such as npm, pnpm, and git retain their own proxy configuration.
 - Converting cross-process data into JSON-serializable responses (`jsonSafe`) and keeping stable IDs plus queued image attachments in a PiHost sidecar so queue thumbnails, `promoteQueue`, `editQueue`, and `deleteQueue` can rebuild Pi's queue without dropping attachments.
 - Scoping every in-memory SessionManager, AgentSession, queue, approval, and lifecycle resource by normalized `cwd` plus Pi session ID. Imported JSONL files may preserve the same ID in different projects, but deletion, abort, and queue operations remain project-isolated.
 - Running Git workspace inspection and `gh` sharing commands asynchronously with bounded timeouts so external processes do not block the PiHost IPC loop.
 
-Dynamic Pi SDK resolution, loading, and model/Session adaptation live in `packages/pi-adapter`. Pi permission configuration, Extension UI binding, approval waiting, and policy switching live in `packages/permission-engine`. Neither creates a second agent, Provider, or Session store; the authoritative sources remain the Pi SDK and `@gotgenes/pi-permission-system`.
+Dynamic Pi SDK resolution, loading, model/Session adaptation, and guarded loading of Pi's version-matched keybinding, settings-storage, and external-editor modules live in `packages/pi-adapter`. Pi permission configuration, Extension UI binding, approval waiting, and policy switching live in `packages/permission-engine`. Neither creates a second agent, Provider, or Session store; the authoritative sources remain the Pi SDK and `@gotgenes/pi-permission-system`. The separate `packages/pi-host/src/cli.ts` is intentionally transparent and calls Pi's official `main()` rather than entering the desktop IPC protocol.
 
 Proxy precedence is explicit `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, Pi's global `httpProxy` setting, then Electron's cross-platform system-proxy resolution. `pi-adapter` first calls Pi's version-matched `configureHttpDispatcher()`; only when no explicit/Pi proxy exists does it install a thin dispatcher that asks Main to run `session.resolveProxy(url)` for every request URL. PAC, bypass, and domain-specific rules therefore remain URL-aware instead of being flattened into a startup snapshot. Resolution failures reject the request rather than silently falling back to direct traffic. A missing or incompatible dispatcher fails PiHost startup with a sanitized `runtime.error` before process exit.
 
@@ -107,7 +112,7 @@ PiDeck/
 │        ├─ app-view.tsx                  # Workspace shell and global layout
 │        ├─ app-sidebar.tsx               # Project tree, Session list, sidebar interactions
 │        ├─ app-conversation.tsx          # Session pane caching, conversation, Composer composition
-│        ├─ app-overlays.tsx              # Command palette, dialogs, global overlays
+│        ├─ app-overlays.tsx              # Quick settings, dialogs, global overlays
 │        ├─ use-app-controller.tsx        # Page state and action orchestration
 │        ├─ use-session-data.ts           # Session/capability/message loading
 │        ├─ use-runtime-events.ts         # PiHost runtime event normalization
@@ -136,8 +141,7 @@ PiDeck/
 │           ├─ change-review.tsx          # Split-pane per-run unified diff review
 │           ├─ pane-resize-handle.tsx     # Accessible pointer/keyboard pane separator
 │           ├─ composer.tsx               # Input, suggestions, queue thumbnails/editing
-│           ├─ command-palette.tsx        # Command palette
-│           ├─ quick-settings.tsx         # Unified settings launcher
+│           ├─ quick-settings.tsx         # Hierarchical settings, task actions, and searchable Pi commands
 │           ├─ application-menu.tsx       # Windows title-bar native-menu triggers
 │           ├─ dialogs.tsx                # Rename/trust/resume/extension dialogs
 │           ├─ approval-card.tsx          # Tool approval card
@@ -210,6 +214,8 @@ Must be observed:
 
 Renderer image previews remain a non-authoritative cache. `image-cache.ts` uses the small `idb` Promise wrapper while preserving the existing `pideck-cache` database, `snapshots` object store, structured-clone values, and `localStorage` fallback. Shared modal focus behavior is implemented once in `ui-system` over `focus-trap`; PiDeck retains its own dialog markup and inert application-shell boundary, while the library owns nested trap stacking, dynamic tabbable discovery, Escape routing, and focus restoration.
 
+Searchable action selection uses `cmdk` for the Pi commands subpage in Quick settings and the Composer model chooser, so filtering, active-option semantics, arrow-key navigation, scrolling, and Enter activation share one tested interaction primitive. PiDeck still owns Pi command routing and model selection side effects. Plain filters that do not select an action use native Chromium search inputs, and transcript search remains Session-data-aware because browser page search cannot see folded, unmounted history.
+
 PiHost restores the desktop transcript by projecting every entry on Pi's complete active `SessionManager.getBranch()`. It deliberately does not expose `AgentSession.messages` as history because that array is the compaction-aware model context and omits the summarized prefix after a restart. Context compaction therefore remains effective for subsequent model requests without hiding persisted pre-compaction turns from the user.
 
 The Renderer session timeline is composed of `app-conversation.tsx` and `ui/message-timeline.tsx` as a **plain document-flow list with earlier-message folding** — no virtual list. Consecutive Assistant commentary records inside one turn retain unique React identities and use a shared three-level rhythm for turn, continuation, and section spacing through the transition into live Activity, while the final record alone reuses the live response key. During a run, the execution summary is a non-interactive elapsed-time indicator while `ui/live-activity.tsx` renders normalized thinking blocks and tool calls in their actual chronological order as a low-emphasis inline flow rather than a separate raised card. After settlement, the live panel retracts and the complete process moves into the expandable summary. Both live and completed process regions have the same bounded viewport-relative height and scroll internally on overflow; while the live region is following, `ActivityStep` refreshes and late Markdown/diagram resizes keep its inner viewport pinned to the newest output, an intentional upward wheel/touch gesture pauses that follow, and returning to the inner bottom resumes it. These process regions are marked as nested scroll islands, so their wheel/touch/captured-scroll events never change the outer transcript follow state or show its "jump to latest" control. Tool arguments/results stay collapsed per call, and excessive provider blank lines are compacted for presentation only. Because Mermaid, KaTeX, and syntax highlighting are asynchronously sized, the measure-position loop of virtual lists is fundamentally incompatible with them (jumping, overlap, rubber-banding); instead only the most recent `FOLD_WINDOW = 200` messages stay mounted, with older messages folded behind a "show earlier" button revealing `FOLD_STEP = 200` at a time. Anti-jump relies on native scroll anchoring: `.conversation-scroll` must keep `overflow-anchor: auto` (the virtual-list-era `none` disables that mechanism).
@@ -230,14 +236,15 @@ Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
 
 - `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
-- `projects.list/chooseDirectory/remove/setTrust`
+- `projects.list/chooseDirectory/remove/trustStatus/setTrust`
 - `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
-- `models.list`
+- `models.list/refresh`
 - `workspace.snapshot`
+- `input.keybindings/externalEdit`
 - `providers.list/login/cancelLogin/logout/setApiKey/resolveAuth/openAuthUrl`
-- `agent.prompt/executeBash/abort/setThinkingLevel/setModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
-- `sessions.compact/reload`, `settings.get/update`, `extensions.resolveUi`
-- `packages.list/install/remove/update/configure`
+- `agent.prompt/executeBash/abort/setThinkingLevel/setModel/cycleModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
+- `sessions.compact/reload`, `settings.get/update/chooseExternalEditor`, `extensions.resolveUi`
+- `packages.list/install/remove/update/configure/configureResource/checkUpdates`
 - `approvals.resolve`
 - `permissions.status/setMode`
 
@@ -248,7 +255,7 @@ Three naming relationships need attention:
 
 - `sessions.remove` is an alias of `sessions.delete`; both go through the same `sessions:delete` IPC channel.
 - `providers.resolveAuth` / `providers.cancelLogin` / `providers.openAuthUrl` correspond to IPC channels `providers:auth-response` / `providers:cancel-login` / `providers:open-auth-url`; the first two are forwarded to PiHost commands `providers.auth-response` / `providers.cancelLogin`, while the last is opened by Main directly in the system browser.
-- `sessions.changelog` maps to the PiHost command `app.changelog`; `projects.list/chooseDirectory/remove` are composed by Main from `projects.json` plus the PiHost `projects.list` and `sessions.list` commands, with no one-to-one Host command.
+- `sessions.changelog` maps to the PiHost command `app.changelog`; `projects.list/chooseDirectory/remove` are composed by Main from `projects.json` plus the PiHost `projects.list` and `sessions.list` commands, with no one-to-one Host command. `projects.trustStatus/setTrust` map to PiHost's Pi `ProjectTrustStore`; PiHost derives the effective saved, inherited, or default decision and passes it to every project `SettingsManager` and `ResourceLoader` construction.
 
 If the docs disagree with `packages/contracts`, contracts and the implementation win; the docs must be updated in the same change.
 
@@ -279,13 +286,13 @@ Auth prompts come back through `providers.resolveAuth` (IPC `providers:auth-resp
 
 - Pi Session / `cwd` → left project tree, per-project session lists, and the central conversation.
 - Pi ModelRuntime → Provider settings, model selection, and thinking level.
-- Pi slash command / Prompt / Skill catalog → Composer suggestions and command palette.
+- Pi slash command / Prompt / Skill catalog → Composer suggestions and the searchable Pi commands subpage in Quick settings.
 - Pi Agent event → streaming replies, tool process, approvals, and run status.
-- Pi Session export/compact → session operations and command palette entries; Session Tree `/fork`, `/clone`, `/tree` remain on the to-support list.
+- Pi Session export/compact → session operations in Quick settings; Session Tree `/fork`, `/clone`, `/tree` remain on the to-support list.
 - Pi Agent steering/follow-up queue → compact Composer-attached queue stack, delivery mode, batch mode, images, promotion, editing, and deletion. Automatic compaction routes input through Pi's native queues; manual compaction uses a scoped Host staging queue because it ends without an active Agent run, then starts the first staged prompt and transfers the rest back to Pi in order. The same stable-ID mutation surface covers both queues, and preflight reservations prevent competing direct prompts.
-- Pi Package management → Pi packages settings panel in the command palette.
-- The header gear / `Ctrl/Cmd + ,` → Quick settings, reusing the existing Pi settings, Provider, package, scoped-model, trust, and shortcut surfaces. Provider authentication uses a distinct brain icon. All settings drawers are anchored below `--titlebar-height` on macOS and Windows.
-- Palette click/Enter dispatches through `palette-command.ts`: built-ins call existing desktop handlers, runtime-tagged `source: "extension"` commands call Pi's prompt bridge, and Prompt/Skill resources remain editable templates. The optional source metadata is additive to `SessionCapabilities`; no new IPC endpoint is introduced. Dialog focus restoration uses a shared workspace-origin context when a palette/launcher trigger has already unmounted.
+- Pi Package management → Pi packages settings panel in Quick settings.
+- The header gear / `Ctrl/Cmd + ,` opens the compact Quick settings root; task actions and Pi commands are drill-down pages, while `Ctrl/Cmd + K` opens the Pi commands page directly. The former header Provider and standalone command launchers are removed. All settings drawers are anchored below `--titlebar-height` on macOS and Windows.
+- The Pi commands subpage dispatches click/Enter through `palette-command.ts`: built-ins call existing desktop handlers, runtime-tagged `source: "extension"` commands call Pi's prompt bridge, and Prompt/Skill resources remain editable templates. Fixed actions filter their equivalent slash commands to avoid duplicate rows. The optional source metadata is additive to `SessionCapabilities`; no new IPC endpoint is introduced. Dialog focus restoration uses a shared workspace-origin context when the launcher has already unmounted.
 - Pi permission system modes → permission-level control below the input.
 - Pi workspace file list → `@file` reference candidates in the Composer. `workspace.snapshot` also returns git `changes`, but the current UI has no standalone Files/Changes panel, so the field is not yet consumed.
 
@@ -316,6 +323,7 @@ sessions.changeReviews
 sessions.changeReview (missing ID returns null)
 sessions.capabilities
   # Verify registered Extension commands carry source: "extension".
+agent.cycleModel
 agent.queue
 agent.deleteQueue (missing stable ID must fail without mutation)
 workspace.snapshot

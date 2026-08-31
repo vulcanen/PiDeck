@@ -6,13 +6,22 @@ import { pathToFileURL } from "node:url";
 
 /** The supported Pi SDK surface used by PiDeck's host adapter. */
 export type PiSdk = {
+  main?: (args: string[], options?: unknown) => Promise<void>;
   ModelRuntime: {
     create(options?: { allowModelNetwork?: boolean }): Promise<any>;
   };
-  DefaultResourceLoader?: new (options: { cwd: string; agentDir: string; additionalExtensionPaths?: string[] }) => any;
+  DefaultResourceLoader?: new (options: { cwd: string; agentDir: string; settingsManager?: any; additionalExtensionPaths?: string[] }) => any;
   DefaultPackageManager?: new (options: { cwd: string; agentDir: string; settingsManager: any }) => any;
-  SettingsManager?: { create(cwd: string, agentDir?: string): any };
-  ProjectTrustStore?: new (agentDir: string) => any;
+  SettingsManager?: { create(cwd: string, agentDir?: string, options?: { projectTrusted?: boolean }): any };
+  FileSettingsStorage?: new (cwd: string, agentDir: string) => { withLock(scope: "global" | "project", fn: (current: string | undefined) => string | undefined): void };
+  KeybindingsManager?: { create(agentDir?: string): { getEffectiveConfig(): Record<string, string | string[]> } };
+  editInExternalEditor?: (options: { command: string; content: string }) => Promise<{ status: "complete"; content: string } | { status: "failed" }>;
+  ProjectTrustStore?: new (agentDir: string) => {
+    get(cwd: string): boolean | null;
+    getEntry(cwd: string): { path: string; decision: boolean } | null;
+    set(cwd: string, decision: boolean | null): void;
+  };
+  hasTrustRequiringProjectResources?: (cwd: string) => boolean;
   getAgentDir?: () => string;
   parseSkillBlock?: (text: string) => { name: string; location: string; content: string; userMessage?: string } | null;
   sessionEntryToContextMessages?: (entry: unknown) => unknown[];
@@ -29,7 +38,24 @@ export type PiSdk = {
     open(path: string, sessionDir?: string, cwdOverride?: string): any;
     inMemory(cwd?: string): any;
   };
-  createAgentSession(options: { cwd: string; sessionManager: any; modelRuntime: any; resourceLoader?: any }): Promise<{ session: any }>;
+  AgentSessionRuntime?: new (
+    session: any,
+    services: { cwd: string; agentDir: string; modelRuntime: any; settingsManager: any; resourceLoader: any; diagnostics: any[] },
+    createRuntime: (options: { cwd: string; agentDir: string; sessionManager: any; sessionStartEvent?: any }) => Promise<any>,
+    diagnostics?: any[],
+    modelFallbackMessage?: string,
+  ) => any;
+  resolveModelScopeWithDiagnostics?: (patterns: string[], modelRuntime: any, options?: { signal?: AbortSignal }) => Promise<{ scopedModels: any[]; diagnostics: any[] }>;
+  createAgentSession(options: {
+    cwd: string;
+    agentDir?: string;
+    sessionManager: any;
+    modelRuntime: any;
+    resourceLoader?: any;
+    settingsManager?: any;
+    scopedModels?: any[];
+    sessionStartEvent?: any;
+  }): Promise<{ session: any; extensionsResult?: { errors?: Array<{ path: string; error: string }> }; modelFallbackMessage?: string }>;
 };
 
 let sdkPromise: Promise<PiSdk> | undefined;
@@ -298,6 +324,12 @@ export function resolvePiModule(): string {
     throw new Error("Could not locate the bundled Pi SDK. Reinstall PiDeck or set PIDECK_PI_MODULE for compatibility testing.");
   }
 
+  // Development should use the lockfile-pinned workspace dependency before a
+  // possibly older unrelated global `pi` executable. PIDECK_PI_MODULE remains
+  // the explicit override for testing another Pi checkout or release.
+  addPiRoots(candidates, path.resolve(process.cwd(), "node_modules"));
+  addPiRoots(candidates, path.resolve(__dirname, "../../../node_modules"));
+
   try {
     const executable = process.platform === "win32"
       ? execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "where.exe"), ["pi"], { encoding: "utf8" }).split(/\r?\n/).find(Boolean) ?? ""
@@ -311,8 +343,6 @@ export function resolvePiModule(): string {
   for (const npmCommand of process.platform === "win32" ? ["npm.cmd", "npm"] : ["npm"]) {
     try { addPiRoots(candidates, execFileSync(npmCommand, ["root", "-g"], { encoding: "utf8" })); } catch { /* npm is optional in packaged builds */ }
   }
-  addPiRoots(candidates, path.resolve(process.cwd(), "node_modules"));
-  addPiRoots(candidates, path.resolve(__dirname, "../../../node_modules"));
   const resolved = candidates.find((candidate) => existsSync(candidate));
   if (!resolved) {
     throw new Error(`Could not locate Pi SDK. Set PIDECK_PI_MODULE to @earendil-works/pi-coding-agent/dist/index.js. Searched ${candidates.length} locations.`);
@@ -330,11 +360,33 @@ export function piHttpDispatcherModule(piModule: string = resolvePiModule()): st
   return modulePath;
 }
 
+function piCompanionModule(piModule: string, relativePath: string[], capability: string): string {
+  const modulePath = path.join(path.dirname(piModule), ...relativePath);
+  if (!existsSync(modulePath)) {
+    throw new Error(
+      `The installed Pi SDK does not expose ${capability}. Install the PiDeck-supported Pi SDK version or remove PIDECK_PI_MODULE.`,
+    );
+  }
+  return modulePath;
+}
+
 export function loadPiSdk(): Promise<PiSdk> {
-  sdkPromise ??= import(pathToFileURL(resolvePiModule()).href).catch((error) => {
+  sdkPromise ??= (async () => {
+    const piModule = resolvePiModule();
+    const keybindingsModule = piCompanionModule(piModule, ["core", "keybindings.js"], "effective keybindings");
+    const settingsModule = piCompanionModule(piModule, ["core", "settings-manager.js"], "locked settings storage");
+    const externalEditorModule = piCompanionModule(piModule, ["modes", "interactive", "external-editor.js"], "the external editor helper");
+    const [sdk, keybindings, settingsStorage, externalEditor] = await Promise.all([
+      import(pathToFileURL(piModule).href) as Promise<PiSdk>,
+      import(pathToFileURL(keybindingsModule).href) as Promise<Pick<PiSdk, "KeybindingsManager">>,
+      import(pathToFileURL(settingsModule).href) as Promise<Pick<PiSdk, "FileSettingsStorage">>,
+      import(pathToFileURL(externalEditorModule).href) as Promise<Pick<PiSdk, "editInExternalEditor">>,
+    ]);
+    return { ...sdk, ...keybindings, ...settingsStorage, ...externalEditor };
+  })().catch((error) => {
     sdkPromise = undefined;
     throw error;
-  }) as Promise<PiSdk>;
+  });
   return sdkPromise;
 }
 

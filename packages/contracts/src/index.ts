@@ -50,6 +50,19 @@ export interface ModelSummary {
   authConfigured: boolean;
 }
 
+export interface ScopedModelSelection {
+  providerId: string;
+  modelId: string;
+  thinkingLevel?: string;
+}
+
+export interface ModelCycleState {
+  model?: ModelSummary;
+  thinkingLevel: string;
+  thinkingLevels: string[];
+  contextUsage?: ContextUsage;
+}
+
 export interface SessionCapabilities {
   model?: ModelSummary;
   thinkingLevel: string;
@@ -58,7 +71,7 @@ export interface SessionCapabilities {
   prompts: Array<{ name: string; description?: string }>;
   skills: Array<{ name: string; description?: string }>;
   contextUsage?: ContextUsage;
-  scopedModels?: string[];
+  scopedModels?: ScopedModelSelection[];
 }
 
 export interface PiSessionStats {
@@ -162,6 +175,8 @@ export interface AgentQueueState {
   followUpMode: QueueMode;
 }
 
+export type ExternalEditorSource = "project" | "user" | "visual" | "editor" | "default";
+
 export interface PiSettingsSummary {
   defaultProvider?: string;
   defaultModel?: string;
@@ -170,9 +185,21 @@ export interface PiSettingsSummary {
   compactionEnabled: boolean;
   steeringMode: QueueMode;
   followUpMode: QueueMode;
+  externalEditor?: string;
+  effectiveExternalEditor: string;
+  externalEditorSource: ExternalEditorSource;
 }
 
-export type PiSettingsUpdate = Partial<PiSettingsSummary>;
+export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
+  | "defaultProvider"
+  | "defaultModel"
+  | "defaultThinkingLevel"
+  | "transport"
+  | "compactionEnabled"
+  | "steeringMode"
+  | "followUpMode"
+  | "externalEditor"
+>>;
 
 export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
 
@@ -185,6 +212,7 @@ export interface ExtensionUiRequest {
   options?: string[];
   placeholder?: string;
   prefill?: string;
+  timeoutMs?: number;
 }
 
 export interface PiPackageSummary {
@@ -194,6 +222,15 @@ export interface PiPackageSummary {
   disabled: boolean;
   installedPath?: string;
   updateAvailable?: boolean;
+  resources: PiPackageResourceSummary[];
+}
+
+export type PiPackageResourceType = "extension" | "skill" | "prompt" | "theme";
+
+export interface PiPackageResourceSummary {
+  type: PiPackageResourceType;
+  path: string;
+  enabled: boolean;
 }
 
 export interface WorkspaceFile {
@@ -216,6 +253,19 @@ export interface WorkspaceSnapshot {
   refreshedAt: string;
 }
 
+export type PiKeybindings = Record<string, string[]>;
+
+export type ProjectTrustSource = "not-required" | "saved" | "inherited" | "default";
+
+export interface ProjectTrustStatus {
+  cwd: string;
+  hasTrustRequiringResources: boolean;
+  trusted: boolean;
+  source: ProjectTrustSource;
+  sourcePath?: string;
+  defaultPolicy: "ask" | "always" | "never";
+}
+
 export interface PideckBridge {
   app: {
     popupMenu(request: ApplicationMenuRequest): Promise<void>;
@@ -234,7 +284,8 @@ export interface PideckBridge {
     list(preferredCwd?: string): Promise<ProjectSummary[]>;
     chooseDirectory(): Promise<ProjectSummary | null>;
     remove(cwd: string): Promise<void>;
-    setTrust(cwd: string, trusted: boolean): Promise<void>;
+    trustStatus(cwd: string): Promise<ProjectTrustStatus>;
+    setTrust(cwd: string, trusted: boolean): Promise<ProjectTrustStatus>;
   };
   sessions: {
     list(projectId?: string): Promise<TaskSummary[]>;
@@ -257,9 +308,14 @@ export interface PideckBridge {
   };
   models: {
     list(): Promise<ModelSummary[]>;
+    refresh(): Promise<ModelSummary[]>;
   };
   workspace: {
     snapshot(cwd: string): Promise<WorkspaceSnapshot>;
+  };
+  input: {
+    keybindings(cwd?: string): Promise<PiKeybindings>;
+    externalEdit(content: string, cwd?: string): Promise<string>;
   };
   providers: {
     list(): Promise<ProviderSummary[]>;
@@ -276,7 +332,8 @@ export interface PideckBridge {
     abort(taskId: string, cwd?: string): Promise<void>;
     setThinkingLevel(taskId: string, level: string, cwd?: string): Promise<void>;
     setModel(taskId: string, providerId: string, modelId: string, cwd?: string): Promise<void>;
-    setScopedModels(taskId: string, modelIds: string[] | null, persist?: boolean, cwd?: string): Promise<string[]>;
+    cycleModel(taskId: string, direction: "forward" | "backward", cwd?: string): Promise<ModelCycleState>;
+    setScopedModels(taskId: string, models: ScopedModelSelection[] | null, persist?: boolean, cwd?: string): Promise<ScopedModelSelection[]>;
     queue(taskId: string, cwd?: string): Promise<AgentQueueState>;
     setQueueModes(taskId: string, modes: { steeringMode?: QueueMode; followUpMode?: QueueMode }, cwd?: string): Promise<AgentQueueState>;
     clearQueue(taskId: string, cwd?: string): Promise<AgentQueueState>;
@@ -287,6 +344,7 @@ export interface PideckBridge {
   settings: {
     get(cwd?: string): Promise<PiSettingsSummary>;
     update(settings: PiSettingsUpdate, cwd?: string): Promise<PiSettingsSummary>;
+    chooseExternalEditor(): Promise<string | null>;
   };
   extensions: {
     resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
@@ -297,6 +355,8 @@ export interface PideckBridge {
     remove(source: string, local?: boolean, cwd?: string): Promise<void>;
     update(source?: string, cwd?: string): Promise<void>;
     configure(source: string, enabled: boolean, local?: boolean, cwd?: string): Promise<void>;
+    configureResource(source: string, type: PiPackageResourceType, path: string, enabled: boolean, local?: boolean, cwd?: string): Promise<void>;
+    checkUpdates(cwd?: string): Promise<string[]>;
   };
   events: {
     subscribe(listener: (event: PiDeckRuntimeEvent) => void): () => void;
@@ -324,6 +384,7 @@ export type PiHostCommand =
   | "app.changelog"
   | "app.info"
   | "projects.list"
+  | "projects.trustStatus"
   | "projects.setTrust"
   | "sessions.list"
   | "sessions.create"
@@ -342,7 +403,10 @@ export type PiHostCommand =
   | "sessions.stats"
   | "sessions.share"
   | "models.list"
+  | "models.refresh"
   | "workspace.snapshot"
+  | "input.keybindings"
+  | "input.externalEdit"
   | "providers.list"
   | "providers.login"
   | "providers.cancelLogin"
@@ -354,6 +418,7 @@ export type PiHostCommand =
   | "agent.abort"
   | "agent.setThinkingLevel"
   | "agent.setModel"
+  | "agent.cycleModel"
   | "agent.setScopedModels"
   | "agent.queue"
   | "agent.setQueueModes"
@@ -369,6 +434,8 @@ export type PiHostCommand =
   | "packages.remove"
   | "packages.update"
   | "packages.configure"
+  | "packages.configureResource"
+  | "packages.checkUpdates"
   | "approval.resolve"
   | "permissions.status"
   | "permissions.setMode";
@@ -389,6 +456,11 @@ export interface PiHostResponse {
 const stringList = z.array(z.string());
 const promptImages = z.array(z.object({ data: z.string(), mimeType: z.string() }).passthrough());
 const modelReference = z.object({ providerId: z.string(), modelId: z.string() }).passthrough();
+const scopedModelSelection = z.object({
+  providerId: z.string().min(1),
+  modelId: z.string().min(1),
+  thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+}).strict();
 const emptyPayload = z.object({}).strict().optional();
 const payload = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 
@@ -398,6 +470,7 @@ const piHostPayloadSchemas = {
   "app.changelog": emptyPayload,
   "app.info": emptyPayload,
   "projects.list": payload({ knownCwds: stringList.optional() }),
+  "projects.trustStatus": payload({ cwd: z.string() }),
   "projects.setTrust": payload({ cwd: z.string(), trusted: z.boolean() }),
   "sessions.list": payload({ cwd: z.string().optional() }),
   "sessions.create": payload({ cwd: z.string().optional(), name: z.string().optional() }),
@@ -416,7 +489,10 @@ const piHostPayloadSchemas = {
   "sessions.stats": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "sessions.share": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "models.list": emptyPayload,
+  "models.refresh": emptyPayload,
   "workspace.snapshot": payload({ cwd: z.string() }),
+  "input.keybindings": payload({ cwd: z.string().optional() }),
+  "input.externalEdit": payload({ content: z.string().max(1_000_000), cwd: z.string().optional() }),
   "providers.list": emptyPayload,
   "providers.login": payload({ providerId: z.string(), method: z.enum(["api-key", "oauth"]), secret: z.string().optional(), authOperationId: z.string().optional() }),
   "providers.cancelLogin": payload({ authOperationId: z.string() }),
@@ -428,7 +504,8 @@ const piHostPayloadSchemas = {
   "agent.abort": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "agent.setThinkingLevel": payload({ taskId: z.string(), level: z.string(), cwd: z.string().optional() }),
   "agent.setModel": payload({ taskId: z.string(), providerId: z.string(), modelId: z.string(), cwd: z.string().optional() }),
-  "agent.setScopedModels": payload({ taskId: z.string(), modelIds: stringList.nullable(), persist: z.boolean().optional(), cwd: z.string().optional() }),
+  "agent.cycleModel": payload({ taskId: z.string(), direction: z.enum(["forward", "backward"]), cwd: z.string().optional() }),
+  "agent.setScopedModels": payload({ taskId: z.string(), models: z.array(scopedModelSelection).nullable(), persist: z.boolean().optional(), cwd: z.string().optional() }),
   "agent.queue": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "agent.setQueueModes": payload({ taskId: z.string(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), cwd: z.string().optional() }),
   "agent.clearQueue": payload({ taskId: z.string(), cwd: z.string().optional() }),
@@ -436,13 +513,15 @@ const piHostPayloadSchemas = {
   "agent.editQueue": payload({ taskId: z.string(), messageId: z.string(), text: z.string(), images: promptImages.optional(), cwd: z.string().optional() }),
   "agent.deleteQueue": payload({ taskId: z.string(), messageId: z.string(), cwd: z.string().optional() }),
   "settings.get": payload({ cwd: z.string().optional() }),
-  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional() }),
+  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional() }),
   "extension.ui.resolve": payload({ requestId: z.string(), value: z.union([z.string(), z.boolean()]).optional() }),
   "packages.list": payload({ cwd: z.string().optional() }),
   "packages.install": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),
   "packages.remove": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),
   "packages.update": payload({ source: z.string().optional(), cwd: z.string().optional() }),
   "packages.configure": payload({ source: z.string(), enabled: z.boolean(), local: z.boolean().optional(), cwd: z.string().optional() }),
+  "packages.configureResource": payload({ source: z.string(), type: z.enum(["extension", "skill", "prompt", "theme"]), path: z.string(), enabled: z.boolean(), local: z.boolean().optional(), cwd: z.string().optional() }),
+  "packages.checkUpdates": payload({ cwd: z.string().optional() }),
   "permissions.status": emptyPayload,
   "permissions.setMode": payload({ mode: z.enum(["ask", "allow", "deny", "yolo"]) }),
   "approval.resolve": payload({ requestId: z.string(), decision: z.enum(["allow-once", "deny"]) }),

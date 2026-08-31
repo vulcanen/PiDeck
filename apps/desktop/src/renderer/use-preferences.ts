@@ -6,6 +6,10 @@ function systemTheme(): Theme {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+export function languageSwitchTarget(language: Language): { language: Language; label: "EN" | "中" } {
+  return language === "zh" ? { language: "en", label: "EN" } : { language: "zh", label: "中" };
+}
+
 export function usePreferences() {
   const [language, setLanguage] = useState<Language>(() => localStorage.getItem("pideck.language") === "en" ? "en" : "zh");
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => {

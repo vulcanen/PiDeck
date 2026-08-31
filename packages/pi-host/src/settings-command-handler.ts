@@ -8,12 +8,16 @@ export interface PiSettingsManager {
   getCompactionSettings(): { enabled?: boolean } | undefined;
   getSteeringMode(): PiSettingsSummary["steeringMode"];
   getFollowUpMode(): PiSettingsSummary["followUpMode"];
+  getExternalEditorCommand?(): string;
+  getGlobalSettings?(): { externalEditor?: unknown };
+  getProjectSettings?(): { externalEditor?: unknown };
   setDefaultModelAndProvider(provider: string, model: string): void;
   setDefaultThinkingLevel(level: string): void;
   setTransport(transport: PiSettingsSummary["transport"]): void;
   setCompactionEnabled(enabled: boolean): void;
   setSteeringMode(mode: PiSettingsSummary["steeringMode"]): void;
   setFollowUpMode(mode: PiSettingsSummary["followUpMode"]): void;
+  reload?(): Promise<void>;
   flush(): Promise<void>;
 }
 
@@ -21,8 +25,41 @@ export interface PiSettingsRuntime {
   getModel(provider: string, model: string): unknown;
 }
 
+export interface PiSettingsStorage {
+  withLock(scope: "global" | "project", fn: (current: string | undefined) => string | undefined): void;
+}
+
+function editorCommand(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizedExternalEditor(value: string): string | undefined {
+  const command = value.trim();
+  if (!command) return undefined;
+  if (command.length > 1000) throw new Error("External editor command must be 1000 characters or fewer");
+  if (/[\r\n\0]/.test(command)) throw new Error("External editor command cannot contain line breaks or null characters");
+  return command;
+}
+
+export function persistExternalEditorSetting(storage: PiSettingsStorage, value: string): void {
+  const command = normalizedExternalEditor(value);
+  storage.withLock("global", (current) => {
+    const parsed = current?.trim() ? JSON.parse(current.replace(/^\uFEFF/, "")) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Pi user settings must contain a JSON object");
+    if (command) parsed.externalEditor = command;
+    else delete parsed.externalEditor;
+    return JSON.stringify(parsed, null, 2);
+  });
+}
+
 export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSummary {
   const compaction = manager.getCompactionSettings();
+  const projectEditor = editorCommand(manager.getProjectSettings?.().externalEditor);
+  const userEditor = editorCommand(manager.getGlobalSettings?.().externalEditor);
+  const visualEditor = editorCommand(process.env.VISUAL);
+  const environmentEditor = editorCommand(process.env.EDITOR);
+  const defaultEditor = process.platform === "win32" ? "notepad" : "nano";
+  const externalEditorSource = projectEditor ? "project" : userEditor ? "user" : visualEditor ? "visual" : environmentEditor ? "editor" : "default";
   return {
     defaultProvider: manager.getDefaultProvider(),
     defaultModel: manager.getDefaultModel(),
@@ -31,6 +68,9 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     compactionEnabled: compaction?.enabled !== false,
     steeringMode: manager.getSteeringMode(),
     followUpMode: manager.getFollowUpMode(),
+    externalEditor: userEditor,
+    effectiveExternalEditor: manager.getExternalEditorCommand?.() ?? projectEditor ?? userEditor ?? visualEditor ?? environmentEditor ?? defaultEditor,
+    externalEditorSource,
   };
 }
 
@@ -38,7 +78,10 @@ export async function updatePiSettings(
   manager: PiSettingsManager,
   runtime: PiSettingsRuntime,
   payload: PiSettingsUpdate,
+  storage?: PiSettingsStorage,
 ): Promise<PiSettingsSummary> {
+  if (payload.externalEditor !== undefined && !storage) throw new Error("This Pi runtime does not expose locked settings storage");
+  if (payload.externalEditor !== undefined) normalizedExternalEditor(payload.externalEditor);
   const provider = payload.defaultProvider?.trim();
   const model = payload.defaultModel?.trim();
   if (provider || model) {
@@ -68,5 +111,9 @@ export async function updatePiSettings(
     manager.setFollowUpMode(mode);
   }
   await manager.flush();
+  if (payload.externalEditor !== undefined && storage) {
+    persistExternalEditorSetting(storage, payload.externalEditor);
+    await manager.reload?.();
+  }
   return summarizePiSettings(manager);
 }

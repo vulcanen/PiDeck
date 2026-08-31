@@ -10,6 +10,29 @@ export interface PermissionEngineCallbacks {
 
 type BeforeToolCall = (context: any, signal?: AbortSignal) => Promise<unknown> | unknown;
 
+const plainText = (text: string) => text;
+
+// Extension UI contexts are copied with object spread when Pi binds them. Keep
+// theme access side-effect free and provide the same structural API as Pi's
+// Theme without leaking terminal ANSI styling into the desktop renderer.
+const desktopPlainTextTheme = Object.freeze({
+  name: "pideck",
+  sourcePath: undefined,
+  sourceInfo: undefined,
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: plainText,
+  italic: plainText,
+  underline: plainText,
+  inverse: plainText,
+  strikethrough: plainText,
+  getFgAnsi: (_color: string) => "",
+  getBgAnsi: (_color: string) => "",
+  getColorMode: () => "truecolor" as const,
+  getThinkingBorderColor: (_level: string) => plainText,
+  getBashModeBorderColor: () => plainText,
+});
+
 function permissionConfigPath(): string {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
   return path.join(agentDir, "extensions", "pi-permission-system", "config.json");
@@ -58,7 +81,13 @@ export class PermissionEngine {
   private revisionValue = 0;
   private readonly approvalWaiters = new Map<string, (allow: boolean) => void>();
   private readonly approvalTaskIds = new Map<string, string>();
-  private readonly uiWaiters = new Map<string, (value: string | boolean | undefined) => void>();
+  private readonly uiWaiters = new Map<string, {
+    taskId: string;
+    resolve(value: string | boolean | undefined): void;
+    timer?: ReturnType<typeof setTimeout>;
+    signal?: AbortSignal;
+    onAbort?: () => void;
+  }>();
 
   constructor(private readonly callbacks: PermissionEngineCallbacks) {}
 
@@ -127,36 +156,74 @@ export class PermissionEngine {
         resolve(false);
       }
     }
-    for (const [requestId, resolve] of this.uiWaiters.entries()) {
+    for (const [requestId, waiter] of this.uiWaiters.entries()) {
       if (requestId.startsWith(prefix)) {
         this.uiWaiters.delete(requestId);
-        resolve(undefined);
+        if (waiter.timer) clearTimeout(waiter.timer);
+        if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+        waiter.resolve(undefined);
       }
     }
   }
 
   resolveUi(requestId: string, value: string | boolean | undefined): void {
-    const resolve = this.uiWaiters.get(requestId);
-    if (!resolve) throw new Error(`Unknown extension UI request: ${requestId}`);
+    const waiter = this.uiWaiters.get(requestId);
+    if (!waiter) throw new Error(`Unknown extension UI request: ${requestId}`);
     this.uiWaiters.delete(requestId);
-    resolve(value);
+    if (waiter.timer) clearTimeout(waiter.timer);
+    if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+    waiter.resolve(value);
   }
 
   resetUi(taskId: string): void {
+    for (const [requestId, waiter] of this.uiWaiters.entries()) {
+      if (waiter.taskId !== taskId) continue;
+      this.uiWaiters.delete(requestId);
+      if (waiter.timer) clearTimeout(waiter.timer);
+      if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+      waiter.resolve(undefined);
+    }
     this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action: "reset" });
   }
 
   createUi(taskId: string, scopeId = taskId) {
-    const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>) => new Promise<T | undefined>((resolve) => {
+    const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>, opts?: { signal?: AbortSignal; timeout?: number }) => new Promise<T | undefined>((resolve) => {
       const requestId = `${encodeURIComponent(scopeId)}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-      this.uiWaiters.set(requestId, (value) => resolve(value as T));
-      if (this.callbacks.emitUiRequest) this.callbacks.emitUiRequest(requestId, taskId, { kind, ...payload });
-      else {
+      const settle = (value: string | boolean | undefined, reason?: "timeout" | "aborted") => {
+        const waiter = this.uiWaiters.get(requestId);
+        if (!waiter) return;
         this.uiWaiters.delete(requestId);
-        resolve(undefined);
+        if (waiter.timer) clearTimeout(waiter.timer);
+        if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+        waiter.resolve(value);
+        if (reason) this.callbacks.emitEvent(taskId, { type: "extension.ui.dismiss", requestId, reason });
+      };
+      const timeoutMs = typeof opts?.timeout === "number" && Number.isFinite(opts.timeout) && opts.timeout > 0
+        ? Math.min(opts.timeout, 2_147_483_647)
+        : undefined;
+      const fallback = kind === "confirm" ? false : undefined;
+      const waiter: (typeof this.uiWaiters extends Map<string, infer V> ? V : never) = {
+        taskId,
+        resolve: (value) => resolve(value as T),
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+      };
+      if (opts?.signal?.aborted) {
+        resolve(fallback as T);
+        return;
+      }
+      if (timeoutMs) waiter.timer = setTimeout(() => settle(fallback, "timeout"), timeoutMs);
+      if (opts?.signal) {
+        waiter.onAbort = () => settle(fallback, "aborted");
+        opts.signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      this.uiWaiters.set(requestId, waiter);
+      if (this.callbacks.emitUiRequest) this.callbacks.emitUiRequest(requestId, taskId, { kind, ...payload, ...(timeoutMs ? { timeoutMs } : {}) });
+      else {
+        settle(fallback);
       }
     });
     let editorText = "";
+    let toolsExpanded = false;
     const unsupported = new Set<string>();
     const present = (action: string, payload: Record<string, unknown> = {}) => this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action, ...payload });
     const warnUnsupported = (capability: string) => {
@@ -165,15 +232,15 @@ export class PermissionEngine {
       this.callbacks.emitEvent(taskId, { type: "extension.ui.unsupported", capability });
     };
     return {
-      select: (title: string, options: string[]) => request<string>("select", { title, options }),
-      confirm: (title: string, message: string) => request<boolean>("confirm", { title, message }),
-      input: (title: string, placeholder?: string) => request<string>("input", { title, placeholder }),
+      select: (title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }) => request<string>("select", { title, options }, opts),
+      confirm: (title: string, message: string, opts?: { signal?: AbortSignal; timeout?: number }) => request<boolean>("confirm", { title, message }, opts),
+      input: (title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }) => request<string>("input", { title, placeholder }, opts),
       notify: (message: string, type?: string) => this.callbacks.emitEvent(taskId, { type: "extension.ui.notify", message, level: type ?? "info" }),
       onTerminalInput: () => { warnUnsupported("onTerminalInput"); return () => undefined; },
       setStatus: (key: string, text?: string) => present("status", { key, text }),
       setWorkingMessage: (message?: string) => present("working-message", { message }),
       setWorkingVisible: (visible: boolean) => present("working-visible", { visible }),
-      setWorkingIndicator: (indicator?: { frames?: string[]; interval?: number }) => present("working-indicator", { indicator }),
+      setWorkingIndicator: (indicator?: { frames?: string[]; intervalMs?: number }) => present("working-indicator", { indicator: indicator ? { frames: indicator.frames, interval: indicator.intervalMs } : undefined }),
       setHiddenThinkingLabel: (label?: string) => present("hidden-thinking-label", { label }),
       setWidget: (key: string, content?: string[] | (() => unknown), options?: Record<string, unknown>) => {
         if (content !== undefined && !Array.isArray(content)) { warnUnsupported("setWidget(component)"); return; }
@@ -186,19 +253,20 @@ export class PermissionEngine {
       pasteToEditor: (text: string) => { editorText += text; present("editor-text", { text: editorText }); },
       setEditorText: (text: string) => { editorText = text; present("editor-text", { text }); },
       getEditorText: () => { warnUnsupported("getEditorText(live desktop composer)"); return editorText; },
+      setEditorComponent: () => warnUnsupported("setEditorComponent"),
       getEditorComponent: () => { warnUnsupported("getEditorComponent"); return undefined; },
       editor: async (title: string, prefill?: string) => {
         const value = await request<string>("editor", { title, prefill });
         if (typeof value === "string") editorText = value;
         return value;
       },
-      addAutocompleteProvider: () => { warnUnsupported("addAutocompleteProvider"); return () => undefined; },
-      theme: undefined,
-      getAllThemes: () => [],
-      getTheme: () => undefined,
-      setTheme: () => ({ success: false }),
-      getToolsExpanded: () => false,
-      setToolsExpanded: () => undefined,
+      addAutocompleteProvider: () => { warnUnsupported("addAutocompleteProvider"); },
+      get theme() { return desktopPlainTextTheme; },
+      getAllThemes: () => { warnUnsupported("getAllThemes"); return []; },
+      getTheme: () => { warnUnsupported("getTheme"); return undefined; },
+      setTheme: () => { warnUnsupported("setTheme"); return { success: false, error: "Theme objects are not serializable in desktop RPC mode" }; },
+      getToolsExpanded: () => toolsExpanded,
+      setToolsExpanded: (expanded: boolean) => { toolsExpanded = expanded; present("tools-expanded", { expanded }); },
     };
   }
 

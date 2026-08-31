@@ -46,6 +46,22 @@ export function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "follo
   if (event.type === "agent_end") {
     return { type: event.type, willRetry: event.willRetry, messages: jsonSafe(event.messages) };
   }
+  if (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") {
+    return {
+      type: event.type,
+      attempt: event.attempt,
+      maxAttempts: event.maxAttempts,
+      delayMs: event.delayMs,
+      errorMessage: event.errorMessage,
+    };
+  }
+  if (event.type === "auto_retry_end") {
+    return { type: event.type, success: event.success, attempt: event.attempt, finalError: event.finalError };
+  }
+  if (event.type === "summarization_retry_attempt_start") {
+    return { type: event.type, source: event.source, reason: event.reason };
+  }
+  if (event.type === "summarization_retry_finished") return { type: event.type };
   if (event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
     return { type: event.type, willRetry: event.willRetry };
   }
