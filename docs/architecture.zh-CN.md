@@ -7,7 +7,7 @@
 
 `pi-command-arguments.ts` 解析真实模型 ID 与导出文件名。`sessions.export` 新增可选输出路径；Main 校验并解析项目相对路径和 `~/`，通过系统保存窗口确认路径及覆盖，取消返回 `null`，确认后才由 PiHost 调用 Pi 导出器。`.jsonl` 路径选择 JSONL，其余为 HTML。
 
-`settings-command-handler.ts` 通过 Pi getter 读取重试、压缩、超时和默认工具等配置，仅将变更的高级字段通过 `FileSettingsStorage.withLock` 写回，保留嵌套 Provider 重试参数与未知设置。代理摘要隐藏既有凭据，未编辑时保留原值。HTTP 代理/空闲超时需重启 Host/应用；默认工具用于新建会话。
+`settings-command-handler.ts` 通过 Pi getter 读取非 TUI 设置，仅将变更的重试、压缩/分支摘要、网络、图片、授权、Shell、Session、资源和遥测字段通过 `FileSettingsStorage.withLock` 写回，保留嵌套 Provider 重试参数与未知设置。代理摘要隐藏既有凭据，未编辑时保留原值。网络、Shell 和 Session 目录修改需重启 Host/应用；默认工具用于新建会话。
 
 `extensions.syncEditor/invokeShortcut` 对应 `extension.editor.sync/extension.shortcut.invoke`，校验项目作用域与文本长度。前者只更新按项目/会话隔离的展示镜像，不创建 Agent；后者根据生效键位重新查询 Pi `ExtensionRunner.getShortcuts()`、同步当前草稿，并用真实 `createContext()` 执行处理器。`SessionCapabilities.extensionShortcuts` 只包含 key/description。`use-extension-editor.ts` 阻止输入法组合、重复按键、并行处理器和模态窗口中的快捷键派发。实时文本是异步桌面镜像，不冒充同步跨进程 TUI 组件。
 

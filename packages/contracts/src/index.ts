@@ -178,22 +178,54 @@ export interface AgentQueueState {
 
 export type ExternalEditorSource = "project" | "user" | "visual" | "editor" | "default";
 
+export type PiDefaultProjectTrust = "ask" | "always" | "never";
+
+export interface PiThinkingBudgets {
+  minimal?: number;
+  low?: number;
+  medium?: number;
+  high?: number;
+}
+
+export type PiThinkingBudgetsPatch = PiThinkingBudgets;
+
 export interface PiSettingsSummary {
   retryEnabled?: boolean;
   retryMaxRetries?: number;
   retryBaseDelayMs?: number;
+  providerRetryTimeoutMs?: number;
+  providerRetryMaxRetries?: number;
+  providerRetryMaxRetryDelayMs?: number;
   compactionReserveTokens?: number;
   compactionKeepRecentTokens?: number;
+  branchSummaryReserveTokens?: number;
+  branchSummarySkipPrompt?: boolean;
   httpProxy?: string;
   httpProxyHasCredentials?: boolean;
   httpIdleTimeoutMs?: number;
+  websocketConnectTimeoutMs?: number;
   defaultTools?: string[] | null;
   defaultProvider?: string;
   defaultModel?: string;
   defaultThinkingLevel: string;
   /** Per-model startup thinking overrides owned by Pi SettingsManager. */
   modelThinkingLevels?: Record<string, string>;
-  transport: "auto" | "sse" | "websocket";
+  thinkingBudgets?: PiThinkingBudgets | null;
+  hideThinkingBlock?: boolean;
+  showCacheMissNotices?: boolean;
+  imageAutoResize?: boolean;
+  blockImages?: boolean;
+  defaultProjectTrust?: PiDefaultProjectTrust;
+  shellPath?: string;
+  shellCommandPrefix?: string;
+  npmCommand?: string[] | null;
+  sessionDir?: string;
+  enableSkillCommands?: boolean;
+  enableInstallTelemetry?: boolean;
+  enableAnalytics?: boolean;
+  trackingId?: string;
+  warningsAnthropicExtraUsage?: boolean;
+  transport: "auto" | "sse" | "websocket" | "websocket-cached";
   compactionEnabled: boolean;
   steeringMode: QueueMode;
   followUpMode: QueueMode;
@@ -204,11 +236,18 @@ export interface PiSettingsSummary {
 
 export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
   | "retryEnabled" | "retryMaxRetries" | "retryBaseDelayMs"
+  | "providerRetryTimeoutMs" | "providerRetryMaxRetries" | "providerRetryMaxRetryDelayMs"
   | "compactionReserveTokens" | "compactionKeepRecentTokens"
-  | "httpProxy" | "httpIdleTimeoutMs" | "defaultTools"
+  | "branchSummaryReserveTokens" | "branchSummarySkipPrompt"
+  | "httpProxy" | "httpIdleTimeoutMs" | "websocketConnectTimeoutMs" | "defaultTools"
   | "defaultProvider"
   | "defaultModel"
   | "defaultThinkingLevel"
+  | "hideThinkingBlock" | "showCacheMissNotices"
+  | "imageAutoResize" | "blockImages" | "defaultProjectTrust"
+  | "shellPath" | "shellCommandPrefix" | "npmCommand" | "sessionDir"
+  | "enableSkillCommands" | "enableInstallTelemetry" | "enableAnalytics"
+  | "warningsAnthropicExtraUsage"
   | "transport"
   | "compactionEnabled"
   | "steeringMode"
@@ -217,6 +256,7 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
 >> & {
   /** Incremental per-model overrides; null removes the Pi setting. */
   modelThinkingLevels?: Record<string, string | null>;
+  thinkingBudgets?: PiThinkingBudgetsPatch | null;
 };
 
 export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
@@ -546,10 +586,16 @@ const piHostPayloadSchemas = {
   "agent.editQueue": payload({ taskId: z.string(), messageId: z.string(), text: z.string(), images: promptImages.optional(), cwd: z.string().optional() }),
   "agent.deleteQueue": payload({ taskId: z.string(), messageId: z.string(), cwd: z.string().optional() }),
   "settings.get": payload({ cwd: z.string().optional() }),
-  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), modelThinkingLevels: modelThinkingLevelsPatch, transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional(),
+  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), modelThinkingLevels: modelThinkingLevelsPatch, transport: z.enum(["auto", "sse", "websocket", "websocket-cached"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional(),
     retryEnabled: z.boolean().optional(), retryMaxRetries: z.number().int().min(0).max(100).optional(), retryBaseDelayMs: z.number().int().min(0).max(2147483647).optional(),
+    providerRetryTimeoutMs: z.number().int().min(0).max(2147483647).optional(), providerRetryMaxRetries: z.number().int().min(0).max(100).optional(), providerRetryMaxRetryDelayMs: z.number().int().min(0).max(2147483647).optional(),
     compactionReserveTokens: z.number().int().positive().max(100000000).optional(), compactionKeepRecentTokens: z.number().int().min(0).max(100000000).optional(),
-    httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),
+    branchSummaryReserveTokens: z.number().int().positive().max(100000000).optional(), branchSummarySkipPrompt: z.boolean().optional(),
+    httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), websocketConnectTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),
+    thinkingBudgets: z.object({ minimal: z.number().int().positive().max(100000000).optional(), low: z.number().int().positive().max(100000000).optional(), medium: z.number().int().positive().max(100000000).optional(), high: z.number().int().positive().max(100000000).optional() }).strict().nullable().optional(),
+    hideThinkingBlock: z.boolean().optional(), showCacheMissNotices: z.boolean().optional(), imageAutoResize: z.boolean().optional(), blockImages: z.boolean().optional(),
+    defaultProjectTrust: z.enum(["ask", "always", "never"]).optional(), shellPath: z.string().max(4096).optional(), shellCommandPrefix: z.string().max(4096).optional(), npmCommand: z.array(z.string().min(1).max(4096)).max(100).nullable().optional(), sessionDir: z.string().max(4096).optional(),
+    enableSkillCommands: z.boolean().optional(), enableInstallTelemetry: z.boolean().optional(), enableAnalytics: z.boolean().optional(), warningsAnthropicExtraUsage: z.boolean().optional(),
   }),
   "extension.editor.sync": payload({ taskId: z.string(), text: z.string().max(1000000), cwd: z.string().optional() }),
   "extension.shortcut.invoke": payload({ taskId: z.string(), key: z.string().min(1).max(100), text: z.string().max(1000000), cwd: z.string().optional() }),

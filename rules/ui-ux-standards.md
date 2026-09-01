@@ -47,7 +47,24 @@ Control heights follow the same contract:
 
 Use `--shadow-subtle` for hovered controls and lightweight grouped actions, `--shadow-control` for the composer and floating launchers, `--shadow-popover` for menus, and `--shadow` for dialogs or major panels. Selected controls may use the lower-contrast `--selection-control-shadow` when a little separation is needed. Overlay backdrops use `--overlay-scrim` (or `--overlay-scrim-subtle` for a drawer backdrop) and must have a dark-mode override.
 
-### 1.3 Component consistency rules
+### 1.3 Typography scale
+
+Use the semantic type tokens declared in `styles.css` instead of introducing one-off font sizes:
+
+| Role | Token | Value |
+| --- | --- | --- |
+| Compact metadata / dense code labels | `--font-size-compact` | 10px |
+| Captions and secondary help | `--font-size-caption` | 11px |
+| Labels and standard controls | `--font-size-label` | 12px |
+| Body copy and primary row text | `--font-size-body` | 13px |
+| Reading text and live thinking | `--font-size-reading` | 15px |
+| Small headings | `--font-size-heading-sm` | 16px |
+| Section headings | `--font-size-heading-md` | 19px |
+| Page/dialog titles | `--font-size-title` / `--font-size-display` | 22px / 24px |
+
+Code, terminal, and diff surfaces may use the compact monospace scale when legibility and column alignment require it. New UI copy should otherwise use one of these tokens and the matching `--line-height-*` token.
+
+### 1.4 Component consistency rules
 
 - `.button` is the baseline action style. Variants may change intent colors, but must retain the shared control height, radius, focus ring, and active-state feedback.
 - Menus, suggestion popovers, context menus, and dialogs must use the shared radius/elevation tokens. Menu items need a visible hover and keyboard focus state; do not rely on hover to expose an important action.

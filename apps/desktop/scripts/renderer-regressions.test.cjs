@@ -947,9 +947,12 @@ test("model menu hides its scrollbar without disabling overflow scrolling", () =
 
   assert.match(styles, /\.inline-menu, \.suggestion-popover \{[^}]*overflow:\s*auto/);
   assert.match(styles, /\.inline-menu \{[^}]*max-height:\s*min\(360px, 52vh\)/);
-  assert.match(styles, /\.model-menu-list \{[^}]*overflow:\s*auto;[^}]*scrollbar-width:\s*none/);
+  assert.match(styles, /\.model-menu-list \{[^}]*max-height:\s*max\(80px, min\(300px, calc\(52vh - 54px\)\)\)[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior:\s*contain;[^}]*scrollbar-width:\s*none/);
   assert.match(styles, /\.model-menu-list::-webkit-scrollbar \{[^}]*display:\s*none/);
   assert.doesNotMatch(styles, /\.model-menu-list\s*\{[^}]*overflow(?:-[xy])?:\s*(?:hidden|clip)/);
+  assert.match(rendererSource("ui/composer.tsx"), /className="inline-menu model-menu"[^>]*data-conversation-scroll-island="true"/);
+  assert.match(rendererSource("ui/composer.tsx"), /onWheelCapture=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(rendererSource("ui/message-timeline.tsx"), /\[data-conversation-scroll-island\], \.inline-menu, \.suggestion-popover, \.select-control-menu/);
 });
 
 test("renderer controls share theme tokens across surfaces and modes", () => {
@@ -969,7 +972,7 @@ test("renderer controls share theme tokens across surfaces and modes", () => {
   assert.doesNotMatch(styles, /--selection-control-shadow:\s*inset/);
   assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark\s*\{[\s\S]*?--overlay-scrim:/);
   assert.match(styles, /\.app-shell\.dark, \.overlay-root\.dark\s*\{[\s\S]*?--selection-bg:/);
-  assert.match(styles, /\.pi-settings-fields select[^}]*border:\s*1px solid var\(--line\)[^}]*border-radius:\s*var\(--radius-control\)/);
+  assert.match(styles, /\.select-control \{[^}]*border:\s*1px solid var\(--line\)[^}]*border-radius:\s*var\(--radius-control\)/);
   assert.match(styles, /\.extension-widget[^}]*border:\s*1px solid var\(--line\)[^}]*border-radius:\s*var\(--radius-control\)/);
   assert.match(styles, /\.task-context-menu, \.image-context-menu[^}]*box-shadow:\s*var\(--shadow-popover\)/);
   assert.match(styles, /\.change-review-hunk-actions button:hover:not\(:disabled\)[^}]*box-shadow:\s*var\(--shadow-subtle\)/);
@@ -1086,7 +1089,7 @@ test("nested process scrolling does not change transcript follow state", () => {
   const liveActivity = rendererSource("ui/live-activity.tsx");
   const executionSummary = rendererSource("ui/execution-summary.tsx");
 
-  assert.match(timeline, /target\.closest\("\[data-conversation-scroll-island\]"\)/);
+  assert.match(timeline, /target\.closest\("\[data-conversation-scroll-island\], \.inline-menu, \.suggestion-popover, \.select-control-menu"\)/);
   assert.match(timeline, /if \(isNestedScrollIsland\(event\.target\)\) return;/);
   assert.match(timeline, /if \(!element \|\| event\.target !== element\) return;/);
   assert.match(liveActivity, /data-conversation-scroll-island="true"/);

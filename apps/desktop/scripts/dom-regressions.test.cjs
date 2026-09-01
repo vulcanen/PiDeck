@@ -189,6 +189,57 @@ test("Pi Settings can save non-model defaults before a model is configured", asy
   dom.close();
 });
 
+test("Pi Settings exposes non-display Pi runtime settings and round-trips them", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { PiSettings } = require("../dist/renderer/ui/pi-settings.js");
+  const saved = [];
+  const initialSettings = {
+    defaultThinkingLevel: "medium", transport: "auto", compactionEnabled: true,
+    steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", effectiveExternalEditor: "notepad", externalEditorSource: "default",
+    retryEnabled: true, retryMaxRetries: 3, retryBaseDelayMs: 2000, compactionReserveTokens: 16384,
+    compactionKeepRecentTokens: 20000, httpIdleTimeoutMs: 300000, branchSummaryReserveTokens: 16384,
+    providerRetryMaxRetries: 0, providerRetryMaxRetryDelayMs: 60000, websocketConnectTimeoutMs: 15000,
+    defaultProjectTrust: "ask", enableSkillCommands: true, imageAutoResize: true, blockImages: false,
+    enableInstallTelemetry: true, enableAnalytics: false, warningsAnthropicExtraUsage: true,
+  };
+  global.window.pideck = { settings: {
+    get: async () => initialSettings,
+    update: async (value) => { saved.push(value); return { ...initialSettings, ...value }; },
+    chooseExternalEditor: async () => null,
+  } };
+  const root = createRoot(dom.document.body);
+  await act(async () => { root.render(React.createElement(PiSettings, { language: "en", cwd: "", models: [], onClose: () => undefined, onNotice: () => undefined })); });
+  await act(flushReact);
+  assert.equal(dom.document.querySelectorAll("select").length, 0);
+  assert.equal(dom.document.querySelector('[data-testid="pi-defaultModel"] span').textContent, "Choose model");
+  assert.ok(dom.document.querySelector('[data-testid="pi-defaultThinking"]')?.closest("label")?.querySelector("small"));
+  assert.ok(dom.document.querySelector('[data-testid="pi-advanced-settings"] .pi-settings-hint'));
+  const transport = dom.document.querySelector('[data-testid="pi-transport"]');
+  assert.ok(transport);
+  await act(async () => {
+    transport.click();
+    await flushReact();
+    const menu = dom.document.getElementById(transport.getAttribute("aria-controls"));
+    assert.ok(menu);
+    menu.querySelector('[role="option"][data-value="websocket-cached"]').click();
+    for (const id of ["pi-hideThinkingBlock", "pi-showCacheMissNotices", "pi-blockImages", "pi-enableSkillCommands"]) dom.document.querySelector(`[data-testid="${id}"]`).click();
+    assert.ok(dom.document.querySelector('[data-testid="pi-providerRetryTimeoutMs"]'));
+    assert.ok(dom.document.querySelector('[data-testid="pi-npmCommand"]'));
+    await flushReact();
+  });
+  await act(async () => { dom.document.querySelector('[data-testid="pi-settings-save"]').click(); await flushReact(); });
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].transport, "websocket-cached");
+  assert.equal(saved[0].hideThinkingBlock, true);
+  assert.equal(saved[0].showCacheMissNotices, true);
+  assert.equal(saved[0].blockImages, true);
+  assert.equal(saved[0].enableSkillCommands, false);
+  await act(async () => { root.unmount(); });
+  dom.close();
+});
+
 test("Pi Settings derives default thinking options from the selected Pi model", async () => {
   const dom = installDom();
   const { createRoot } = require("react-dom/client");
@@ -209,10 +260,35 @@ test("Pi Settings derives default thinking options from the selected Pi model", 
     onNotice: () => undefined,
   })); });
   await act(flushReact);
-  const thinking = [...dom.document.querySelectorAll(".pi-settings-fields select")][1];
+  const thinking = dom.document.querySelector('[data-testid="pi-defaultThinking"]');
   assert.ok(thinking);
-  assert.deepEqual([...thinking.options].map((option) => option.value), ["off", "high", "max"]);
+  await act(async () => { thinking.click(); await flushReact(); });
+  const thinkingMenu = dom.document.getElementById(thinking.getAttribute("aria-controls"));
+  assert.ok(thinkingMenu);
+  assert.deepEqual([...thinkingMenu.querySelectorAll('[role="option"]')].map((option) => option.dataset.value), ["off", "high", "max"]);
   await act(async () => { root.unmount(); });
+  dom.close();
+});
+
+test("Pi Settings keeps a portaled select inside the dialog focus boundary", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { PiSettings } = require("../dist/renderer/ui/pi-settings.js");
+  const settings = { defaultProvider: "openai", defaultModel: "gpt-test", defaultThinkingLevel: "medium", transport: "auto", compactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", effectiveExternalEditor: "notepad", externalEditorSource: "default" };
+  global.window.pideck = { settings: { get: async () => settings, update: async (value) => ({ ...settings, ...value }), chooseExternalEditor: async () => null } };
+  const root = createRoot(dom.document.body);
+  await act(async () => root.render(React.createElement("div", { className: "overlay-root" }, React.createElement(PiSettings, {
+    language: "en", cwd: "", models: [{ id: "gpt-test", providerId: "openai", providerName: "OpenAI", name: "GPT Test", reasoning: true, thinkingLevels: ["off", "medium", "high"], authConfigured: true }], onClose: () => undefined, onNotice: () => undefined,
+  }))));
+  await act(flushReact);
+  const thinking = dom.document.querySelector('[data-testid="pi-defaultThinking"]');
+  await act(async () => { thinking.click(); await flushReact(); });
+  const menu = dom.document.getElementById(thinking.getAttribute("aria-controls"));
+  assert.ok(menu);
+  assert.equal(menu.closest('[role="dialog"]')?.classList.contains("pi-settings"), true);
+  assert.equal(dom.document.activeElement?.getAttribute("role"), "option");
+  await act(async () => root.unmount());
   dom.close();
 });
 
@@ -250,13 +326,16 @@ test("Pi Settings edits per-model Thinking overrides and sends null to inherit",
   await act(flushReact);
   const modelThinking = dom.document.querySelector('[data-testid="pi-model-thinking-openai-gpt-test"]');
   assert.ok(modelThinking);
-  assert.equal(modelThinking.value, "high");
-  assert.deepEqual([...modelThinking.options].map((option) => option.value), ["", "off", "medium", "high", "max"]);
+  assert.equal(modelThinking.querySelector("span")?.textContent, "high");
   await act(async () => {
-    modelThinking.value = "";
-    modelThinking.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    modelThinking.click();
+    await flushReact();
+    const menu = dom.document.getElementById(modelThinking.getAttribute("aria-controls"));
+    assert.ok(menu);
+    menu.querySelector('[role="option"][data-value=""]').click();
+    await flushReact();
   });
-  assert.equal(modelThinking.value, "");
+  assert.equal(modelThinking.querySelector("span")?.textContent, "Use global default (medium)");
   const save = dom.document.querySelector('[data-testid="pi-settings-save"]');
   await act(async () => { save.click(); await flushReact(); });
   assert.equal(saved.length, 1);
@@ -408,6 +487,42 @@ test("model selector delegates filtering and keyboard selection to cmdk", async 
   assert.equal(dom.document.querySelectorAll(".model-menu-list [cmdk-item]:not([hidden])").length, 1);
   await act(async () => input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
   assert.deepEqual(selected, ["beta"]);
+  await act(async () => root.unmount());
+  dom.close();
+});
+
+test("model selector wheel stays inside the model list", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { MemoComposer } = require("../dist/renderer/ui/composer.js");
+  const noop = () => undefined;
+  const models = [
+    { id: "alpha", providerId: "one", providerName: "First Provider", name: "Alpha", thinkingLevels: ["off"] },
+    { id: "beta", providerId: "two", providerName: "Second Provider", name: "Beta", thinkingLevels: ["off"] },
+  ];
+  const host = dom.document.createElement("div");
+  let bubbledWheels = 0;
+  host.addEventListener("wheel", () => { bubbledWheels += 1; });
+  dom.document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(React.createElement(MemoComposer, {
+    sessionKey: "wheel-models", value: "", onChange: noop, onKeyDown: noop, onPaste: noop, onDropImages: noop,
+    onExternalEdit: noop, externalEditing: false, onSend: noop, onStop: noop, isSending: false,
+    language: "en", activeModel: models[0], modelOptions: models, thinkingLevel: "off", thinkingLevels: ["off"],
+    thinkingMenuOpen: false, modelMenuOpen: true, suggestionMode: null, suggestions: [], suggestionIndex: 0,
+    commandNames: [], attachments: [], onRemoveAttachment: noop, onPreviewImage: noop, onContextMenuImage: noop,
+    onThinkingMenu: noop, onModelMenu: noop, onThinking: noop, onModel: noop, onSuggestion: noop,
+    queueDelivery: "steer", queueState: null, queueMutationBusy: false, queueEdit: null, onQueueDelivery: noop,
+    onQueueModes: async () => true, onClearQueue: noop, onPromoteQueue: noop, onEditQueue: noop, onDeleteQueue: noop,
+    onCancelQueueEdit: noop,
+  })));
+  const list = dom.document.querySelector(".model-menu-list");
+  assert.ok(list);
+  const wheel = new dom.window.Event("wheel", { bubbles: true, cancelable: true });
+  list.dispatchEvent(wheel);
+  assert.equal(bubbledWheels, 0);
+  assert.equal(wheel.defaultPrevented, false);
   await act(async () => root.unmount());
   dom.close();
 });

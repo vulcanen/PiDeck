@@ -3,6 +3,7 @@ import type { ModelSummary, PiSettingsSummary, PiSettingsUpdate } from "@pideck/
 import { copy, type Language } from "@pideck/i18n";
 import { Icon, useDialogFocus } from "@pideck/ui-system";
 import { PiAdvancedSettings } from "./pi-advanced-settings";
+import { SelectControl } from "./select-control";
 
 export function PiSettings({ language, cwd, models, onClose, onNotice }: {
   language: Language;
@@ -128,8 +129,8 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
       {!settings && !error && <div className="provider-list-empty">{t.loading}</div>}
       {error && <div className="auth-error" role="alert"><span>{error}</span><button type="button" className="button ghost" onClick={() => void loadSettings()}>{t.retry}</button></div>}
       {settings && <div className="pi-settings-fields">
-        <label><span>{t.piDefaultModel}</span><select value={modelValue} onChange={(event) => { const [defaultProvider, ...parts] = event.target.value.split("/"); setSettings((current) => current ? { ...current, defaultProvider, defaultModel: parts.join("/") } : current); }}><option value="" disabled>{t.chooseModel}</option>{models.map((model) => <option key={`${model.providerId}/${model.id}`} value={`${model.providerId}/${model.id}`}>{model.providerName} · {model.name}</option>)}</select></label>
-        <label><span>{t.piDefaultThinking}</span><select value={settings.defaultThinkingLevel} onChange={(event) => setSettings({ ...settings, defaultThinkingLevel: event.target.value })}>{defaultThinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}</select></label>
+        <label><span>{t.piDefaultModel}</span><SelectControl testId="pi-defaultModel" aria-label={t.piDefaultModel} value={modelValue} disabled={models.length === 0} options={[{ value: "", label: t.chooseModel, disabled: true }, ...models.map((model) => ({ value: `${model.providerId}/${model.id}`, label: `${model.providerName} · ${model.name}` }))]} onChange={(value) => { const [defaultProvider, ...parts] = value.split("/"); setSettings((current) => current ? { ...current, defaultProvider, defaultModel: parts.join("/") } : current); }} /></label>
+        <label><span>{t.piDefaultThinking}</span><SelectControl testId="pi-defaultThinking" aria-label={t.piDefaultThinking} value={settings.defaultThinkingLevel} options={defaultThinkingLevels.map((level) => ({ value: level, label: level }))} onChange={(value) => setSettings({ ...settings, defaultThinkingLevel: value })} /><small>{t.piDefaultThinkingHint}</small></label>
         <fieldset className="pi-settings-model-thinking">
           <legend>{t.piModelThinkingDefaults}</legend>
           <p className="pi-settings-hint">{t.piModelThinkingHint}</p>
@@ -143,17 +144,14 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
                 : model.thinkingLevels;
               return <label className="pi-settings-model-thinking-row" key={key}>
                 <span><strong>{model.name}</strong><small>{model.providerName}</small></span>
-                <select data-testid={`pi-model-thinking-${model.providerId}-${model.id}`} value={configuredLevel ?? ""} onChange={(event) => updateModelThinkingLevel(model, event.target.value)}>
-                  <option value="">{t.piModelThinkingInherit(settings.defaultThinkingLevel)}</option>
-                  {levels.map((level) => <option key={level} value={level}>{level}</option>)}
-                </select>
+                <SelectControl testId={`pi-model-thinking-${model.providerId}-${model.id}`} aria-label={t.piModelThinking(model.name)} value={configuredLevel ?? ""} options={[{ value: "", label: t.piModelThinkingInherit(settings.defaultThinkingLevel) }, ...levels.map((level) => ({ value: level, label: level }))]} onChange={(value) => updateModelThinkingLevel(model, value)} />
               </label>;
             })}
           </div>}
         </fieldset>
-        <label><span>{t.piTransport}</span><select value={settings.transport} onChange={(event) => setSettings({ ...settings, transport: event.target.value as PiSettingsSummary["transport"] })}><option value="auto">auto</option><option value="sse">SSE</option><option value="websocket">WebSocket</option></select></label>
-        <label><span>{t.piSteeringMode}</span><select value={settings.steeringMode} onChange={(event) => setSettings({ ...settings, steeringMode: event.target.value as PiSettingsSummary["steeringMode"] })}><option value="one-at-a-time">one-at-a-time</option><option value="all">all</option></select></label>
-        <label><span>{t.piFollowUpMode}</span><select value={settings.followUpMode} onChange={(event) => setSettings({ ...settings, followUpMode: event.target.value as PiSettingsSummary["followUpMode"] })}><option value="one-at-a-time">one-at-a-time</option><option value="all">all</option></select></label>
+        <label><span>{t.piTransport}</span><SelectControl testId="pi-transport" aria-label={t.piTransport} value={settings.transport} options={[{ value: "auto", label: t.piTransportAuto }, { value: "sse", label: t.piTransportSse }, { value: "websocket", label: t.piTransportWebsocket }, { value: "websocket-cached", label: t.piTransportWebsocketCached }]} onChange={(value) => setSettings({ ...settings, transport: value as PiSettingsSummary["transport"] })} /><small>{t.piTransportHint}</small></label>
+        <label><span>{t.piSteeringMode}</span><SelectControl testId="pi-steeringMode" aria-label={t.piSteeringMode} value={settings.steeringMode} options={[{ value: "one-at-a-time", label: t.piQueueModeOneAtATime }, { value: "all", label: t.piQueueModeAll }]} onChange={(value) => setSettings({ ...settings, steeringMode: value as PiSettingsSummary["steeringMode"] })} /><small>{t.piSteeringModeHint}</small></label>
+        <label><span>{t.piFollowUpMode}</span><SelectControl testId="pi-followUpMode" aria-label={t.piFollowUpMode} value={settings.followUpMode} options={[{ value: "one-at-a-time", label: t.piQueueModeOneAtATime }, { value: "all", label: t.piQueueModeAll }]} onChange={(value) => setSettings({ ...settings, followUpMode: value as PiSettingsSummary["followUpMode"] })} /><small>{t.piFollowUpModeHint}</small></label>
         <fieldset className="pi-settings-editor">
           <legend>{t.piExternalEditor}</legend>
           <div className="pi-settings-editor-modes">

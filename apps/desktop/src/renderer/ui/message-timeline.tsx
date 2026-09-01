@@ -30,7 +30,7 @@ function isAssistantTimelineItem(item: { type: string; message?: any } | undefin
 }
 
 function isNestedScrollIsland(target: EventTarget | null): boolean {
-  return target instanceof Element && Boolean(target.closest("[data-conversation-scroll-island]"));
+  return target instanceof Element && Boolean(target.closest("[data-conversation-scroll-island], .inline-menu, .suggestion-popover, .select-control-menu"));
 }
 
 interface MessageTimelineProps {

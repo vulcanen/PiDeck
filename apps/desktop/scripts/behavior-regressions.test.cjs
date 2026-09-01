@@ -73,7 +73,7 @@ test("Pi theme adaptation keeps objects in Host and sends only validated color t
 });
 
 test("advanced Pi settings preserve nested unknowns and proxy credentials", async () => {
-  let stored = JSON.stringify({ compaction: { enabled: false, keepRecentTokens: 50 }, retry: { provider: { maxRetries: 7 } }, httpProxy: "http://user:password@localhost:8888", anotherSetting: true });
+  let stored = JSON.stringify({ compaction: { enabled: false, keepRecentTokens: 50 }, retry: { provider: { maxRetries: 7, unknown: true } }, httpProxy: "http://user:password@localhost:8888", anotherSetting: true });
   let current = JSON.parse(stored);
   const manager = {
     getDefaultProvider: () => undefined, getDefaultModel: () => undefined, getDefaultThinkingLevel: () => "off", setDefaultThinkingLevel: level => { current.defaultThinkingLevel = level; }, getTransport: () => "auto",
@@ -92,6 +92,44 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
   assert.equal(result.httpProxyHasCredentials, true);
   assert.equal(result.httpProxy.includes("password"), false);
   assert.deepEqual(current.defaultTools, []);
+  await updatePiSettings(manager, {}, {
+    providerRetryTimeoutMs: 120000,
+    providerRetryMaxRetries: 2,
+    providerRetryMaxRetryDelayMs: 45000,
+    branchSummaryReserveTokens: 4096,
+    branchSummarySkipPrompt: true,
+    websocketConnectTimeoutMs: 9000,
+    thinkingBudgets: { low: 4096, high: 32768 },
+    hideThinkingBlock: true,
+    showCacheMissNotices: true,
+    imageAutoResize: false,
+    blockImages: true,
+    defaultProjectTrust: "always",
+    shellPath: "C:/Program Files/Git/bin/bash.exe",
+    shellCommandPrefix: "shopt -s expand_aliases",
+    npmCommand: ["mise", "exec", "node@20", "--", "npm"],
+    sessionDir: ".pi/sessions",
+    enableSkillCommands: false,
+    enableInstallTelemetry: false,
+    enableAnalytics: true,
+    warningsAnthropicExtraUsage: false,
+  }, storage);
+  assert.deepEqual(current.retry.provider, { maxRetries: 2, unknown: true, timeoutMs: 120000, maxRetryDelayMs: 45000 });
+  assert.deepEqual(current.branchSummary, { reserveTokens: 4096, skipPrompt: true });
+  assert.equal(current.websocketConnectTimeoutMs, 9000);
+  assert.deepEqual(current.thinkingBudgets, { low: 4096, high: 32768 });
+  assert.equal(current.hideThinkingBlock, true);
+  assert.equal(current.showCacheMissNotices, true);
+  assert.deepEqual(current.images, { autoResize: false, blockImages: true });
+  assert.equal(current.defaultProjectTrust, "always");
+  assert.equal(current.shellPath, "C:/Program Files/Git/bin/bash.exe");
+  assert.equal(current.shellCommandPrefix, "shopt -s expand_aliases");
+  assert.deepEqual(current.npmCommand, ["mise", "exec", "node@20", "--", "npm"]);
+  assert.equal(current.sessionDir, ".pi/sessions");
+  assert.equal(current.enableSkillCommands, false);
+  assert.equal(current.enableInstallTelemetry, false);
+  assert.equal(current.enableAnalytics, true);
+  assert.deepEqual(current.warnings, { anthropicExtraUsage: false });
   await updatePiSettings(manager, {}, { defaultTools: null, httpProxy: "" }, storage);
   assert.equal(current.defaultTools, undefined);
   assert.equal(current.httpProxy, undefined);
@@ -107,6 +145,7 @@ test("PiHost DTO validation rejects coercible booleans and unknown fields", () =
   assert.throws(() => validatePiHostPayload("packages.configure", { source: "demo", enabled: true, unexpected: true }), /unknown field/);
   assert.throws(() => validatePiHostPayload("agent.cycleModel", { taskId: "task", direction: "next" }), /direction/);
   assert.doesNotThrow(() => validatePiHostPayload("settings.update", { compactionEnabled: false, transport: "auto" }));
+  assert.doesNotThrow(() => validatePiHostPayload("settings.update", { transport: "websocket-cached", thinkingBudgets: { low: 4096 } }));
   assert.doesNotThrow(() => validatePiHostPayload("settings.update", { externalEditor: "code --wait" }));
   assert.doesNotThrow(() => validatePiHostPayload("agent.prompt", { taskId: "task", text: "hello", images: undefined, delivery: undefined }));
   assert.doesNotThrow(() => validatePiHostPayload("agent.cycleModel", { taskId: "task", direction: "backward" }));

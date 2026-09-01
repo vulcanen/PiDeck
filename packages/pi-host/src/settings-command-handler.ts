@@ -8,8 +8,26 @@ export interface PiSettingsManager {
   getTransport(): PiSettingsSummary["transport"] | undefined;
   getCompactionSettings(): { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } | undefined;
   getRetrySettings?(): { enabled: boolean; maxRetries: number; baseDelayMs: number };
+  getProviderRetrySettings?(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs?: number };
+  getBranchSummarySettings?(): { reserveTokens?: number; skipPrompt?: boolean };
   getHttpIdleTimeoutMs?(): number;
+  getWebSocketConnectTimeoutMs?(): number;
   getDefaultTools?(): string[] | undefined;
+  getThinkingBudgets?(): { minimal?: number; low?: number; medium?: number; high?: number } | undefined;
+  getHideThinkingBlock?(): boolean;
+  getShowCacheMissNotices?(): boolean;
+  getImageAutoResize?(): boolean;
+  getBlockImages?(): boolean;
+  getDefaultProjectTrust?(): PiSettingsSummary["defaultProjectTrust"];
+  getShellPath?(): string | undefined;
+  getShellCommandPrefix?(): string | undefined;
+  getNpmCommand?(): string[] | undefined;
+  getSessionDir?(): string | undefined;
+  getEnableSkillCommands?(): boolean;
+  getEnableInstallTelemetry?(): boolean;
+  getEnableAnalytics?(): boolean;
+  getTrackingId?(): string | undefined;
+  getWarnings?(): { anthropicExtraUsage?: boolean };
   drainErrors?(): Array<{ error: Error }>;
   getSteeringMode(): PiSettingsSummary["steeringMode"];
   getFollowUpMode(): PiSettingsSummary["followUpMode"];
@@ -18,6 +36,7 @@ export interface PiSettingsManager {
   getProjectSettings?(): { externalEditor?: unknown };
   setDefaultModelAndProvider(provider: string, model: string): void;
   setDefaultThinkingLevel(level: string): void;
+  setEnableAnalytics?(enabled: boolean): void;
   setModelThinkingLevel?(provider: string, model: string, level: string): void;
   removeModelThinkingLevel?(provider: string, model: string): void;
   setTransport(transport: PiSettingsSummary["transport"]): void;
@@ -62,6 +81,10 @@ export function persistExternalEditorSetting(storage: PiSettingsStorage, value: 
 export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSummary {
   const compaction = manager.getCompactionSettings();
   const retry = manager.getRetrySettings?.();
+  const providerRetry = manager.getProviderRetrySettings?.();
+  const branchSummary = manager.getBranchSummarySettings?.();
+  const thinkingBudgets = manager.getThinkingBudgets?.();
+  const warnings = manager.getWarnings?.();
   let httpProxy = manager.getGlobalSettings?.().httpProxy ?? "";
   let httpProxyHasCredentials = false;
   if (httpProxy) {
@@ -78,15 +101,36 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     retryEnabled: retry?.enabled,
     retryMaxRetries: retry?.maxRetries,
     retryBaseDelayMs: retry?.baseDelayMs,
+    providerRetryTimeoutMs: providerRetry?.timeoutMs,
+    providerRetryMaxRetries: providerRetry?.maxRetries,
+    providerRetryMaxRetryDelayMs: providerRetry?.maxRetryDelayMs,
     compactionReserveTokens: compaction?.reserveTokens,
     compactionKeepRecentTokens: compaction?.keepRecentTokens,
+    branchSummaryReserveTokens: branchSummary?.reserveTokens,
+    branchSummarySkipPrompt: branchSummary?.skipPrompt,
     httpProxy, httpProxyHasCredentials,
     httpIdleTimeoutMs: manager.getHttpIdleTimeoutMs?.(),
+    websocketConnectTimeoutMs: manager.getWebSocketConnectTimeoutMs?.(),
     defaultTools: manager.getDefaultTools?.() ?? null,
     defaultProvider: manager.getDefaultProvider(),
     defaultModel: manager.getDefaultModel(),
     defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
     modelThinkingLevels: { ...(manager.getAllModelThinkingLevels?.() ?? {}) },
+    thinkingBudgets: thinkingBudgets ? { ...thinkingBudgets } : null,
+    hideThinkingBlock: manager.getHideThinkingBlock?.() ?? false,
+    showCacheMissNotices: manager.getShowCacheMissNotices?.() ?? false,
+    imageAutoResize: manager.getImageAutoResize?.() ?? true,
+    blockImages: manager.getBlockImages?.() ?? false,
+    defaultProjectTrust: manager.getDefaultProjectTrust?.() ?? "ask",
+    shellPath: manager.getShellPath?.(),
+    shellCommandPrefix: manager.getShellCommandPrefix?.(),
+    npmCommand: manager.getNpmCommand?.() ?? null,
+    sessionDir: manager.getSessionDir?.(),
+    enableSkillCommands: manager.getEnableSkillCommands?.() ?? true,
+    enableInstallTelemetry: manager.getEnableInstallTelemetry?.() ?? true,
+    enableAnalytics: manager.getEnableAnalytics?.() ?? false,
+    trackingId: manager.getTrackingId?.(),
+    warningsAnthropicExtraUsage: warnings?.anthropicExtraUsage ?? true,
     transport: manager.getTransport() ?? "auto",
     compactionEnabled: compaction?.enabled !== false,
     steeringMode: manager.getSteeringMode(),
@@ -138,9 +182,12 @@ export async function updatePiSettings(
     if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(level)) throw new Error(`Unsupported default thinking level: ${level}`);
     manager.setDefaultThinkingLevel(level);
   }
+  if (payload.enableAnalytics !== undefined && manager.setEnableAnalytics) {
+    manager.setEnableAnalytics(payload.enableAnalytics);
+  }
   if (payload.transport !== undefined) {
     const transport = payload.transport;
-    if (!new Set(["auto", "sse", "websocket"]).has(transport)) throw new Error(`Unsupported transport: ${transport}`);
+    if (!new Set(["auto", "sse", "websocket", "websocket-cached"]).has(transport)) throw new Error(`Unsupported transport: ${transport}`);
     manager.setTransport(transport);
   }
   if (payload.compactionEnabled !== undefined) manager.setCompactionEnabled(payload.compactionEnabled);
@@ -167,7 +214,7 @@ export async function updatePiSettings(
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Pi user settings must contain a JSON object");
       for (const [key, value] of Object.entries(advanced)) {
         if (value === null) delete parsed[key];
-        else parsed[key] = typeof value === "object" && !Array.isArray(value) ? { ...parsed[key], ...value } : value;
+        else parsed[key] = mergeSettingsValue(parsed[key], value);
       }
       return JSON.stringify(parsed, null, 2);
     });
@@ -176,20 +223,68 @@ export async function updatePiSettings(
   return summarizePiSettings(manager);
 }
 
+function mergeSettingsValue(current: unknown, value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const currentObject = current && typeof current === "object" && !Array.isArray(current)
+    ? current as Record<string, unknown>
+    : {};
+  const merged = { ...currentObject };
+  for (const [key, next] of Object.entries(value as Record<string, unknown>)) {
+    if (next === null) delete merged[key];
+    else merged[key] = mergeSettingsValue(currentObject[key], next);
+  }
+  return merged;
+}
+
 /** Only Pi settings keys, written through Pi's own lock; untouched keys survive. */
 export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   const retry: Record<string, unknown> = {};
+  const providerRetry: Record<string, unknown> = {};
   const compaction: Record<string, unknown> = {};
+  const branchSummary: Record<string, unknown> = {};
+  const images: Record<string, unknown> = {};
+  const warnings: Record<string, unknown> = {};
   if (payload.retryEnabled !== undefined) retry.enabled = payload.retryEnabled;
   if (payload.retryMaxRetries !== undefined) retry.maxRetries = payload.retryMaxRetries;
   if (payload.retryBaseDelayMs !== undefined) retry.baseDelayMs = payload.retryBaseDelayMs;
+  if (payload.providerRetryTimeoutMs !== undefined) providerRetry.timeoutMs = payload.providerRetryTimeoutMs;
+  if (payload.providerRetryMaxRetries !== undefined) providerRetry.maxRetries = payload.providerRetryMaxRetries;
+  if (payload.providerRetryMaxRetryDelayMs !== undefined) providerRetry.maxRetryDelayMs = payload.providerRetryMaxRetryDelayMs;
+  if (Object.keys(providerRetry).length) retry.provider = providerRetry;
   if (payload.compactionReserveTokens !== undefined) compaction.reserveTokens = payload.compactionReserveTokens;
   if (payload.compactionKeepRecentTokens !== undefined) compaction.keepRecentTokens = payload.compactionKeepRecentTokens;
+  if (payload.branchSummaryReserveTokens !== undefined) branchSummary.reserveTokens = payload.branchSummaryReserveTokens;
+  if (payload.branchSummarySkipPrompt !== undefined) branchSummary.skipPrompt = payload.branchSummarySkipPrompt;
   if (Object.keys(retry).length) patch.retry = retry;
   if (Object.keys(compaction).length) patch.compaction = compaction;
+  if (Object.keys(branchSummary).length) patch.branchSummary = branchSummary;
   if (payload.httpIdleTimeoutMs !== undefined) patch.httpIdleTimeoutMs = payload.httpIdleTimeoutMs;
+  if (payload.websocketConnectTimeoutMs !== undefined) patch.websocketConnectTimeoutMs = payload.websocketConnectTimeoutMs;
   if (payload.defaultTools !== undefined) patch.defaultTools = payload.defaultTools === null ? null : [...new Set(payload.defaultTools)];
+  if (payload.thinkingBudgets !== undefined) patch.thinkingBudgets = payload.thinkingBudgets === null ? null : { ...payload.thinkingBudgets };
+  if (payload.hideThinkingBlock !== undefined) patch.hideThinkingBlock = payload.hideThinkingBlock;
+  if (payload.showCacheMissNotices !== undefined) patch.showCacheMissNotices = payload.showCacheMissNotices;
+  if (payload.imageAutoResize !== undefined) images.autoResize = payload.imageAutoResize;
+  if (payload.blockImages !== undefined) images.blockImages = payload.blockImages;
+  if (Object.keys(images).length) patch.images = images;
+  if (payload.defaultProjectTrust !== undefined) patch.defaultProjectTrust = payload.defaultProjectTrust;
+  if (payload.shellPath !== undefined) patch.shellPath = payload.shellPath.trim() || null;
+  if (payload.shellCommandPrefix !== undefined) patch.shellCommandPrefix = payload.shellCommandPrefix.trim() || null;
+  if (payload.npmCommand !== undefined) {
+    if (payload.npmCommand === null) patch.npmCommand = null;
+    else {
+      const command = payload.npmCommand.map((part) => part.trim());
+      if (command.some((part) => !part)) throw new Error("npmCommand entries cannot be empty");
+      patch.npmCommand = command;
+    }
+  }
+  if (payload.sessionDir !== undefined) patch.sessionDir = payload.sessionDir.trim() || null;
+  if (payload.enableSkillCommands !== undefined) patch.enableSkillCommands = payload.enableSkillCommands;
+  if (payload.enableInstallTelemetry !== undefined) patch.enableInstallTelemetry = payload.enableInstallTelemetry;
+  if (payload.enableAnalytics !== undefined) patch.enableAnalytics = payload.enableAnalytics;
+  if (payload.warningsAnthropicExtraUsage !== undefined) warnings.anthropicExtraUsage = payload.warningsAnthropicExtraUsage;
+  if (Object.keys(warnings).length) patch.warnings = warnings;
   if (payload.httpProxy !== undefined) {
     const proxy = payload.httpProxy.trim();
     if (proxy) {

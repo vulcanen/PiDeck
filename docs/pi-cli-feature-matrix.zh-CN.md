@@ -9,7 +9,7 @@
 
 - 手动压缩期间显示停止按钮，先调用 `abortCompaction()` 再调用 `abort()`。取消或失败后，暂存消息返回 Pi 队列，不会自动启动下一轮；长时间压缩不再受普通 IPC 的 60 秒超时限制。
 - `/model provider/model` 使用真实运行时目录（包括扩展稍后注册的 Provider）；不带 Provider 的 ID 必须唯一。`/export 路径` 保留空格，`.jsonl` 输出 JSONL，其余输出 HTML；显式路径进入带覆盖确认的系统保存窗口。原有 `/export jsonl`、`/export html` 仍可用。
-- Pi 设置 → 高级配置提供重试开关/次数/基础延迟、压缩预留/保留 Token、HTTP(S) 代理/空闲超时、默认工具。写入 Pi 自带锁定存储，保留未知及嵌套设置，既有代理凭据不传入 Renderer。项目覆盖仍优先；网络修改需重启，默认工具用于新会话，重试/压缩可通过 `/reload` 加载。
+- Pi 设置 → 高级配置提供 Agent/Provider 重试、压缩与分支摘要 Token、HTTP(S) 代理/空闲超时、WebSocket 连接超时、默认工具、Thinking 与图片处理、项目默认授权、Shell/npm/Session 目录、Skill 命令、警告及遥测开关。传输方式包含 Pi 0.84.4 的 `websocket-cached`。设置写入 Pi 自带锁定存储，保留未知及嵌套设置，既有代理凭据不传入 Renderer。项目覆盖仍优先；网络、Shell 和 Session 目录修改需重启，重试/压缩与资源设置可通过 `/reload` 加载，默认工具用于新会话。
 - `SessionCapabilities.extensionShortcuts` 返回经过 Pi 原生冲突处理的扩展快捷键；`extensions.invokeShortcut` 先同步当前草稿，再以 Pi RPC context 执行处理器。`extensions.syncEditor` 按项目和会话镜像编辑文本，支持 `getEditorText`、`setEditorText`、`pasteToEditor`；模态窗口和输入法组合期间不触发扩展快捷键。
 - 扩展 `getAllThemes`、`getTheme`、`setTheme` 在 PiHost 中保留真实 Pi Theme 对象（含资源加载主题），只传递校验后的颜色和浅深色信息。主题覆盖按会话隔离，同时作用于工作区与浮层，可通过顶栏主题按钮清除。状态、文本 Widget、通知会移除终端 ANSI 控制符。
 
