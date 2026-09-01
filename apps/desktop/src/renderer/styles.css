@@ -973,6 +973,13 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .pi-settings-editor-error .button { min-height: var(--control-height-compact); }
 .pi-settings-editor .pi-settings-effective { color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .pi-settings-editor .pi-settings-field-error { color: var(--red); }
+.pi-settings-model-thinking { display: grid; min-width: 0; gap: 8px; margin: 0; padding: 0; border: 0; color: var(--muted); }
+.pi-settings-model-thinking legend { margin-bottom: 2px; font-size: 13px; }
+.pi-settings-model-thinking-list { display: grid; min-width: 0; gap: 7px; }
+.pi-settings-model-thinking-row { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(150px, .8fr); align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); }
+.pi-settings-model-thinking-row > span { display: grid; min-width: 0; gap: 2px; }
+.pi-settings-model-thinking-row strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.pi-settings-model-thinking-row small { overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .pi-settings-check { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
 .pi-settings-hint { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .extension-ui-surface { display: flex; flex-wrap: wrap; gap: 6px; width: min(760px, 100%); margin: 0 auto; }
@@ -980,7 +987,7 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .extension-widget { flex: 1 1 100%; max-height: 160px; overflow: auto; margin: 0; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--muted); padding: 8px 10px; font: 12px/1.45 var(--font-mono); white-space: pre-wrap; }
 @media (max-width: 560px) {
   .pi-settings-fields > label:not(.pi-settings-check) { grid-template-columns: 1fr; gap: 6px; }
-  .pi-settings-editor-modes, .pi-settings-editor-command-row { grid-template-columns: 1fr; }
+  .pi-settings-editor-modes, .pi-settings-editor-command-row, .pi-settings-model-thinking-row { grid-template-columns: 1fr; }
   .pi-settings-editor-command-row .button { min-height: var(--control-height-touch); }
 }
 .package-install-form { display: grid; gap: 7px; padding: 16px 28px; border-bottom: 1px solid var(--line); }

@@ -4,6 +4,7 @@ export interface PiSettingsManager {
   getDefaultProvider(): string | undefined;
   getDefaultModel(): string | undefined;
   getDefaultThinkingLevel(): string | undefined;
+  getAllModelThinkingLevels?(): Record<string, string>;
   getTransport(): PiSettingsSummary["transport"] | undefined;
   getCompactionSettings(): { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } | undefined;
   getRetrySettings?(): { enabled: boolean; maxRetries: number; baseDelayMs: number };
@@ -17,6 +18,8 @@ export interface PiSettingsManager {
   getProjectSettings?(): { externalEditor?: unknown };
   setDefaultModelAndProvider(provider: string, model: string): void;
   setDefaultThinkingLevel(level: string): void;
+  setModelThinkingLevel?(provider: string, model: string, level: string): void;
+  removeModelThinkingLevel?(provider: string, model: string): void;
   setTransport(transport: PiSettingsSummary["transport"]): void;
   setCompactionEnabled(enabled: boolean): void;
   setSteeringMode(mode: PiSettingsSummary["steeringMode"]): void;
@@ -83,6 +86,7 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     defaultProvider: manager.getDefaultProvider(),
     defaultModel: manager.getDefaultModel(),
     defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
+    modelThinkingLevels: { ...(manager.getAllModelThinkingLevels?.() ?? {}) },
     transport: manager.getTransport() ?? "auto",
     compactionEnabled: compaction?.enabled !== false,
     steeringMode: manager.getSteeringMode(),
@@ -106,14 +110,32 @@ export async function updatePiSettings(
   if (payload.externalEditor !== undefined) normalizedExternalEditor(payload.externalEditor);
   const provider = payload.defaultProvider?.trim();
   const model = payload.defaultModel?.trim();
+  const modelThinkingPatch = payload.modelThinkingLevels;
+  let parsedModelThinkingPatch: Array<{ provider: string; model: string; level: string | null }> | undefined;
+  if (modelThinkingPatch !== undefined && Object.keys(modelThinkingPatch).length > 0) {
+    if (!manager.setModelThinkingLevel || !manager.removeModelThinkingLevel) {
+      throw new Error("This Pi runtime does not expose per-model thinking settings");
+    }
+    parsedModelThinkingPatch = Object.entries(modelThinkingPatch).map(([reference, level]) => {
+      const separator = reference.indexOf("/");
+      const modelProvider = separator > 0 ? reference.slice(0, separator) : "";
+      const modelId = separator > 0 ? reference.slice(separator + 1) : "";
+      if (!modelProvider.trim() || !modelId.trim()) throw new Error(`Invalid model thinking setting: ${reference}`);
+      return { provider: modelProvider, model: modelId, level };
+    });
+  }
   if (provider || model) {
     if (!provider || !model) throw new Error("defaultProvider and defaultModel must be updated together");
     if (!runtime.getModel(provider, model)) throw new Error(`Unknown model: ${provider}/${model}`);
     manager.setDefaultModelAndProvider(provider, model);
   }
+  for (const { provider: modelProvider, model: modelId, level } of parsedModelThinkingPatch ?? []) {
+    if (level === null) manager.removeModelThinkingLevel!(modelProvider, modelId);
+    else manager.setModelThinkingLevel!(modelProvider, modelId, level);
+  }
   if (payload.defaultThinkingLevel !== undefined) {
     const level = payload.defaultThinkingLevel;
-    if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh"]).has(level)) throw new Error(`Unsupported default thinking level: ${level}`);
+    if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(level)) throw new Error(`Unsupported default thinking level: ${level}`);
     manager.setDefaultThinkingLevel(level);
   }
   if (payload.transport !== undefined) {

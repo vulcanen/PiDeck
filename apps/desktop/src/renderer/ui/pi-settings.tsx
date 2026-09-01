@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ModelSummary, PiSettingsSummary, PiSettingsUpdate } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon, useDialogFocus } from "@pideck/ui-system";
@@ -20,11 +20,13 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
   const [editorPickerError, setEditorPickerError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advancedUpdate, setAdvancedUpdate] = useState<PiSettingsUpdate>({});
+  const [modelThinkingLevelChanges, setModelThinkingLevelChanges] = useState<Record<string, string | null>>({});
   useDialogFocus(dialogRef, onClose);
 
   function applySettings(value: PiSettingsSummary) {
     setSettings(value);
     setAdvancedUpdate({});
+    setModelThinkingLevelChanges({});
     setEditorMode(value.externalEditor ? "custom" : "automatic");
   }
 
@@ -63,6 +65,7 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
         steeringMode: settings.steeringMode,
         followUpMode: settings.followUpMode,
         externalEditor: editorMode === "automatic" ? "" : settings.externalEditor,
+        ...(Object.keys(modelThinkingLevelChanges).length ? { modelThinkingLevels: modelThinkingLevelChanges } : {}),
       };
       const next = await window.pideck.settings.update(update, cwd || undefined);
       setSettings(next);
@@ -82,6 +85,42 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
   }
 
   const modelValue = settings?.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : "";
+  const defaultThinkingLevels = useMemo(() => {
+    if (!settings) return [];
+    const selectedModel = models.find((model) => model.providerId === settings.defaultProvider && model.id === settings.defaultModel);
+    const levels = selectedModel?.thinkingLevels.length
+      ? selectedModel.thinkingLevels
+      : [...new Set(models.flatMap((model) => model.thinkingLevels))];
+    return levels.includes(settings.defaultThinkingLevel) ? levels : [settings.defaultThinkingLevel, ...levels];
+  }, [models, settings]);
+  const configuredModelThinkingLevels = settings?.modelThinkingLevels;
+  const modelThinkingLevels = useMemo(() => configuredModelThinkingLevels ?? {}, [configuredModelThinkingLevels]);
+  const modelThinkingRows = useMemo(() => {
+    const known = new Set(models.map((model) => `${model.providerId}/${model.id}`));
+    const configuredOnly = Object.entries(modelThinkingLevels).flatMap(([reference, level]) => {
+      if (known.has(reference)) return [];
+      const separator = reference.indexOf("/");
+      if (separator <= 0 || separator === reference.length - 1) return [];
+      const providerId = reference.slice(0, separator);
+      const id = reference.slice(separator + 1);
+      return [{ id, providerId, providerName: providerId, name: id, reasoning: true, thinkingLevels: [level], authConfigured: false } satisfies ModelSummary];
+    });
+    return [...models, ...configuredOnly];
+  }, [modelThinkingLevels, models]);
+
+  function updateModelThinkingLevel(model: ModelSummary, value: string) {
+    const key = `${model.providerId}/${model.id}`;
+    const level = value || null;
+    setModelThinkingLevelChanges((current) => ({ ...current, [key]: level }));
+    setSettings((current) => {
+      if (!current) return current;
+      const next = { ...(current.modelThinkingLevels ?? {}) };
+      if (level === null) delete next[key];
+      else next[key] = level;
+      return { ...current, modelThinkingLevels: next };
+    });
+  }
+
   const editorCommandMissing = editorMode === "custom" && !settings?.externalEditor?.trim();
   return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} className="settings-sheet pi-settings" role="dialog" aria-modal="true" aria-labelledby="pi-settings-title" data-testid="pi-settings-dialog">
@@ -90,7 +129,28 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
       {error && <div className="auth-error" role="alert"><span>{error}</span><button type="button" className="button ghost" onClick={() => void loadSettings()}>{t.retry}</button></div>}
       {settings && <div className="pi-settings-fields">
         <label><span>{t.piDefaultModel}</span><select value={modelValue} onChange={(event) => { const [defaultProvider, ...parts] = event.target.value.split("/"); setSettings((current) => current ? { ...current, defaultProvider, defaultModel: parts.join("/") } : current); }}><option value="" disabled>{t.chooseModel}</option>{models.map((model) => <option key={`${model.providerId}/${model.id}`} value={`${model.providerId}/${model.id}`}>{model.providerName} · {model.name}</option>)}</select></label>
-        <label><span>{t.piDefaultThinking}</span><select value={settings.defaultThinkingLevel} onChange={(event) => setSettings({ ...settings, defaultThinkingLevel: event.target.value })}>{["off", "minimal", "low", "medium", "high", "xhigh"].map((level) => <option key={level} value={level}>{level}</option>)}</select></label>
+        <label><span>{t.piDefaultThinking}</span><select value={settings.defaultThinkingLevel} onChange={(event) => setSettings({ ...settings, defaultThinkingLevel: event.target.value })}>{defaultThinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}</select></label>
+        <fieldset className="pi-settings-model-thinking">
+          <legend>{t.piModelThinkingDefaults}</legend>
+          <p className="pi-settings-hint">{t.piModelThinkingHint}</p>
+          {modelThinkingRows.length === 0 && <p className="pi-settings-hint">{t.piModelThinkingNoModels}</p>}
+          {modelThinkingRows.length > 0 && <div className="pi-settings-model-thinking-list">
+            {modelThinkingRows.map((model) => {
+              const key = `${model.providerId}/${model.id}`;
+              const configuredLevel = modelThinkingLevels[key];
+              const levels = configuredLevel && !model.thinkingLevels.includes(configuredLevel)
+                ? [configuredLevel, ...model.thinkingLevels]
+                : model.thinkingLevels;
+              return <label className="pi-settings-model-thinking-row" key={key}>
+                <span><strong>{model.name}</strong><small>{model.providerName}</small></span>
+                <select data-testid={`pi-model-thinking-${model.providerId}-${model.id}`} value={configuredLevel ?? ""} onChange={(event) => updateModelThinkingLevel(model, event.target.value)}>
+                  <option value="">{t.piModelThinkingInherit(settings.defaultThinkingLevel)}</option>
+                  {levels.map((level) => <option key={level} value={level}>{level}</option>)}
+                </select>
+              </label>;
+            })}
+          </div>}
+        </fieldset>
         <label><span>{t.piTransport}</span><select value={settings.transport} onChange={(event) => setSettings({ ...settings, transport: event.target.value as PiSettingsSummary["transport"] })}><option value="auto">auto</option><option value="sse">SSE</option><option value="websocket">WebSocket</option></select></label>
         <label><span>{t.piSteeringMode}</span><select value={settings.steeringMode} onChange={(event) => setSettings({ ...settings, steeringMode: event.target.value as PiSettingsSummary["steeringMode"] })}><option value="one-at-a-time">one-at-a-time</option><option value="all">all</option></select></label>
         <label><span>{t.piFollowUpMode}</span><select value={settings.followUpMode} onChange={(event) => setSettings({ ...settings, followUpMode: event.target.value as PiSettingsSummary["followUpMode"] })}><option value="one-at-a-time">one-at-a-time</option><option value="all">all</option></select></label>

@@ -191,6 +191,8 @@ export interface PiSettingsSummary {
   defaultProvider?: string;
   defaultModel?: string;
   defaultThinkingLevel: string;
+  /** Per-model startup thinking overrides owned by Pi SettingsManager. */
+  modelThinkingLevels?: Record<string, string>;
   transport: "auto" | "sse" | "websocket";
   compactionEnabled: boolean;
   steeringMode: QueueMode;
@@ -212,7 +214,10 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
   | "steeringMode"
   | "followUpMode"
   | "externalEditor"
->>;
+>> & {
+  /** Incremental per-model overrides; null removes the Pi setting. */
+  modelThinkingLevels?: Record<string, string | null>;
+};
 
 export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
 
@@ -484,6 +489,11 @@ const scopedModelSelection = z.object({
   modelId: z.string().min(1),
   thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
 }).strict();
+const thinkingLevel = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const modelThinkingLevelsPatch = z.record(
+  z.string().min(1).max(512),
+  thinkingLevel.nullable(),
+).optional();
 const emptyPayload = z.object({}).strict().optional();
 const payload = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 
@@ -519,7 +529,7 @@ const piHostPayloadSchemas = {
   "providers.list": emptyPayload,
   "providers.login": payload({ providerId: z.string(), method: z.enum(["api-key", "oauth"]), secret: z.string().optional(), authOperationId: z.string().optional() }),
   "providers.cancelLogin": payload({ authOperationId: z.string() }),
-  "providers.setApiKey": payload({ providerId: z.string(), secret: z.string() }),
+  "providers.setApiKey": payload({ providerId: z.string(), apiKey: z.string() }),
   "providers.logout": payload({ providerId: z.string() }),
   "providers.auth-response": payload({ requestId: z.string(), value: z.string(), cancelled: z.boolean().optional() }),
   "agent.prompt": payload({ taskId: z.string(), text: z.string().optional(), cwd: z.string().optional(), images: promptImages.optional(), delivery: z.enum(["steer", "followUp"]).optional() }),
@@ -536,7 +546,7 @@ const piHostPayloadSchemas = {
   "agent.editQueue": payload({ taskId: z.string(), messageId: z.string(), text: z.string(), images: promptImages.optional(), cwd: z.string().optional() }),
   "agent.deleteQueue": payload({ taskId: z.string(), messageId: z.string(), cwd: z.string().optional() }),
   "settings.get": payload({ cwd: z.string().optional() }),
-  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional(),
+  "settings.update": payload({ cwd: z.string().optional(), defaultProvider: z.string().optional(), defaultModel: z.string().optional(), defaultThinkingLevel: z.string().optional(), modelThinkingLevels: modelThinkingLevelsPatch, transport: z.enum(["auto", "sse", "websocket"]).optional(), compactionEnabled: z.boolean().optional(), steeringMode: z.enum(["all", "one-at-a-time"]).optional(), followUpMode: z.enum(["all", "one-at-a-time"]).optional(), externalEditor: z.string().max(1000).optional(),
     retryEnabled: z.boolean().optional(), retryMaxRetries: z.number().int().min(0).max(100).optional(), retryBaseDelayMs: z.number().int().min(0).max(2147483647).optional(),
     compactionReserveTokens: z.number().int().positive().max(100000000).optional(), compactionKeepRecentTokens: z.number().int().min(0).max(100000000).optional(),
     httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),

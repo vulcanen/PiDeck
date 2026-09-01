@@ -310,8 +310,24 @@ await new Promise((resolve, reject) => {
       return;
     }
     if (message?.id === "settings-get") {
-      if (!message.ok || !message.result || typeof message.result.compactionEnabled !== "boolean" || typeof message.result.effectiveExternalEditor !== "string") {
+      if (!message.ok || !message.result || typeof message.result.compactionEnabled !== "boolean" || typeof message.result.effectiveExternalEditor !== "string" || !message.result.modelThinkingLevels || typeof message.result.modelThinkingLevels !== "object") {
         finish(new Error(`Unexpected settings.get response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "settings-update-thinking", command: "settings.update", payload: { cwd: root, modelThinkingLevels: { "smoke-provider/smoke-model": "max" } } });
+      return;
+    }
+    if (message?.id === "settings-update-thinking") {
+      if (!message.ok || message.result?.modelThinkingLevels?.["smoke-provider/smoke-model"] !== "max") {
+        finish(new Error(`Unexpected modelThinkingLevels settings update: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "settings-clear-thinking", command: "settings.update", payload: { cwd: root, modelThinkingLevels: { "smoke-provider/smoke-model": null } } });
+      return;
+    }
+    if (message?.id === "settings-clear-thinking") {
+      if (!message.ok || Object.prototype.hasOwnProperty.call(message.result?.modelThinkingLevels ?? {}, "smoke-provider/smoke-model")) {
+        finish(new Error(`Unexpected modelThinkingLevels removal: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "settings-update-editor", command: "settings.update", payload: { cwd: root, externalEditor: "pideck-smoke-editor --wait" } });

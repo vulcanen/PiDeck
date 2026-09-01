@@ -76,7 +76,7 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
   let stored = JSON.stringify({ compaction: { enabled: false, keepRecentTokens: 50 }, retry: { provider: { maxRetries: 7 } }, httpProxy: "http://user:password@localhost:8888", anotherSetting: true });
   let current = JSON.parse(stored);
   const manager = {
-    getDefaultProvider: () => undefined, getDefaultModel: () => undefined, getDefaultThinkingLevel: () => "off", getTransport: () => "auto",
+    getDefaultProvider: () => undefined, getDefaultModel: () => undefined, getDefaultThinkingLevel: () => "off", setDefaultThinkingLevel: level => { current.defaultThinkingLevel = level; }, getTransport: () => "auto",
     getCompactionSettings: () => current.compaction, getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 2000, ...current.retry }),
     getSteeringMode: () => "all", getFollowUpMode: () => "all", getGlobalSettings: () => current, getDefaultTools: () => current.defaultTools,
     flush: async () => {}, reload: async () => { current = JSON.parse(stored); },
@@ -95,6 +95,8 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
   await updatePiSettings(manager, {}, { defaultTools: null, httpProxy: "" }, storage);
   assert.equal(current.defaultTools, undefined);
   assert.equal(current.httpProxy, undefined);
+  await updatePiSettings(manager, {}, { defaultThinkingLevel: "max" }, storage);
+  assert.equal(current.defaultThinkingLevel, "max");
   await assert.rejects(updatePiSettings(manager, {}, { retryMaxRetries: -1 }, storage), /retryMaxRetries/);
   await assert.rejects(updatePiSettings(manager, {}, { httpProxy: "file:///tmp/a" }, storage), /HTTP/);
 });
@@ -109,6 +111,10 @@ test("PiHost DTO validation rejects coercible booleans and unknown fields", () =
   assert.doesNotThrow(() => validatePiHostPayload("agent.prompt", { taskId: "task", text: "hello", images: undefined, delivery: undefined }));
   assert.doesNotThrow(() => validatePiHostPayload("agent.cycleModel", { taskId: "task", direction: "backward" }));
   assert.doesNotThrow(() => validatePiHostPayload("projects.trustStatus", { cwd: "D:/workspace" }));
+  assert.doesNotThrow(() => validatePiHostPayload("providers.setApiKey", { providerId: "openai", apiKey: "secret" }));
+  assert.throws(() => validatePiHostPayload("providers.setApiKey", { providerId: "openai", secret: "secret" }), /apiKey/);
+  assert.doesNotThrow(() => validatePiHostPayload("settings.update", { modelThinkingLevels: { "openai/gpt-test": "max", "anthropic/claude": null } }));
+  assert.throws(() => validatePiHostPayload("settings.update", { modelThinkingLevels: { "openai/gpt-test": "unsupported" } }), /modelThinkingLevels/);
 });
 
 test("project trust gates Pi resources and reports saved, inherited, and default decisions", () => {
@@ -248,6 +254,46 @@ test("Pi settings handler persists partial defaults without requiring a model", 
   const result = await updatePiSettings(manager, { getModel: () => undefined }, { compactionEnabled: false, transport: "websocket" });
   assert.equal(result.compactionEnabled, false);
   assert.deepEqual(calls, [["transport", "websocket"], ["compaction", false], "flush"]);
+});
+
+test("Pi settings handler applies modelThinkingLevels through Pi SettingsManager", async () => {
+  const modelThinkingLevels = { "openai/gpt-test": "high", "anthropic/claude": "low" };
+  let flushed = 0;
+  const manager = {
+    getDefaultProvider: () => "openai",
+    getDefaultModel: () => "gpt-test",
+    getDefaultThinkingLevel: () => "medium",
+    getAllModelThinkingLevels: () => ({ ...modelThinkingLevels }),
+    getTransport: () => "auto",
+    getCompactionSettings: () => ({ enabled: true }),
+    getSteeringMode: () => "one-at-a-time",
+    getFollowUpMode: () => "one-at-a-time",
+    setDefaultModelAndProvider: () => undefined,
+    setDefaultThinkingLevel: () => undefined,
+    setTransport: () => undefined,
+    setCompactionEnabled: () => undefined,
+    setSteeringMode: () => undefined,
+    setFollowUpMode: () => undefined,
+    setModelThinkingLevel: (provider, model, level) => { modelThinkingLevels[`${provider}/${model}`] = level; },
+    removeModelThinkingLevel: (provider, model) => { delete modelThinkingLevels[`${provider}/${model}`]; },
+    flush: async () => { flushed += 1; },
+  };
+
+  const result = await updatePiSettings(manager, { getModel: () => undefined }, {
+    modelThinkingLevels: { "openai/gpt-test": "max", "google/gemini": "xhigh" },
+  });
+  assert.deepEqual(result.modelThinkingLevels, {
+    "openai/gpt-test": "max",
+    "anthropic/claude": "low",
+    "google/gemini": "xhigh",
+  });
+  await updatePiSettings(manager, { getModel: () => undefined }, { modelThinkingLevels: { "anthropic/claude": null } });
+  assert.deepEqual(modelThinkingLevels, { "openai/gpt-test": "max", "google/gemini": "xhigh" });
+  assert.equal(flushed, 2);
+  await assert.rejects(
+    updatePiSettings(manager, { getModel: () => undefined }, { modelThinkingLevels: { "invalid": "low" } }),
+    /Invalid model thinking setting/,
+  );
 });
 
 test("Pi settings persist a user external editor through Pi locked storage and report its effective source", async () => {

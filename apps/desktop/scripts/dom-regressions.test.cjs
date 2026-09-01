@@ -189,6 +189,82 @@ test("Pi Settings can save non-model defaults before a model is configured", asy
   dom.close();
 });
 
+test("Pi Settings derives default thinking options from the selected Pi model", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { PiSettings } = require("../dist/renderer/ui/pi-settings.js");
+  const settings = { defaultProvider: "openai", defaultModel: "gpt-test", defaultThinkingLevel: "high", transport: "auto", compactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", effectiveExternalEditor: "notepad", externalEditorSource: "default" };
+  global.window.pideck = { settings: {
+    get: async () => settings,
+    update: async (value) => ({ ...settings, ...value }),
+    chooseExternalEditor: async () => null,
+  } };
+  const root = createRoot(dom.document.body);
+  await act(async () => { root.render(React.createElement(PiSettings, {
+    language: "en",
+    cwd: "",
+    models: [{ id: "gpt-test", providerId: "openai", providerName: "OpenAI", name: "GPT Test", reasoning: true, thinkingLevels: ["off", "high", "max"], authConfigured: true }],
+    onClose: () => undefined,
+    onNotice: () => undefined,
+  })); });
+  await act(flushReact);
+  const thinking = [...dom.document.querySelectorAll(".pi-settings-fields select")][1];
+  assert.ok(thinking);
+  assert.deepEqual([...thinking.options].map((option) => option.value), ["off", "high", "max"]);
+  await act(async () => { root.unmount(); });
+  dom.close();
+});
+
+test("Pi Settings edits per-model Thinking overrides and sends null to inherit", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { PiSettings } = require("../dist/renderer/ui/pi-settings.js");
+  const saved = [];
+  const settings = {
+    defaultProvider: "openai",
+    defaultModel: "gpt-test",
+    defaultThinkingLevel: "medium",
+    modelThinkingLevels: { "openai/gpt-test": "high" },
+    transport: "auto",
+    compactionEnabled: true,
+    steeringMode: "one-at-a-time",
+    followUpMode: "one-at-a-time",
+    effectiveExternalEditor: "notepad",
+    externalEditorSource: "default",
+  };
+  global.window.pideck = { settings: {
+    get: async () => settings,
+    update: async (value) => { saved.push(value); return { ...settings, ...value }; },
+    chooseExternalEditor: async () => null,
+  } };
+  const root = createRoot(dom.document.body);
+  await act(async () => { root.render(React.createElement(PiSettings, {
+    language: "en",
+    cwd: "",
+    models: [{ id: "gpt-test", providerId: "openai", providerName: "OpenAI", name: "GPT Test", reasoning: true, thinkingLevels: ["off", "medium", "high", "max"], authConfigured: true }],
+    onClose: () => undefined,
+    onNotice: () => undefined,
+  })); });
+  await act(flushReact);
+  const modelThinking = dom.document.querySelector('[data-testid="pi-model-thinking-openai-gpt-test"]');
+  assert.ok(modelThinking);
+  assert.equal(modelThinking.value, "high");
+  assert.deepEqual([...modelThinking.options].map((option) => option.value), ["", "off", "medium", "high", "max"]);
+  await act(async () => {
+    modelThinking.value = "";
+    modelThinking.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  });
+  assert.equal(modelThinking.value, "");
+  const save = dom.document.querySelector('[data-testid="pi-settings-save"]');
+  await act(async () => { save.click(); await flushReact(); });
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].modelThinkingLevels["openai/gpt-test"], null);
+  await act(async () => { root.unmount(); });
+  dom.close();
+});
+
 test("Pi Settings automatic editor mode clears the user override", async () => {
   const dom = installDom();
   const { createRoot } = require("react-dom/client");

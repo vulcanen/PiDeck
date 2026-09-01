@@ -2,7 +2,7 @@ import type { PiSettingsSummary, PiSettingsUpdate } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
 
 export function PiAdvancedSettings({ language, settings, onChange }: {
-  language: Language; settings: PiSettingsSummary; onChange: (patch: PiSettingsUpdate) => void;
+  language: Language; settings: PiSettingsSummary; onChange: (patch: Omit<PiSettingsUpdate, "modelThinkingLevels">) => void;
 }) {
   const t = copy[language];
   const numbers = [
