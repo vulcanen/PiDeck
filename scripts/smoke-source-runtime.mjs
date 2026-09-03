@@ -64,7 +64,10 @@ await new Promise((resolve, reject) => {
     settled = true;
     globalThis.clearTimeout(timer);
     child.kill();
-    rmSync(agentDir, { recursive: true, force: true });
+    // The forked PiHost may finish its last settings write just after the
+    // child is killed. Retry the recursive cleanup so that a transient
+    // ENOTEMPTY on CI does not turn a successful smoke run into a failure.
+    rmSync(agentDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     if (error) reject(new Error(`${error.message}${stderr ? `\n${stderr.trim()}` : ""}`));
     else resolve();
   };
