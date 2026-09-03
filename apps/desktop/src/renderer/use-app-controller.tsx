@@ -946,6 +946,13 @@ export function useAppController() {
     return true;
   }
 
+  function isRegisteredExtensionCommand(text: string): boolean {
+    const match = /^\/(\S+)(?:\s|$)/.exec(text);
+    if (!match) return false;
+    const name = match[1].toLowerCase();
+    return (capabilities?.slashCommands ?? []).some((command) => command.source === "extension" && command.name.toLowerCase() === name);
+  }
+
   async function selectPaletteCommand(command: PaletteCommand) {
     setQuickSettingsOpen(false);
     try {
@@ -1052,7 +1059,8 @@ export function useAppController() {
       finally { patchTaskUi(task.id, { isSending: false, workingPhase: null, toolName: undefined }); }
       return;
     }
-    if (!activeModel?.authConfigured && !modelOptions.some((model) => model.authConfigured)) { showNotice(t.noModelAvailable); return; }
+    const extensionCommandCandidate = isRegisteredExtensionCommand(text);
+    if (!extensionCommandCandidate && !activeModel?.authConfigured && !modelOptions.some((model) => model.authConfigured)) { showNotice(t.noModelAvailable); return; }
     const creating = !activeTask;
     const desiredModel = activeModel;
     const desiredThinking = thinkingLevel;
@@ -1065,12 +1073,14 @@ export function useAppController() {
     const optimisticId = `local-${Date.now()}`;
     const continuingExecution = Boolean(activeTaskUi?.isSending || activeTaskUi?.isCompacting);
     setComposer(""); setComposerImages([]); setSuggestionMode(null);
-    if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { text, images }] }));
-    if (!continuingExecution) setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
+    if (images.length && !extensionCommandCandidate) setSentImagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { text, images }] }));
+    // Pi extension commands are control messages, not conversation turns.
+    // Do not render an optimistic user message that Pi will never persist.
+    if (!continuingExecution && !extensionCommandCandidate) setMessagesByTask((current) => ({ ...current, [task.id]: [...(current[task.id] ?? []), { id: optimisticId, role: "user", content: images.length ? [{ type: "text", text }, ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))] : text, timestamp: new Date().toISOString() }] }));
     setMessageLoads((current) => ({ ...current, [task.id]: { status: "ready" } }));
     patchTaskUi(task.id, { isSending: true, isCompacting: continuingExecution ? Boolean(activeTaskUi?.isCompacting) : false, workingPhase: "thinking", streamText: "", activity: continuingExecution ? activeTaskUi?.activity ?? [] : [], completedActivity: activeTaskUi?.completedActivity ?? [] });
-    const taskTitle = deriveSessionTitle(text);
-    const shouldNameTask = isDefaultSessionTitle(task.title);
+    const taskTitle = extensionCommandCandidate ? "" : deriveSessionTitle(text);
+    const shouldNameTask = !extensionCommandCandidate && isDefaultSessionTitle(task.title);
     const updatedAt = new Date().toISOString();
     updateTaskLists((current) => sortTasksByUpdatedAt(current.map((item) => item.id === task.id ? { ...item, title: shouldNameTask ? taskTitle || item.title : item.title, state: "running", updatedAt } : item)));
     setActiveTask((current) => current?.id === task.id ? { ...current, title: shouldNameTask ? taskTitle || current.title : current.title, state: "running", updatedAt } : current);
@@ -1120,7 +1130,7 @@ export function useAppController() {
       if (message.includes("timed out: agent.prompt")) return;
       patchTaskUi(task.id, { isSending: false, isCompacting: false, workingPhase: null, activity: [] });
       setMessagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((message) => message.id !== optimisticId) }));
-      if (images.length) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
+        if (images.length && !extensionCommandCandidate) setSentImagesByTask((current) => ({ ...current, [task.id]: (current[task.id] ?? []).filter((sent) => sent.images[0]?.id !== images[0]?.id) }));
       updateTaskLists((current) => current.map((item) => item.id === task.id ? { ...item, state: "failed" } : item));
       showNotice(message, "error");
     }
@@ -1453,6 +1463,15 @@ export function useAppController() {
     }
   }
 
+  async function sendExtensionUiInput(data: string) {
+    if (!extensionUiRequest) return;
+    try {
+      await window.pideck.extensions.sendUiInput(extensionUiRequest.requestId, data);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return {
     language, setLanguage, theme, themePreference,
     cycleTheme: () => { if (activeTask) patchTaskUi(activeTask.id, { extensionTheme: undefined }); cycleTheme(); },
@@ -1474,7 +1493,7 @@ export function useAppController() {
     imageContextMenu, setPendingDelete, setPendingProjectRemove, setContextMenu, setProjectContextMenu,
     setPackagesOpen, setSettingsOpen, setPiSettingsOpen, setProviderFocus, setPreviewImage, setImageContextMenu,
     setExtensionUiRequest,
-    deleteTask, removeProject, refreshModels, showNotice, resolveExtensionUi, handlePermissionStatus, patchTaskUi,
+    deleteTask, removeProject, refreshModels, showNotice, resolveExtensionUi, sendExtensionUiInput, handlePermissionStatus, patchTaskUi,
     updateTaskLists, setMessageReload, openImageContextMenu,
     openProviderSettings,
   };

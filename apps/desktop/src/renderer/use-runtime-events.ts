@@ -25,7 +25,7 @@ export interface RuntimeEventsOptions {
   queueModes: Partial<Pick<AgentQueueState, "steeringMode" | "followUpMode">>;
   queueState: AgentQueueState | null;
   setRuntimeStatus: (status: "connected" | "starting" | "disconnected") => void;
-  showNotice: (message: string, kind?: "info" | "error") => void;
+  showNotice: (message: string, kind?: "info" | "warning" | "error") => void;
   patchTaskUi: (taskId: string, patch: Partial<TaskUiState>) => void;
   updateTaskLists: (update: (tasks: TaskSummary[]) => TaskSummary[]) => void;
   discardStreamDeltas: (taskId: string) => void;
@@ -63,6 +63,7 @@ export function useRuntimeEvents({
   const refreshContextUsage = (taskId: string) => {
     void window.pideck.sessions.capabilities(taskId, projectCwd).then((next) => setContextUsage(next.contextUsage)).catch(() => undefined);
   };
+  const noticeKind = (level: unknown): "info" | "warning" | "error" => level === "error" || level === "warning" ? level : "info";
   const handleRuntimeEvent = useEffectEvent((runtimeEvent: PiDeckRuntimeEvent) => {
     if (runtimeEvent.type === "runtime.status") {
       const status = runtimeEvent.payload;
@@ -72,7 +73,7 @@ export function useRuntimeEvents({
     if (runtimeEvent.type === "runtime.error") {
       const payload = runtimeEvent.payload as { message?: string } | undefined;
       setRuntimeStatus("disconnected");
-      showNotice(`${copy[language].runtimeStartFailed}: ${payload?.message ?? copy[language].runtimeDisconnected}`);
+      showNotice(`${copy[language].runtimeStartFailed}: ${payload?.message ?? copy[language].runtimeDisconnected}`, "error");
       return;
     }
     if (runtimeEvent.type === "extension.ui.request" && runtimeEvent.event && typeof runtimeEvent.event === "object") {
@@ -81,12 +82,12 @@ export function useRuntimeEvents({
     }
     if (runtimeEvent.type === "extension.ui.notify") {
       const event = runtimeEvent.event as { message?: string; level?: string } | undefined;
-      if (event?.message) showNotice(event.message, event.level === "error" ? "error" : "info");
+      if (event?.message) showNotice(event.message, noticeKind(event.level));
       return;
     }
     if (runtimeEvent.type === "agent.event" && (runtimeEvent.event as any)?.type === "extension.ui.notify") {
       const event = runtimeEvent.event as { message?: string; level?: string } | undefined;
-      if (event?.message) showNotice(event.message, event.level === "error" ? "error" : "info");
+      if (event?.message) showNotice(event.message, noticeKind(event.level));
       return;
     }
     const taskId = runtimeEvent.taskId;
@@ -128,11 +129,11 @@ export function useRuntimeEvents({
     if (event?.type === "extension.diagnostics" && Array.isArray(event.diagnostics) && event.diagnostics.length > 0) {
       const first = event.diagnostics.find((diagnostic: any) => diagnostic?.type === "error") ?? event.diagnostics[0];
       const detail = typeof first?.message === "string" ? first.message : copy[language].extensionErrorUnknown;
-      showNotice(copy[language].extensionDiagnostics(detail, event.diagnostics.length), event.diagnostics.some((diagnostic: any) => diagnostic?.type === "error") ? "error" : "info");
+      showNotice(copy[language].extensionDiagnostics(detail, event.diagnostics.length), event.diagnostics.some((diagnostic: any) => diagnostic?.type === "error") ? "error" : event.diagnostics.some((diagnostic: any) => diagnostic?.type === "warning") ? "warning" : "info");
       return;
     }
     if (event?.type === "model.fallback" && typeof event.message === "string") {
-      showNotice(event.message);
+      showNotice(event.message, "warning");
       return;
     }
     if (event?.type === "extension.ui.dismiss" && typeof event.requestId === "string") {
@@ -171,8 +172,8 @@ export function useRuntimeEvents({
       });
       return;
     }
-    if (event?.type === "extension.ui.unsupported" && typeof event.capability === "string") { showNotice(copy[language].extensionUiUnsupported(event.capability)); return; }
-    if (event?.type === "prompt_error" && typeof event.message === "string") { showNotice(event.message); return; }
+    if (event?.type === "extension.ui.unsupported" && typeof event.capability === "string") { showNotice(copy[language].extensionUiUnsupported(event.capability), "warning"); return; }
+    if (event?.type === "prompt_error" && typeof event.message === "string") { showNotice(event.message, "error"); return; }
     if (event?.type === "change-review.updated" && event.review && typeof event.review === "object") {
       onChangeReviewUpdated(taskId, event.review as SessionChangeReview);
       return;

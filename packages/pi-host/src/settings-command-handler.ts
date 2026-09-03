@@ -9,13 +9,11 @@ export interface PiSettingsManager {
   getCompactionSettings(): { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } | undefined;
   getRetrySettings?(): { enabled: boolean; maxRetries: number; baseDelayMs: number };
   getProviderRetrySettings?(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs?: number };
-  getBranchSummarySettings?(): { reserveTokens?: number; skipPrompt?: boolean };
+  getBranchSummarySettings?(): { reserveTokens?: number };
   getHttpIdleTimeoutMs?(): number;
   getWebSocketConnectTimeoutMs?(): number;
   getDefaultTools?(): string[] | undefined;
   getThinkingBudgets?(): { minimal?: number; low?: number; medium?: number; high?: number } | undefined;
-  getHideThinkingBlock?(): boolean;
-  getShowCacheMissNotices?(): boolean;
   getImageAutoResize?(): boolean;
   getBlockImages?(): boolean;
   getDefaultProjectTrust?(): PiSettingsSummary["defaultProjectTrust"];
@@ -25,9 +23,6 @@ export interface PiSettingsManager {
   getSessionDir?(): string | undefined;
   getEnableSkillCommands?(): boolean;
   getEnableInstallTelemetry?(): boolean;
-  getEnableAnalytics?(): boolean;
-  getTrackingId?(): string | undefined;
-  getWarnings?(): { anthropicExtraUsage?: boolean };
   drainErrors?(): Array<{ error: Error }>;
   getSteeringMode(): PiSettingsSummary["steeringMode"];
   getFollowUpMode(): PiSettingsSummary["followUpMode"];
@@ -36,7 +31,6 @@ export interface PiSettingsManager {
   getProjectSettings?(): { externalEditor?: unknown };
   setDefaultModelAndProvider(provider: string, model: string): void;
   setDefaultThinkingLevel(level: string): void;
-  setEnableAnalytics?(enabled: boolean): void;
   setModelThinkingLevel?(provider: string, model: string, level: string): void;
   removeModelThinkingLevel?(provider: string, model: string): void;
   setTransport(transport: PiSettingsSummary["transport"]): void;
@@ -84,7 +78,6 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
   const providerRetry = manager.getProviderRetrySettings?.();
   const branchSummary = manager.getBranchSummarySettings?.();
   const thinkingBudgets = manager.getThinkingBudgets?.();
-  const warnings = manager.getWarnings?.();
   let httpProxy = manager.getGlobalSettings?.().httpProxy ?? "";
   let httpProxyHasCredentials = false;
   if (httpProxy) {
@@ -107,7 +100,6 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     compactionReserveTokens: compaction?.reserveTokens,
     compactionKeepRecentTokens: compaction?.keepRecentTokens,
     branchSummaryReserveTokens: branchSummary?.reserveTokens,
-    branchSummarySkipPrompt: branchSummary?.skipPrompt,
     httpProxy, httpProxyHasCredentials,
     httpIdleTimeoutMs: manager.getHttpIdleTimeoutMs?.(),
     websocketConnectTimeoutMs: manager.getWebSocketConnectTimeoutMs?.(),
@@ -117,8 +109,6 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? "off",
     modelThinkingLevels: { ...(manager.getAllModelThinkingLevels?.() ?? {}) },
     thinkingBudgets: thinkingBudgets ? { ...thinkingBudgets } : null,
-    hideThinkingBlock: manager.getHideThinkingBlock?.() ?? false,
-    showCacheMissNotices: manager.getShowCacheMissNotices?.() ?? false,
     imageAutoResize: manager.getImageAutoResize?.() ?? true,
     blockImages: manager.getBlockImages?.() ?? false,
     defaultProjectTrust: manager.getDefaultProjectTrust?.() ?? "ask",
@@ -128,9 +118,6 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     sessionDir: manager.getSessionDir?.(),
     enableSkillCommands: manager.getEnableSkillCommands?.() ?? true,
     enableInstallTelemetry: manager.getEnableInstallTelemetry?.() ?? true,
-    enableAnalytics: manager.getEnableAnalytics?.() ?? false,
-    trackingId: manager.getTrackingId?.(),
-    warningsAnthropicExtraUsage: warnings?.anthropicExtraUsage ?? true,
     transport: manager.getTransport() ?? "auto",
     compactionEnabled: compaction?.enabled !== false,
     steeringMode: manager.getSteeringMode(),
@@ -181,9 +168,6 @@ export async function updatePiSettings(
     const level = payload.defaultThinkingLevel;
     if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(level)) throw new Error(`Unsupported default thinking level: ${level}`);
     manager.setDefaultThinkingLevel(level);
-  }
-  if (payload.enableAnalytics !== undefined && manager.setEnableAnalytics) {
-    manager.setEnableAnalytics(payload.enableAnalytics);
   }
   if (payload.transport !== undefined) {
     const transport = payload.transport;
@@ -244,7 +228,6 @@ export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string,
   const compaction: Record<string, unknown> = {};
   const branchSummary: Record<string, unknown> = {};
   const images: Record<string, unknown> = {};
-  const warnings: Record<string, unknown> = {};
   if (payload.retryEnabled !== undefined) retry.enabled = payload.retryEnabled;
   if (payload.retryMaxRetries !== undefined) retry.maxRetries = payload.retryMaxRetries;
   if (payload.retryBaseDelayMs !== undefined) retry.baseDelayMs = payload.retryBaseDelayMs;
@@ -255,7 +238,6 @@ export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string,
   if (payload.compactionReserveTokens !== undefined) compaction.reserveTokens = payload.compactionReserveTokens;
   if (payload.compactionKeepRecentTokens !== undefined) compaction.keepRecentTokens = payload.compactionKeepRecentTokens;
   if (payload.branchSummaryReserveTokens !== undefined) branchSummary.reserveTokens = payload.branchSummaryReserveTokens;
-  if (payload.branchSummarySkipPrompt !== undefined) branchSummary.skipPrompt = payload.branchSummarySkipPrompt;
   if (Object.keys(retry).length) patch.retry = retry;
   if (Object.keys(compaction).length) patch.compaction = compaction;
   if (Object.keys(branchSummary).length) patch.branchSummary = branchSummary;
@@ -263,8 +245,6 @@ export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string,
   if (payload.websocketConnectTimeoutMs !== undefined) patch.websocketConnectTimeoutMs = payload.websocketConnectTimeoutMs;
   if (payload.defaultTools !== undefined) patch.defaultTools = payload.defaultTools === null ? null : [...new Set(payload.defaultTools)];
   if (payload.thinkingBudgets !== undefined) patch.thinkingBudgets = payload.thinkingBudgets === null ? null : { ...payload.thinkingBudgets };
-  if (payload.hideThinkingBlock !== undefined) patch.hideThinkingBlock = payload.hideThinkingBlock;
-  if (payload.showCacheMissNotices !== undefined) patch.showCacheMissNotices = payload.showCacheMissNotices;
   if (payload.imageAutoResize !== undefined) images.autoResize = payload.imageAutoResize;
   if (payload.blockImages !== undefined) images.blockImages = payload.blockImages;
   if (Object.keys(images).length) patch.images = images;
@@ -282,9 +262,6 @@ export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string,
   if (payload.sessionDir !== undefined) patch.sessionDir = payload.sessionDir.trim() || null;
   if (payload.enableSkillCommands !== undefined) patch.enableSkillCommands = payload.enableSkillCommands;
   if (payload.enableInstallTelemetry !== undefined) patch.enableInstallTelemetry = payload.enableInstallTelemetry;
-  if (payload.enableAnalytics !== undefined) patch.enableAnalytics = payload.enableAnalytics;
-  if (payload.warningsAnthropicExtraUsage !== undefined) warnings.anthropicExtraUsage = payload.warningsAnthropicExtraUsage;
-  if (Object.keys(warnings).length) patch.warnings = warnings;
   if (payload.httpProxy !== undefined) {
     const proxy = payload.httpProxy.trim();
     if (proxy) {

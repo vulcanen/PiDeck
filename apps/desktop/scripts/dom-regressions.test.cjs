@@ -36,6 +36,7 @@ test("composer highlights recalled Skill and every registered slash command as c
   dom.close();
 });
 
+
 test("Windows menu buttons retain edit selection, support keyboard navigation, and recover after errors", async () => {
   const dom = installDom();
   const { createRoot } = require("react-dom/client");
@@ -202,7 +203,7 @@ test("Pi Settings exposes non-display Pi runtime settings and round-trips them",
     compactionKeepRecentTokens: 20000, httpIdleTimeoutMs: 300000, branchSummaryReserveTokens: 16384,
     providerRetryMaxRetries: 0, providerRetryMaxRetryDelayMs: 60000, websocketConnectTimeoutMs: 15000,
     defaultProjectTrust: "ask", enableSkillCommands: true, imageAutoResize: true, blockImages: false,
-    enableInstallTelemetry: true, enableAnalytics: false, warningsAnthropicExtraUsage: true,
+    enableInstallTelemetry: true,
   };
   global.window.pideck = { settings: {
     get: async () => initialSettings,
@@ -224,7 +225,7 @@ test("Pi Settings exposes non-display Pi runtime settings and round-trips them",
     const menu = dom.document.getElementById(transport.getAttribute("aria-controls"));
     assert.ok(menu);
     menu.querySelector('[role="option"][data-value="websocket-cached"]').click();
-    for (const id of ["pi-hideThinkingBlock", "pi-showCacheMissNotices", "pi-blockImages", "pi-enableSkillCommands"]) dom.document.querySelector(`[data-testid="${id}"]`).click();
+    for (const id of ["pi-blockImages", "pi-enableSkillCommands"]) dom.document.querySelector(`[data-testid="${id}"]`).click();
     assert.ok(dom.document.querySelector('[data-testid="pi-providerRetryTimeoutMs"]'));
     assert.ok(dom.document.querySelector('[data-testid="pi-npmCommand"]'));
     await flushReact();
@@ -232,10 +233,11 @@ test("Pi Settings exposes non-display Pi runtime settings and round-trips them",
   await act(async () => { dom.document.querySelector('[data-testid="pi-settings-save"]').click(); await flushReact(); });
   assert.equal(saved.length, 1);
   assert.equal(saved[0].transport, "websocket-cached");
-  assert.equal(saved[0].hideThinkingBlock, true);
-  assert.equal(saved[0].showCacheMissNotices, true);
   assert.equal(saved[0].blockImages, true);
   assert.equal(saved[0].enableSkillCommands, false);
+  for (const id of ["pi-branchSummarySkipPrompt", "pi-hideThinkingBlock", "pi-showCacheMissNotices", "pi-warningsAnthropicExtraUsage", "pi-enableAnalytics"]) {
+    assert.equal(dom.document.querySelector(`[data-testid="${id}"]`), null);
+  }
   await act(async () => { root.unmount(); });
   dom.close();
 });

@@ -46,8 +46,8 @@
 | 关于 PiDeck | 帮助 → 关于 PiDeck | 只显示 PiDeck 应用版本和当前 Pi SDK 版本 |
 | 模型范围 | 快捷设置 → 模型范围 | 支持按 Provider/Model 搜索、整组全选/清空、顺序调整与单模型 thinking override；Composer 轮换直接调用 Pi `AgentSession.cycleModel()`，确保范围、顺序和 Thinking 以 Pi 为准；PiHost 依据 ModelRuntime 校验并持久化 Pi 的 `provider/model[:thinking]` 模式，空列表表示不限制 |
 | Pi 包资源与更新 | 快捷设置 → Pi 包 | 通过 Pi `DefaultPackageManager` 按明确的用户级或项目级作用域管理安装/移除/启停，查看并切换单个 Extension/Skill/Prompt/Theme 资源，检查和执行单包/全部更新，并刷新模型目录 |
-| Extension 运行时上下文 | Extension 命令与 UI | Session 通过 `AgentSessionRuntime` 创建；命令获得 `ctx.mode = "rpc"` 以及可用的 `waitForIdle`、`newSession`、`fork`、`navigateTree`、`switchSession`、`reload`。Session 替换后重新绑定新身份，并显示加载/命令/快捷键诊断、模型回退、异步错误和 shutdown 请求 |
-| Extension UI 生命周期 | 桌面对话框与展示面 | select/confirm/input/editor 支持取消与超时，dismiss 会关闭匹配对话框；通知级别、working indicator 帧间隔、工具展开、编辑器文本、状态、Widget、标题以及 TUI-only 不兼容警告均显式序列化 |
+| Extension 运行时上下文 | Extension 命令与 UI | Session 通过 `AgentSessionRuntime` 创建；命令默认获得 `ctx.mode = "rpc"` 以及可用的 `waitForIdle`、`newSession`、`fork`、`navigateTree`、`switchSession`、`reload`；Pi 原生 `/llama` 自定义 UI 活跃期间使用限定范围的 `ctx.mode = "tui"`。Session 替换后重新绑定新身份，并显示加载/命令/快捷键诊断、模型回退、异步错误和 shutdown 请求 |
+| Extension UI 生命周期 | 桌面对话框与展示面 | select/confirm/input/editor 支持取消与超时，dismiss 会关闭匹配对话框；Pi TUI 自定义组件会渲染为可序列化的终端样式画面并接收按键桥接（`/llama` 使用该能力）；通知级别、working indicator 帧间隔、工具展开、编辑器文本、状态、Widget 与标题均显式序列化 |
 | 重试与摘要状态 | 运行中指示器 | Pi `auto_retry_*` 与 `summarization_retry_*` 事件显示尝试次数、最大次数、等待时间、摘要阶段、完成状态和最终可操作错误 |
 | Composer 与会话输入 | Composer、当前会话搜索栏；Pi 设置 → 外部编辑器 | 支持用户提示历史、Tab/Enter 资源补全、Pi 外部编辑器、图片粘贴/拖放、包含折叠历史的会话匹配导航，并把 Pi 生效的 `keybindings.json` 适配到搜索、模型、thinking 和外部编辑器动作。Pi 设置页区分自动与自定义模式，显示当前命令来自项目设置、用户设置、`VISUAL`、`EDITOR` 还是 Pi 平台默认值，并可通过 Windows/macOS 原生应用选择器填充自定义命令。命令仍通过 Pi 自带的锁定 `FileSettingsStorage` 持久化，清空后恢复自动优先级；Unix 上带引号的已选路径在调用 Pi helper 前使用一次性无空格别名，因此无需第二套编辑器配置存储即可支持带空格路径 |
 | Print/JSON/RPC/stdin/Auth Print | `npm run cli -- <Pi 参数>` 或 `pideck-cli` | 透明委托给 Pi 官方 `main()`，复用其参数解析、stdin/stdout JSONL、Print/JSON/RPC、Session 与 `auth print-*` 语义，不实现第二套 Agent 或协议 |
@@ -90,9 +90,9 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 
 以下能力已经完成基础桌面映射：
 
-- Extension UI 的 select、confirm、input、editor、notify，以及可序列化的状态、工作文案/可见性/动画、隐藏思考标签、文本 Widget、标题与编辑器文本；TUI 组件工厂无法映射时会明确提示，不再静默失效。
+- Extension UI 的 select、confirm、input、editor、notify，以及可序列化的状态、工作文案/可见性/动画、隐藏思考标签、文本 Widget、标题与编辑器文本；TUI 自定义组件会渲染为可序列化的终端样式桌面对话框并接收按键桥接，Pi 原生 `/llama` 可直接使用。
 - Pi Package install/remove/update/config 管理器；快捷设置提供唯一入口。
-当前仍有边界：TUI 专属 `custom`、组件 Widget/Footer/Header、terminal input、同步 editor component 和 autocomplete provider 不能跨进程传递组件实例，尚未实现桌面组件映射；调用会明确提示改用 Pi CLI 或标准桌面对话框。实时编辑文本和主题颜色接口已接入，但不模拟终端布局。PiDeck 不嵌入独立 CLI 面板，单独的兼容入口仍委托给 Pi 官方 `main()`。
+当前仍有边界：组件 Widget/Footer/Header、terminal input、同步 editor component 和 autocomplete provider 不能跨进程传递组件实例，调用会明确提示兼容性限制；TUI `custom` 已通过有界的可序列化画面/按键桥接适配（`/llama` 使用该能力）。PiDeck 不嵌入独立 CLI 面板，单独的兼容入口仍委托给 Pi 官方 `main()`。
 
 任务基线统一 diff 审查已经接入。逐块接受/撤销及 Monaco 可编辑合并流程仍未实现；在获得安全的 Pi/桌面映射前，PiDeck 不会把这些操作声明为已支持。
 

@@ -231,23 +231,18 @@ try {
     ["HTTP idle timeout", () => fill("pi-httpIdleTimeoutMs", "120000"), () => readControl("pi-httpIdleTimeoutMs"), (value) => value === "120000"],
     ["WebSocket connect timeout", () => fill("pi-websocketConnectTimeoutMs", "10000"), () => readControl("pi-websocketConnectTimeoutMs"), (value) => value === "10000"],
     ["branch summary reserve", () => fill("pi-branchSummaryReserveTokens", "8192"), () => readControl("pi-branchSummaryReserveTokens"), (value) => value === "8192"],
-    ["branch summary skip prompt", () => setChecked("pi-branchSummarySkipPrompt", true), () => readControl("pi-branchSummarySkipPrompt"), (value) => value === true],
     ["HTTP proxy", () => fill("pi-httpProxy", "http://127.0.0.1:9"), () => readControl("pi-httpProxy"), (value) => value === "http://127.0.0.1:9/"],
     ["default tools", async () => { await evaluate(`(() => { const label = Array.from(document.querySelectorAll('.pi-settings-fields > label')).find((item) => item.innerText.includes('使用 Pi 默认工具') || item.innerText.includes('Use Pi default tools')); const element = label?.querySelector('input[type="checkbox"]'); if (!element) throw new Error('Default-tools automatic checkbox not found'); if (element.checked) element.click(); return true; })()`); await fill("pi-defaultTools", "read bash"); }, () => readControl("pi-defaultTools"), (value) => value === "read, bash"],
-    ["hide thinking block", () => setChecked("pi-hideThinkingBlock", true), () => readControl("pi-hideThinkingBlock"), (value) => value === true],
-    ["cache miss notices", () => setChecked("pi-showCacheMissNotices", true), () => readControl("pi-showCacheMissNotices"), (value) => value === true],
     ["image auto resize", () => setChecked("pi-imageAutoResize", false), () => readControl("pi-imageAutoResize"), (value) => value === false],
     ["block images", () => setChecked("pi-blockImages", true), () => readControl("pi-blockImages"), (value) => value === true],
     ["thinking budget low", () => fill("pi-thinking-budget-low", "2048"), () => readControl("pi-thinking-budget-low"), (value) => value === "2048"],
     ["default project trust", () => selectValue("pi-defaultProjectTrust", "always"), () => readControl("pi-defaultProjectTrust"), (value) => value === "always"],
     ["skill commands", () => setChecked("pi-enableSkillCommands", false), () => readControl("pi-enableSkillCommands"), (value) => value === false],
-    ["Anthropic usage warning", () => setChecked("pi-warningsAnthropicExtraUsage", false), () => readControl("pi-warningsAnthropicExtraUsage"), (value) => value === false],
     ["shell path", () => fill("pi-shellPath", path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")), () => readControl("pi-shellPath"), (value) => value.toLowerCase().endsWith("powershell.exe")],
     ["shell command prefix", () => fill("pi-shellCommandPrefix", "Write-Output pideck-prefix"), () => readControl("pi-shellCommandPrefix"), (value) => value === "Write-Output pideck-prefix"],
     ["npm command", () => fill("pi-npmCommand", "npm\n--version"), () => readControl("pi-npmCommand"), (value) => value === "npm\n--version"],
     ["session directory", () => fill("pi-sessionDir", temporarySessionDir), () => readControl("pi-sessionDir"), (value) => value === temporarySessionDir],
     ["install telemetry", () => setChecked("pi-enableInstallTelemetry", false), () => readControl("pi-enableInstallTelemetry"), (value) => value === false],
-    ["analytics", () => setChecked("pi-enableAnalytics", true), () => readControl("pi-enableAnalytics"), (value) => value === true],
   ];
   for (const [name, prepare, read, expected] of advancedCases) {
     await openAdvanced();

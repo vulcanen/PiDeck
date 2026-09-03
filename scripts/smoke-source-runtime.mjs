@@ -255,6 +255,10 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Permission Extension did not load with its command source metadata: ${JSON.stringify(message)}`));
         return;
       }
+      if (!commands.some((command) => command?.name === "llama" && command.source === "extension")) {
+        finish(new Error(`Pi built-in llama command is missing from capabilities: ${JSON.stringify(message)}`));
+        return;
+      }
       if (!message.result?.extensionShortcuts?.some((shortcut) => shortcut.key === "ctrl+shift+y")) {
         finish(new Error("Registered extension shortcut missing from capabilities"));
         return;

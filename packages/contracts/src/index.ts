@@ -199,7 +199,6 @@ export interface PiSettingsSummary {
   compactionReserveTokens?: number;
   compactionKeepRecentTokens?: number;
   branchSummaryReserveTokens?: number;
-  branchSummarySkipPrompt?: boolean;
   httpProxy?: string;
   httpProxyHasCredentials?: boolean;
   httpIdleTimeoutMs?: number;
@@ -211,8 +210,6 @@ export interface PiSettingsSummary {
   /** Per-model startup thinking overrides owned by Pi SettingsManager. */
   modelThinkingLevels?: Record<string, string>;
   thinkingBudgets?: PiThinkingBudgets | null;
-  hideThinkingBlock?: boolean;
-  showCacheMissNotices?: boolean;
   imageAutoResize?: boolean;
   blockImages?: boolean;
   defaultProjectTrust?: PiDefaultProjectTrust;
@@ -222,9 +219,6 @@ export interface PiSettingsSummary {
   sessionDir?: string;
   enableSkillCommands?: boolean;
   enableInstallTelemetry?: boolean;
-  enableAnalytics?: boolean;
-  trackingId?: string;
-  warningsAnthropicExtraUsage?: boolean;
   transport: "auto" | "sse" | "websocket" | "websocket-cached";
   compactionEnabled: boolean;
   steeringMode: QueueMode;
@@ -238,16 +232,14 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
   | "retryEnabled" | "retryMaxRetries" | "retryBaseDelayMs"
   | "providerRetryTimeoutMs" | "providerRetryMaxRetries" | "providerRetryMaxRetryDelayMs"
   | "compactionReserveTokens" | "compactionKeepRecentTokens"
-  | "branchSummaryReserveTokens" | "branchSummarySkipPrompt"
+  | "branchSummaryReserveTokens"
   | "httpProxy" | "httpIdleTimeoutMs" | "websocketConnectTimeoutMs" | "defaultTools"
   | "defaultProvider"
   | "defaultModel"
   | "defaultThinkingLevel"
-  | "hideThinkingBlock" | "showCacheMissNotices"
   | "imageAutoResize" | "blockImages" | "defaultProjectTrust"
   | "shellPath" | "shellCommandPrefix" | "npmCommand" | "sessionDir"
-  | "enableSkillCommands" | "enableInstallTelemetry" | "enableAnalytics"
-  | "warningsAnthropicExtraUsage"
+  | "enableSkillCommands" | "enableInstallTelemetry"
   | "transport"
   | "compactionEnabled"
   | "steeringMode"
@@ -259,7 +251,7 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
   thinkingBudgets?: PiThinkingBudgetsPatch | null;
 };
 
-export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor";
+export type ExtensionUiRequestKind = "select" | "confirm" | "input" | "editor" | "custom";
 
 export interface ExtensionThemeSnapshot {
   name?: string;
@@ -277,6 +269,8 @@ export interface ExtensionUiRequest {
   placeholder?: string;
   prefill?: string;
   timeoutMs?: number;
+  /** Rendered terminal-style lines for a custom Pi extension UI. */
+  lines?: string[];
 }
 
 export interface PiPackageSummary {
@@ -414,6 +408,7 @@ export interface PideckBridge {
     syncEditor(taskId: string, text: string, cwd?: string): Promise<void>;
     invokeShortcut(taskId: string, key: string, text: string, cwd?: string): Promise<void>;
     resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
+    sendUiInput(requestId: string, data: string): Promise<void>;
   };
   packages: {
     list(cwd?: string): Promise<PiPackageSummary[]>;
@@ -497,6 +492,7 @@ export type PiHostCommand =
   | "extension.editor.sync"
   | "extension.shortcut.invoke"
   | "extension.ui.resolve"
+  | "extension.ui.input"
   | "packages.list"
   | "packages.install"
   | "packages.remove"
@@ -590,16 +586,17 @@ const piHostPayloadSchemas = {
     retryEnabled: z.boolean().optional(), retryMaxRetries: z.number().int().min(0).max(100).optional(), retryBaseDelayMs: z.number().int().min(0).max(2147483647).optional(),
     providerRetryTimeoutMs: z.number().int().min(0).max(2147483647).optional(), providerRetryMaxRetries: z.number().int().min(0).max(100).optional(), providerRetryMaxRetryDelayMs: z.number().int().min(0).max(2147483647).optional(),
     compactionReserveTokens: z.number().int().positive().max(100000000).optional(), compactionKeepRecentTokens: z.number().int().min(0).max(100000000).optional(),
-    branchSummaryReserveTokens: z.number().int().positive().max(100000000).optional(), branchSummarySkipPrompt: z.boolean().optional(),
+    branchSummaryReserveTokens: z.number().int().positive().max(100000000).optional(),
     httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), websocketConnectTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),
     thinkingBudgets: z.object({ minimal: z.number().int().positive().max(100000000).optional(), low: z.number().int().positive().max(100000000).optional(), medium: z.number().int().positive().max(100000000).optional(), high: z.number().int().positive().max(100000000).optional() }).strict().nullable().optional(),
-    hideThinkingBlock: z.boolean().optional(), showCacheMissNotices: z.boolean().optional(), imageAutoResize: z.boolean().optional(), blockImages: z.boolean().optional(),
+    imageAutoResize: z.boolean().optional(), blockImages: z.boolean().optional(),
     defaultProjectTrust: z.enum(["ask", "always", "never"]).optional(), shellPath: z.string().max(4096).optional(), shellCommandPrefix: z.string().max(4096).optional(), npmCommand: z.array(z.string().min(1).max(4096)).max(100).nullable().optional(), sessionDir: z.string().max(4096).optional(),
-    enableSkillCommands: z.boolean().optional(), enableInstallTelemetry: z.boolean().optional(), enableAnalytics: z.boolean().optional(), warningsAnthropicExtraUsage: z.boolean().optional(),
+    enableSkillCommands: z.boolean().optional(), enableInstallTelemetry: z.boolean().optional(),
   }),
   "extension.editor.sync": payload({ taskId: z.string(), text: z.string().max(1000000), cwd: z.string().optional() }),
   "extension.shortcut.invoke": payload({ taskId: z.string(), key: z.string().min(1).max(100), text: z.string().max(1000000), cwd: z.string().optional() }),
   "extension.ui.resolve": payload({ requestId: z.string(), value: z.union([z.string(), z.boolean()]).optional() }),
+  "extension.ui.input": payload({ requestId: z.string(), data: z.string().max(1000) }),
   "packages.list": payload({ cwd: z.string().optional() }),
   "packages.install": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),
   "packages.remove": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),

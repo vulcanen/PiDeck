@@ -301,6 +301,7 @@ function emitExtensionUiRequest(requestId: string, taskId: string, request: Reco
 }
 
 const permissionEngine = new PermissionEngine({ emitApproval, emitEvent: emit, emitUiRequest: emitExtensionUiRequest });
+const extensionUiContexts = new WeakMap<object, object>();
 function jsonSafe<T>(value: T): T {
   try {
     return JSON.parse(JSON.stringify(value)) as T;
@@ -1154,11 +1155,12 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       const permissionExtensionPath = resolvePermissionExtensionPath();
       const resourceLoader = sdk.DefaultResourceLoader
         ? new sdk.DefaultResourceLoader({
-            cwd: options.cwd,
-            agentDir: options.agentDir,
-            settingsManager,
-            additionalExtensionPaths: permissionExtensionPath ? [permissionExtensionPath] : undefined,
-          })
+              cwd: options.cwd,
+              agentDir: options.agentDir,
+              settingsManager,
+              additionalExtensionPaths: permissionExtensionPath ? [permissionExtensionPath] : undefined,
+              extensionFactories: sdk.builtInExtensions,
+            })
         : undefined;
       await resourceLoader?.reload?.();
       const modelPatterns = settingsManager?.getEnabledModels?.();
@@ -1244,10 +1246,19 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       const boundStateKey = binding.stateKey;
       const permissionExtensionPath = resolvePermissionExtensionPath();
       const permissionExtensionLoaded = Boolean(permissionExtensionPath && session.extensionRunner?.getRegisteredCommands?.().some((command: any) => (command.invocationName ?? command.name) === "permission-system"));
-      // Desktop dialogs are RPC-style serializable UI. Declaring rpc here is
-      // important: extensions can guard terminal-only components with ctx.mode.
+      // Keep the normal RPC mode so existing extensions can continue to detect
+      // the desktop transport. The native /llama command temporarily opts into
+      // interactive mode below because Pi's own implementation guards its
+      // component UI behind ctx.mode === "tui".
+      const extensionUiContext = permissionEngine.createUi(
+        boundTaskId,
+        boundStateKey,
+        sdk.themeApi ? createExtensionTheme(sdk.themeApi, session, (snapshot) => emit(boundTaskId, { type: "extension.ui.presentation", action: "theme", theme: snapshot })) : undefined,
+        sdk.KeybindingsManager?.create(sdk.getAgentDir?.()),
+      );
+      if (session.extensionRunner) extensionUiContexts.set(session.extensionRunner, extensionUiContext);
       await session.bindExtensions?.({
-        uiContext: permissionEngine.createUi(boundTaskId, boundStateKey, sdk.themeApi ? createExtensionTheme(sdk.themeApi, session, (snapshot) => emit(boundTaskId, { type: "extension.ui.presentation", action: "theme", theme: snapshot })) : undefined),
+        uiContext: extensionUiContext,
         mode: "rpc",
         commandContextActions: {
           waitForIdle: () => runtime.session.waitForIdle(),
@@ -1453,11 +1464,12 @@ async function ensureCapabilitySession(cwd: string): Promise<any> {
   const permissionExtensionPath = resolvePermissionExtensionPath();
   const resourceLoader = sdk.DefaultResourceLoader
     ? new sdk.DefaultResourceLoader({
-        cwd,
-        agentDir,
-        settingsManager,
-        additionalExtensionPaths: permissionExtensionPath ? [permissionExtensionPath] : undefined,
-      })
+          cwd,
+          agentDir,
+          settingsManager,
+          additionalExtensionPaths: permissionExtensionPath ? [permissionExtensionPath] : undefined,
+          extensionFactories: sdk.builtInExtensions,
+        })
     : undefined;
   await resourceLoader?.reload?.();
   const { session } = await sdk.createAgentSession({
@@ -1999,12 +2011,28 @@ async function handle(request: PiHostRequest): Promise<void> {
             reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
             return "queued";
           }
-          await session.prompt(payload.text ?? "", {
-            source: "interactive",
-            images,
-            ...(queuedDelivery && !extensionCommand ? { streamingBehavior: queuedDelivery } : {}),
-            ...(directReservation ? { preflightResult: (started: boolean) => directReservation.markStarted(started) } : {}),
-          });
+          const promptText = payload.text ?? "";
+          const extensionRunner = session.extensionRunner;
+          const nativeLlamaCommand = /^\/llama(?:\s|$)/u.test(promptText) && Boolean(extensionRunner?.getCommand?.("llama"));
+          const extensionUiContext = extensionRunner ? extensionUiContexts.get(extensionRunner) : undefined;
+          if (nativeLlamaCommand && extensionUiContext && extensionRunner?.setUIContext) {
+            // Pi's /llama command deliberately requires ctx.mode === "tui".
+            // Temporarily expose that mode for this one command while retaining
+            // the normal RPC mode for every other extension and shortcut.
+            extensionRunner.setUIContext(extensionUiContext, "tui");
+          }
+          try {
+            await session.prompt(promptText, {
+              source: "interactive",
+              images,
+              ...(queuedDelivery && !extensionCommand ? { streamingBehavior: queuedDelivery } : {}),
+              ...(directReservation ? { preflightResult: (started: boolean) => directReservation.markStarted(started) } : {}),
+            });
+          } finally {
+            if (nativeLlamaCommand && extensionUiContext && extensionRunner?.setUIContext) {
+              extensionRunner.setUIContext(extensionUiContext, "rpc");
+            }
+          }
           if (queuedDelivery && !extensionCommand) {
             const current = queueState(session);
             reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
@@ -2468,6 +2496,13 @@ async function handle(request: PiHostRequest): Promise<void> {
         const payload = request.payload as { requestId?: string; value?: string | boolean } | undefined;
         if (!payload?.requestId) throw new Error("requestId is required");
         permissionEngine.resolveUi(payload.requestId, payload.value);
+        send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "extension.ui.input": {
+        const payload = request.payload as { requestId?: string; data?: string } | undefined;
+        if (!payload?.requestId || typeof payload.data !== "string") throw new Error("requestId and data are required");
+        permissionEngine.inputUi(payload.requestId, payload.data);
         send({ id: request.id, ok: true, result: undefined });
         return;
       }

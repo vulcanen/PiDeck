@@ -36,15 +36,12 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
       <label className="pi-settings-check"><input type="checkbox" checked={settings.retryEnabled ?? true} onChange={(event) => onChange({ retryEnabled: event.target.checked })} /><span>{t.piRetryEnabled}</span></label>
       <p className="pi-settings-hint">{t.piRetryAndCompactionHint}</p>
       {numbers.map(([key, label, min, max, required]) => <label key={key}><span>{label}</span><input type="number" data-testid={`pi-${key}`} min={min} max={max} step={1} required={required} defaultValue={settings[key]} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) onChange({ [key]: event.target.valueAsNumber }); }} /></label>)}
-      <label className="pi-settings-check"><input type="checkbox" data-testid="pi-branchSummarySkipPrompt" checked={settings.branchSummarySkipPrompt ?? false} onChange={(event) => onChange({ branchSummarySkipPrompt: event.target.checked })} /><span>{t.piBranchSummarySkipPrompt}</span></label>
       <label><span>{t.piHttpProxy}</span><input type="url" data-testid="pi-httpProxy" defaultValue={settings.httpProxy ?? ""} autoComplete="off" spellCheck={false} maxLength={4096} placeholder={t.piHttpProxyPlaceholder} onChange={(event) => onChange({ httpProxy: event.target.value })} /><small>{t.piHttpProxyHint}</small>{settings.httpProxyHasCredentials && <small>{t.piHttpProxyCredentialsHint}</small>}</label>
       <label className="pi-settings-check"><input type="checkbox" checked={settings.defaultTools == null} onChange={(event) => onChange({ defaultTools: event.target.checked ? null : [] })} /><span>{t.piDefaultToolsAutomatic}</span></label>
       {settings.defaultTools != null && <label><span>{t.piDefaultTools}</span><input type="text" data-testid="pi-defaultTools" defaultValue={settings.defaultTools.join(", ")} autoComplete="off" spellCheck={false} onChange={(event) => onChange({ defaultTools: event.target.value.split(/[\s,]+/).filter(Boolean) })} /><small>{t.piDefaultToolsHint}</small></label>}
       <fieldset className="pi-settings-subsection">
         <legend>{t.piThinkingAndImages}</legend>
         <p className="pi-settings-hint">{t.piThinkingAndImagesHint}</p>
-        <label className="pi-settings-check"><input type="checkbox" data-testid="pi-hideThinkingBlock" checked={settings.hideThinkingBlock ?? false} onChange={(event) => onChange({ hideThinkingBlock: event.target.checked })} /><span>{t.piHideThinkingBlock}</span></label>
-        <label className="pi-settings-check"><input type="checkbox" data-testid="pi-showCacheMissNotices" checked={settings.showCacheMissNotices ?? false} onChange={(event) => onChange({ showCacheMissNotices: event.target.checked })} /><span>{t.piShowCacheMissNotices}</span></label>
         <label className="pi-settings-check"><input type="checkbox" data-testid="pi-imageAutoResize" checked={settings.imageAutoResize ?? true} onChange={(event) => onChange({ imageAutoResize: event.target.checked })} /><span>{t.piImageAutoResize}</span></label>
         <label className="pi-settings-check"><input type="checkbox" data-testid="pi-blockImages" checked={settings.blockImages ?? false} onChange={(event) => onChange({ blockImages: event.target.checked })} /><span>{t.piBlockImages}</span></label>
         <div className="pi-settings-budget-grid">
@@ -59,7 +56,6 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
         <p className="pi-settings-hint">{t.piProjectTrustAndResourcesHint}</p>
         <label><span>{t.piDefaultProjectTrust}</span><SelectControl testId="pi-defaultProjectTrust" aria-label={t.piDefaultProjectTrust} value={settings.defaultProjectTrust ?? "ask"} options={[{ value: "ask", label: t.piProjectTrustAsk }, { value: "always", label: t.piProjectTrustAlways }, { value: "never", label: t.piProjectTrustNever }]} onChange={(value) => onChange({ defaultProjectTrust: value as PiSettingsSummary["defaultProjectTrust"] })} /><small>{t.piDefaultProjectTrustHint}</small></label>
         <label className="pi-settings-check"><input type="checkbox" data-testid="pi-enableSkillCommands" checked={settings.enableSkillCommands ?? true} onChange={(event) => onChange({ enableSkillCommands: event.target.checked })} /><span>{t.piEnableSkillCommands}</span></label>
-        <label className="pi-settings-check"><input type="checkbox" data-testid="pi-warningsAnthropicExtraUsage" checked={settings.warningsAnthropicExtraUsage ?? true} onChange={(event) => onChange({ warningsAnthropicExtraUsage: event.target.checked })} /><span>{t.piAnthropicExtraUsageWarning}</span></label>
       </fieldset>
       <fieldset className="pi-settings-subsection">
         <legend>{t.piShellAndSession}</legend>
@@ -73,8 +69,6 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
         <legend>{t.piPrivacyAndTelemetry}</legend>
         <p className="pi-settings-hint">{t.piPrivacyAndTelemetryHint}</p>
         <label className="pi-settings-check"><input type="checkbox" data-testid="pi-enableInstallTelemetry" checked={settings.enableInstallTelemetry ?? true} onChange={(event) => onChange({ enableInstallTelemetry: event.target.checked })} /><span>{t.piEnableInstallTelemetry}</span></label>
-        <label className="pi-settings-check"><input type="checkbox" data-testid="pi-enableAnalytics" checked={settings.enableAnalytics ?? false} onChange={(event) => onChange({ enableAnalytics: event.target.checked })} /><span>{t.piEnableAnalytics}</span></label>
-        {settings.trackingId && <small>{t.piTrackingId(settings.trackingId)}</small>}
       </fieldset>
       <p className="pi-settings-hint">{t.piAdvancedSettingsHint}</p>
     </div>

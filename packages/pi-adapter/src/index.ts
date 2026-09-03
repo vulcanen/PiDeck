@@ -14,11 +14,24 @@ export type PiSdk = {
   ModelRuntime: {
     create(options?: { allowModelNetwork?: boolean }): Promise<any>;
   };
-  DefaultResourceLoader?: new (options: { cwd: string; agentDir: string; settingsManager?: any; additionalExtensionPaths?: string[] }) => any;
+  DefaultResourceLoader?: new (options: {
+    cwd: string;
+    agentDir: string;
+    settingsManager?: any;
+    additionalExtensionPaths?: string[];
+    extensionFactories?: unknown[];
+  }) => any;
+  /** Pi's built-in extensions are supplied by the CLI entry point, not the SDK helper. */
+  builtInExtensions?: unknown[];
   DefaultPackageManager?: new (options: { cwd: string; agentDir: string; settingsManager: any }) => any;
   SettingsManager?: { create(cwd: string, agentDir?: string, options?: { projectTrusted?: boolean }): any };
   FileSettingsStorage?: new (cwd: string, agentDir: string) => { withLock(scope: "global" | "project", fn: (current: string | undefined) => string | undefined): void };
-  KeybindingsManager?: { create(agentDir?: string): { getEffectiveConfig(): Record<string, string | string[]> } };
+  KeybindingsManager?: {
+    create(agentDir?: string): {
+      getEffectiveConfig(): Record<string, string | string[]>;
+      matches(data: string, keybinding: string): boolean;
+    };
+  };
   editInExternalEditor?: (options: { command: string; content: string }) => Promise<{ status: "complete"; content: string } | { status: "failed" }>;
   ProjectTrustStore?: new (agentDir: string) => {
     get(cwd: string): boolean | null;
@@ -376,19 +389,21 @@ function piCompanionModule(piModule: string, relativePath: string[], capability:
 
 export function loadPiSdk(): Promise<PiSdk> {
   sdkPromise ??= (async () => {
-    const piModule = resolvePiModule();
-    const keybindingsModule = piCompanionModule(piModule, ["core", "keybindings.js"], "effective keybindings");
-    const settingsModule = piCompanionModule(piModule, ["core", "settings-manager.js"], "locked settings storage");
-    const externalEditorModule = piCompanionModule(piModule, ["modes", "interactive", "external-editor.js"], "the external editor helper");
-    const themeModule = piCompanionModule(piModule, ["modes", "interactive", "theme", "theme.js"], "extension themes");
-    const [sdk, keybindings, settingsStorage, externalEditor, themeApi] = await Promise.all([
-      import(pathToFileURL(piModule).href) as Promise<PiSdk>,
-      import(pathToFileURL(keybindingsModule).href) as Promise<Pick<PiSdk, "KeybindingsManager">>,
-      import(pathToFileURL(settingsModule).href) as Promise<Pick<PiSdk, "FileSettingsStorage">>,
-      import(pathToFileURL(externalEditorModule).href) as Promise<Pick<PiSdk, "editInExternalEditor">>,
-      import(pathToFileURL(themeModule).href) as Promise<NonNullable<PiSdk["themeApi"]>>,
-    ]);
-    return { ...sdk, ...keybindings, ...settingsStorage, ...externalEditor, themeApi };
+      const piModule = resolvePiModule();
+      const keybindingsModule = piCompanionModule(piModule, ["core", "keybindings.js"], "effective keybindings");
+      const settingsModule = piCompanionModule(piModule, ["core", "settings-manager.js"], "locked settings storage");
+      const externalEditorModule = piCompanionModule(piModule, ["modes", "interactive", "external-editor.js"], "the external editor helper");
+      const themeModule = piCompanionModule(piModule, ["modes", "interactive", "theme", "theme.js"], "extension themes");
+      const extensionsModule = piCompanionModule(piModule, ["extensions", "index.js"], "built-in extensions");
+      const [sdk, keybindings, settingsStorage, externalEditor, themeApi, extensions] = await Promise.all([
+        import(pathToFileURL(piModule).href) as Promise<PiSdk>,
+        import(pathToFileURL(keybindingsModule).href) as Promise<Pick<PiSdk, "KeybindingsManager">>,
+        import(pathToFileURL(settingsModule).href) as Promise<Pick<PiSdk, "FileSettingsStorage">>,
+        import(pathToFileURL(externalEditorModule).href) as Promise<Pick<PiSdk, "editInExternalEditor">>,
+        import(pathToFileURL(themeModule).href) as Promise<NonNullable<PiSdk["themeApi"]>>,
+        import(pathToFileURL(extensionsModule).href) as Promise<Pick<PiSdk, "builtInExtensions">>,
+      ]);
+      return { ...sdk, ...keybindings, ...settingsStorage, ...externalEditor, themeApi, ...extensions };
   })().catch((error) => {
     sdkPromise = undefined;
     throw error;

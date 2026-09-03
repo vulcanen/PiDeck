@@ -1,5 +1,6 @@
 import { CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, PiSettings, ProjectRemoveDialog, ProviderSettings, QuickSettings, QuickSettingsBoundary, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
 import { Icon } from "@pideck/ui-system";
+import { ExtensionCustomUiDialog } from "./ui/dialogs";
 import type { AppController } from "./use-app-controller";
 import { extensionThemeStyle } from "./extension-theme";
 
@@ -14,7 +15,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     notices, contextMenu, setContextMenu, projectContextMenu, setProjectContextMenu,
     pendingDelete, setPendingDelete, deletingTaskId, deleteTask,
     pendingProjectRemove, setPendingProjectRemove, removingProjectCwd, removeProject,
-    extensionUiRequest, setExtensionUiRequest, showNotice, dismissNotice,
+    extensionUiRequest, setExtensionUiRequest, showNotice, dismissNotice, sendExtensionUiInput,
     packagesOpen, setMessageReload, settingsOpen, setSettingsOpen, piSettingsOpen, setPiSettingsOpen, providerFocus, setProviderFocus, refreshModels,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, renameSession,
     resumeOpen, setResumeOpen, selectTask, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, openProjectTrust, resolveTrust,
@@ -38,13 +39,22 @@ export function AppOverlays({ controller }: { controller: AppController }) {
       onClose={() => setQuickSettingsOpen(false)}
     /></QuickSettingsBoundary>}
     {notices.length > 0 && <div className="toast-stack">
-      {notices.map((item) => <div key={item.id} className={`toast ${item.kind === "error" ? "toast-error" : ""} ${item.closing ? "closing" : ""}`} role={item.kind === "error" ? "alert" : "status"} aria-live="polite"><span className="toast-message">{item.message}</span>{item.kind === "error" && <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>}</div>)}
+      {notices.map((item) => {
+        const kindLabel = item.kind === "error" ? t.noticeError : item.kind === "warning" ? t.noticeWarning : t.noticeInfo;
+        return <div key={item.id} className={`toast toast-${item.kind} ${item.closing ? "closing" : ""}`} role={item.kind === "error" ? "alert" : "status"} aria-live={item.kind === "error" ? "assertive" : "polite"}>
+          <span className="toast-kind" title={kindLabel} aria-hidden="true"><Icon name={item.kind === "info" ? "info" : "alert"} size={14} /></span>
+          <span className="sr-only">{kindLabel}: </span>
+          <span className="toast-message">{item.message}</span>
+          {item.kind === "error" && <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>}
+        </div>;
+      })}
     </div>}
     {contextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button role="menuitem" autoFocus onClick={() => { setPendingDelete(contextMenu.task); setContextMenu(null); }}>{t.deleteSession}</button></div>}
     {projectContextMenu && <div className="task-context-menu" role="menu" aria-label={t.moreActions} style={{ left: projectContextMenu.x, top: projectContextMenu.y }} onKeyDown={handleRovingMenuKeyDown} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" autoFocus data-project-action="trust" onClick={() => { const project = projectContextMenu.project; setProjectContextMenu(null); void openProjectTrust(project); }}>{t.trustTitle}</button><button type="button" role="menuitem" disabled={removingProjectCwd !== null} onClick={() => { setPendingProjectRemove(projectContextMenu.project); setProjectContextMenu(null); }}>{t.removeProject}</button></div>}
     {pendingDelete && <ConfirmDialog language={language} task={pendingDelete} busy={deletingTaskId === pendingDelete.id} onCancel={() => setPendingDelete(null)} onConfirm={() => void deleteTask(pendingDelete)} />}
     {pendingProjectRemove && <ProjectRemoveDialog language={language} project={pendingProjectRemove} busy={removingProjectCwd === pendingProjectRemove.cwd} onCancel={() => setPendingProjectRemove(null)} onConfirm={() => void removeProject(pendingProjectRemove)} />}
-    {extensionUiRequest && <ExtensionUiDialog request={extensionUiRequest} language={language} onResolve={(value) => { void window.pideck.extensions.resolveUi(extensionUiRequest.requestId, value).then(() => setExtensionUiRequest(null)).catch((error) => showNotice(error instanceof Error ? error.message : String(error))); }} />}
+    {extensionUiRequest?.kind === "custom" && <ExtensionCustomUiDialog request={extensionUiRequest} language={language} onInput={(data) => void sendExtensionUiInput(data)} />}
+    {extensionUiRequest && extensionUiRequest.kind !== "custom" && <ExtensionUiDialog request={extensionUiRequest} language={language} onResolve={(value) => { void window.pideck.extensions.resolveUi(extensionUiRequest.requestId, value).then(() => setExtensionUiRequest(null)).catch((error) => showNotice(error instanceof Error ? error.message : String(error))); }} />}
     {packagesOpen && <PackageSettings language={language} cwd={activeProject?.cwd ?? projectCwd} onClose={() => setPackagesOpen(false)} onNotice={showNotice} onPackagesChanged={() => setMessageReload((current) => current + 1)} onModelsRefresh={() => refreshModels()} />}
     {settingsOpen && <ProviderSettings language={language} focusProviderId={providerFocus} onClose={() => { setSettingsOpen(false); setProviderFocus(null); }} onModelsRefresh={refreshModels} />}
     {piSettingsOpen && <PiSettings language={language} cwd={activeProject?.cwd ?? projectCwd} models={modelOptions} onClose={() => setPiSettingsOpen(false)} onNotice={showNotice} />}

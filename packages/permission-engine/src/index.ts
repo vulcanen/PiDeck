@@ -10,6 +10,13 @@ export interface PermissionEngineCallbacks {
 }
 
 type BeforeToolCall = (context: any, signal?: AbortSignal) => Promise<unknown> | unknown;
+type ExtensionKeybindings = { matches(data: string, keybinding: string): boolean };
+type CustomUiComponent = {
+  render(width: number): string[];
+  handleInput?(data: string): void;
+  invalidate?(): void;
+  dispose?(): void;
+};
 
 const plainText = (text: string) => text;
 
@@ -90,6 +97,14 @@ export class PermissionEngine {
     signal?: AbortSignal;
     onAbort?: () => void;
   }>();
+  private readonly customUiWaiters = new Map<string, {
+    taskId: string;
+    component?: CustomUiComponent;
+    pendingInputs: string[];
+    handleInput(data: string): void;
+    dispose(): void;
+    resolve(value: unknown): void;
+  }>();
 
   constructor(private readonly callbacks: PermissionEngineCallbacks) {}
 
@@ -167,6 +182,13 @@ export class PermissionEngine {
         waiter.resolve(undefined);
       }
     }
+    for (const [requestId, waiter] of this.customUiWaiters.entries()) {
+      if (!requestId.startsWith(prefix)) continue;
+      this.customUiWaiters.delete(requestId);
+      waiter.dispose();
+      waiter.resolve(undefined);
+      this.callbacks.emitEvent(waiter.taskId, { type: "extension.ui.dismiss", requestId, reason: "aborted" });
+    }
   }
 
   resolveUi(requestId: string, value: string | boolean | undefined): void {
@@ -178,6 +200,15 @@ export class PermissionEngine {
     waiter.resolve(value);
   }
 
+  /** Forward a terminal-style key sequence to a custom extension component. */
+  inputUi(requestId: string, data: string): void {
+    const waiter = this.customUiWaiters.get(requestId);
+    // The renderer can race the final dismiss event. Treat late input as a
+    // harmless no-op instead of surfacing an actionable error for a stale key.
+    if (!waiter) return;
+    waiter.handleInput(data);
+  }
+
   resetUi(taskId: string): void {
     for (const [requestId, waiter] of this.uiWaiters.entries()) {
       if (waiter.taskId !== taskId) continue;
@@ -186,10 +217,17 @@ export class PermissionEngine {
       if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
       waiter.resolve(undefined);
     }
+    for (const [requestId, waiter] of this.customUiWaiters.entries()) {
+      if (waiter.taskId !== taskId) continue;
+      this.customUiWaiters.delete(requestId);
+      waiter.dispose();
+      waiter.resolve(undefined);
+      this.callbacks.emitEvent(taskId, { type: "extension.ui.dismiss", requestId, reason: "aborted" });
+    }
     this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action: "reset" });
   }
 
-  createUi(taskId: string, scopeId = taskId, themes?: { theme: any; getAllThemes(): any[]; getTheme(name: string): any; setTheme(value: any): { success: boolean; error?: string } }) {
+  createUi(taskId: string, scopeId = taskId, themes?: { theme: any; getAllThemes(): any[]; getTheme(name: string): any; setTheme(value: any): { success: boolean; error?: string } }, extensionKeybindings?: ExtensionKeybindings) {
     const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>, opts?: { signal?: AbortSignal; timeout?: number }) => new Promise<T | undefined>((resolve) => {
       const requestId = `${encodeURIComponent(scopeId)}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
       const settle = (value: string | boolean | undefined, reason?: "timeout" | "aborted") => {
@@ -252,7 +290,91 @@ export class PermissionEngine {
       setFooter: () => warnUnsupported("setFooter"),
       setHeader: () => warnUnsupported("setHeader"),
       setTitle: (title: string) => present("title", { title }),
-      custom: async () => { warnUnsupported("custom"); return undefined; },
+      custom: <T>(factory: (tui: any, theme: any, keybindings: ExtensionKeybindings, done: (result: T) => void) => CustomUiComponent | Promise<CustomUiComponent>, _options?: Record<string, unknown>) => new Promise<T | undefined>((resolve) => {
+        const requestId = `${encodeURIComponent(scopeId)}:extension-custom:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+        let component: CustomUiComponent | undefined;
+        let settled = false;
+        let dirty = false;
+        const keybindings = extensionKeybindings ?? {
+          matches(data: string, keybinding: string): boolean {
+            const keys: Record<string, string[]> = {
+              "tui.select.up": ["\x1b[A", "\x1bOA"],
+              "tui.select.down": ["\x1b[B", "\x1bOB"],
+              "tui.select.confirm": ["\r", "\n"],
+              "tui.select.cancel": ["\x1b"],
+            };
+            return keys[keybinding]?.includes(data) ?? false;
+          },
+        };
+        const render = () => {
+          if (settled || !component) { dirty = true; return; }
+          try {
+            const marker = "\x1b_pi:c\x07";
+            const lines = component.render(96).map((line) => stripVTControlCharacters(line.replaceAll(marker, "")));
+            this.callbacks.emitUiRequest?.(requestId, taskId, { kind: "custom", title: "Pi Extension", lines });
+            dirty = false;
+          } catch (error) {
+            this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+            settle(undefined);
+          }
+        };
+        const settle = (value: T | undefined, reason?: "aborted") => {
+          if (settled) return;
+          settled = true;
+          const waiter = this.customUiWaiters.get(requestId);
+          if (waiter) {
+            this.customUiWaiters.delete(requestId);
+            waiter.dispose();
+          } else {
+            component?.dispose?.();
+          }
+          resolve(value);
+          this.callbacks.emitEvent(taskId, { type: "extension.ui.dismiss", requestId, ...(reason ? { reason } : {}) });
+        };
+        const waiter = {
+          taskId,
+          pendingInputs: [] as string[],
+          handleInput: (data: string) => {
+            if (settled) return;
+            if (!component) { waiter.pendingInputs.push(data); return; }
+            try {
+              component.handleInput?.(data);
+              render();
+            } catch (error) {
+              this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+            }
+          },
+          dispose: () => { settled = true; component?.dispose?.(); },
+          resolve: (value: unknown) => resolve(value as T | undefined),
+        };
+        this.customUiWaiters.set(requestId, waiter);
+        const tui = {
+          requestRender: () => { dirty = true; render(); },
+          setFocus: () => undefined,
+        };
+        const done = (value: T) => settle(value);
+        let created: CustomUiComponent | Promise<CustomUiComponent>;
+        try {
+          created = factory(tui, themes?.theme ?? desktopPlainTextTheme, keybindings, done);
+        } catch (error) {
+          this.customUiWaiters.delete(requestId);
+          resolve(undefined);
+          this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        Promise.resolve(created).then((next) => {
+          if (settled) { next.dispose?.(); return; }
+          component = next;
+          for (const input of waiter.pendingInputs.splice(0)) waiter.handleInput(input);
+          render();
+          if (dirty) render();
+        }).catch((error: unknown) => {
+          this.customUiWaiters.delete(requestId);
+          component?.dispose?.();
+          resolve(undefined);
+          this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+        });
+      }),
       pasteToEditor: (text: string) => { editorText = (this.editorTexts.get(scopeId) ?? editorText) + text; this.editorTexts.set(scopeId, editorText); present("editor-text", { text: editorText }); },
       setEditorText: (text: string) => { editorText = text; this.editorTexts.set(scopeId, text); present("editor-text", { text }); },
       getEditorText: () => this.editorTexts.get(scopeId) ?? editorText,

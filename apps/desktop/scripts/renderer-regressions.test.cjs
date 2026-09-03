@@ -1073,9 +1073,18 @@ test("auto-scroll survives content shrinking and programmatic smooth scrolls", (
   assert.match(timeline, /if \(touchActiveRef\.current && previous && top < previous\.top - 1\)/);
   assert.doesNotMatch(timeline, /const movingAwayFromEnd/);
 
+  // Being merely close to the bottom must not restore follow. Otherwise a
+  // late content resize can pin the last part of a downward wheel gesture.
+  assert.match(timeline, /const AT_BOTTOM_EPSILON = 1/);
+  assert.match(timeline, /const atBottom = Math\.max\(0, element\.scrollHeight - element\.clientHeight - top\) <= AT_BOTTOM_EPSILON/);
+  assert.match(timeline, /else if \(atBottom\) \{ userScrollOverrideRef\.current = false; endPinning\(\); \}/);
+  assert.match(timeline, /const wasFollowing = previous\?\.follow \?\? false/);
+  assert.match(timeline, /const follow = userScrollOverrideRef\.current \? false : atBottom \|\| pinningRef\.current \|\| wasFollowing/);
+  assert.match(timeline, /if \(userScrollOverrideRef\.current\) return;[\s\S]*?if \(scrollPositionsRef\.current\[scrollKey\]\?\.follow\) pinToBottom\(\);/);
+
   // A smooth scroll reports "not at the bottom" for its whole duration, which
   // flashed the jump-to-latest button back on mid-animation.
-  assert.match(timeline, /nearBottom \|\| pinningRef\.current/);
+  assert.match(timeline, /atBottom \|\| pinningRef\.current/);
   assert.match(timeline, /beginPinning\(\);/);
   assert.match(timeline, /pinningTimeoutRef\.current = window\.setTimeout/);
 

@@ -21,8 +21,10 @@ import { WorkingIndicator } from "./working-indicator";
 // stay mounted; older ones sit behind a "show earlier" affordance.
 const FOLD_WINDOW = 200;
 const FOLD_STEP = 200;
-// Distance from the bottom that still counts as reading the latest message.
-const FOLLOW_THRESHOLD = 80;
+// Allow sub-pixel rounding at the physical bottom, but do not treat a visible
+// gap as following the latest message. A larger threshold makes late content
+// resizes snap a reader's final few pixels to the bottom.
+const AT_BOTTOM_EPSILON = 1;
 
 function isAssistantTimelineItem(item: { type: string; message?: any } | undefined): boolean {
   if (item?.type === "live") return true;
@@ -214,13 +216,19 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     if (!element || event.target !== element) return;
     const previous = scrollPositionsRef.current[scrollKey];
     const top = element.scrollTop;
-    const nearBottom = Math.max(0, element.scrollHeight - element.clientHeight - top) <= FOLLOW_THRESHOLD;
+    const atBottom = Math.max(0, element.scrollHeight - element.clientHeight - top) <= AT_BOTTOM_EPSILON;
+    const wasFollowing = previous?.follow ?? false;
     // Touch input emits no wheel events, so a finger drag is the one case where
     // direction still has to be inferred. It is safe here because a programmatic
     // pin can never happen while a touch is down.
     if (touchActiveRef.current && previous && top < previous.top - 1) { userScrollOverrideRef.current = true; endPinning(); }
-    else if (nearBottom) { userScrollOverrideRef.current = false; endPinning(); }
-    const follow = userScrollOverrideRef.current ? false : nearBottom || pinningRef.current;
+    // Re-enable follow only at the physical bottom. The old 80px threshold
+    // made a late resize snap the final part of a user's downward gesture.
+    else if (atBottom) { userScrollOverrideRef.current = false; endPinning(); }
+    // Preserve an existing follow intent across content-driven scroll events
+    // (for example a streaming row growing). A real upward wheel/touch gesture
+    // has already set the override above, so it still opts out immediately.
+    const follow = userScrollOverrideRef.current ? false : atBottom || pinningRef.current || wasFollowing;
     scrollPositionsRef.current[scrollKey] = { top, follow };
     if (active) onAtEndChange(follow);
   }, [active, conversationRef, endPinning, onAtEndChange, scrollKey, scrollPositionsRef]);
@@ -229,13 +237,15 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
     const element = conversationRef.current;
     if (!element) return;
     element.addEventListener("scroll", handleNativeScroll, { passive: true, capture: true });
-    element.addEventListener("wheel", handleWheel, { passive: true });
+    // Capture the gesture before any descendant can schedule a layout update;
+    // the follow override must win the first frame of an upward scroll.
+    element.addEventListener("wheel", handleWheel, { passive: true, capture: true });
     element.addEventListener("touchstart", handleTouchStart, { passive: true });
     element.addEventListener("touchend", handleTouchEnd, { passive: true });
     element.addEventListener("touchcancel", handleTouchEnd, { passive: true });
     return () => {
       element.removeEventListener("scroll", handleNativeScroll, true);
-      element.removeEventListener("wheel", handleWheel);
+      element.removeEventListener("wheel", handleWheel, true);
       element.removeEventListener("touchstart", handleTouchStart);
       element.removeEventListener("touchend", handleTouchEnd);
       element.removeEventListener("touchcancel", handleTouchEnd);
@@ -267,6 +277,9 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
   // a following reader stays pinned to the newest content.
   useLayoutEffect(() => {
     if (!active || !messageReady) return;
+    // A late render must never re-pin a reader who has just started an upward
+    // gesture, even if the previous render still recorded follow=true.
+    if (userScrollOverrideRef.current) return;
     if (!scrollPositionsRef.current[scrollKey]?.follow) return;
     pinToBottom();
   }, [active, footer, items, messageReady, pinToBottom, scrollKey, scrollPositionsRef, streamText]);
@@ -283,6 +296,9 @@ function MessageTimeline({ messages, language, running, activeActivity, streamTe
       const nextHeight = host.getBoundingClientRect().height;
       if (Math.abs(nextHeight - previousHeight) < 1) return;
       previousHeight = nextHeight;
+      // The wheel handler updates this ref synchronously. Keep a queued
+      // ResizeObserver callback from racing the user's first upward tick.
+      if (userScrollOverrideRef.current) return;
       if (scrollPositionsRef.current[scrollKey]?.follow) pinToBottom();
     });
     observer.observe(host);

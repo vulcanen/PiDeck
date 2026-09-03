@@ -206,7 +206,7 @@ Integration constraints:
 Still planned, not current product promises:
 
 - Chunk-by-chunk accept/revert and an editable Monaco merge workflow on top of the integrated task-baseline unified diff review.
-- Extension TUI-only `custom` components, component Widgets, terminal input, synchronous editor components, autocomplete providers, Footers, and Headers — anything that cannot pass component instances across processes. These have actionable compatibility notices, not desktop implementations. Live editor text, registered shortcut execution, and Pi theme color adaptation are implemented.
+- Extension component Widgets, terminal input, synchronous editor components, autocomplete providers, Footers, and Headers — anything that still cannot pass component instances across processes. Pi's interactive `custom` components are adapted through a bounded serializable screen/input bridge (used by `/llama`). Live editor text, registered shortcut execution, and Pi theme color adaptation are implemented.
 
 The current parity baseline additionally includes manual compaction cancellation without automatically running staged prompts, `/model provider/model`, explicit `/export path` with native save confirmation, and advanced retry/compaction/proxy/timeout/default-tool settings persisted through Pi's locked storage. See the [feature matrix](pi-cli-feature-matrix.en.md#command-settings-and-extension-parity) for exact behavior and restart requirements.
 

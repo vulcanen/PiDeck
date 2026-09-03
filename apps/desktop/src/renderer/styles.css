@@ -185,8 +185,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   height: var(--titlebar-height);
   padding: 0 14px 0 18px;
   border-bottom: 1px solid var(--line);
-  /* Match Main's titleBarOverlay color exactly so the native Windows caption
-     buttons read as one continuous title bar instead of an attached block. */
+  /* The Windows caption overlay is transparent; keep the renderer canvas
+     underneath it so the divider remains continuous beside native controls. */
   background: var(--canvas);
   user-select: none;
 }
@@ -889,11 +889,16 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .image-preview-dialog img { display: block; max-width: 100%; max-height: min(820px, calc(100dvh - 56px)); object-fit: contain; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
 .image-preview-close { position: absolute; top: -14px; right: -14px; z-index: 1; background: var(--surface); box-shadow: var(--shadow); }
 .toast-stack { position: fixed; right: 22px; bottom: 24px; z-index: var(--layer-toast); display: flex; flex-direction: column; gap: 8px; max-width: min(380px, calc(100vw - 44px)); pointer-events: none; }
-.toast { position: relative; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-card); background: var(--text); color: var(--canvas); box-shadow: var(--shadow); font-size: var(--font-size-label); animation: toast-in 240ms var(--motion) both; }
-.toast.toast-error { border-color: color-mix(in srgb, var(--red) 55%, var(--line-strong)); background: color-mix(in srgb, var(--red) 12%, var(--surface)); color: var(--text); pointer-events: auto; display: flex; align-items: center; gap: 10px; }
-.toast.toast-error .toast-message { flex: 1; overflow-wrap: anywhere; }
-.toast.toast-close { flex: none; padding: 3px; border-radius: 5px; color: var(--muted); background: transparent; display: inline-flex; align-items: center; justify-content: center; }
-.toast.toast-close:hover { color: var(--text); background: var(--surface-strong); }
+.toast { position: relative; display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-card); background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow); font-size: var(--font-size-label); line-height: var(--line-height-body); animation: toast-in 240ms var(--motion) both; pointer-events: auto; }
+.toast.toast-info { border-color: color-mix(in srgb, var(--blue) 42%, var(--line-strong)); background: color-mix(in srgb, var(--blue) 10%, var(--surface-raised)); }
+.toast.toast-warning { border-color: color-mix(in srgb, var(--amber) 52%, var(--line-strong)); background: color-mix(in srgb, var(--amber) 12%, var(--surface-raised)); }
+.toast.toast-error { border-color: color-mix(in srgb, var(--red) 58%, var(--line-strong)); background: color-mix(in srgb, var(--red) 12%, var(--surface-raised)); }
+.toast-kind { flex: none; display: inline-flex; margin-top: 2px; color: var(--blue); }
+.toast-warning .toast-kind { color: var(--amber); }
+.toast-error .toast-kind { color: var(--red); }
+.toast-message { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.toast .toast-close { flex: none; padding: 3px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; display: inline-flex; align-items: center; justify-content: center; }
+.toast .toast-close:hover { color: var(--text); background: var(--surface-strong); }
 .toast.closing { animation: toast-out 220ms var(--motion) both; }
 .sidebar-backdrop { display: none; }
 .task-context-menu, .image-context-menu { position: fixed; z-index: var(--layer-modal); min-width: 166px; padding: 5px; border: 1px solid var(--line-strong); border-radius: var(--radius-card); background: var(--surface); box-shadow: var(--shadow-popover); }
@@ -921,6 +926,10 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .extension-ui-dialog .trust-safety-note { margin-top: 4px; padding: 9px 11px; border-left: 2px solid var(--amber); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--text); }
 .extension-ui-dialog textarea { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--ink); font: inherit; }
 .extension-ui-timeout { color: var(--amber); font-size: var(--font-size-label); font-variant-numeric: tabular-nums; }
+.extension-custom-ui-dialog { width: min(860px, 100%); max-height: min(760px, 88vh); gap: 14px; padding: 18px; }
+.extension-ui-custom-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.extension-ui-custom-header .icon-button { flex: 0 0 auto; }
+.extension-ui-custom-screen { min-height: 220px; max-height: min(620px, 72vh); margin: 0; overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--text); font: var(--font-size-label)/1.55 var(--font-mono); white-space: pre; tab-size: 2; }
 .session-name-field { display: grid; gap: 6px; margin-top: 8px; color: var(--muted); font-size: var(--font-size-label); }
 .session-name-field input { width: 100%; box-sizing: border-box; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--ink); }
 .session-name-field input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
@@ -988,8 +997,20 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .pi-settings-advanced textarea { resize: vertical; font: inherit; font-size: var(--font-size-label); line-height: var(--line-height-body); }
 .pi-settings-subsection { display: grid; gap: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 12px; }
 .pi-settings-subsection legend { padding: 0 5px; color: var(--text); font-size: var(--font-size-label); font-weight: 600; }
-.pi-settings-subsection > label:not(.pi-settings-check) { gap: 8px; }
-.pi-settings-subsection > label:not(.pi-settings-check) > small { margin-top: 1px; }
+.pi-settings-subsection > label:not(.pi-settings-check) {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.pi-settings-subsection > label:not(.pi-settings-check) > small {
+  margin-top: 0;
+  color: var(--faint);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
 .pi-settings-budget-grid { display: grid; gap: 8px; }
 .pi-settings-budget-grid > span { color: var(--muted); font-size: var(--font-size-body); }
 .pi-settings-budget-grid > small { color: var(--faint); font-size: var(--font-size-caption); line-height: var(--line-height-body); }

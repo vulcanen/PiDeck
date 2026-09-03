@@ -33,6 +33,7 @@ export const icons: Record<string, string> = {
   edit: "m3 11.8.7-2.8 6.7-6.7 2.3 2.3L6 11.3zM9.7 3l2.3 2.3",
   trash: "M3.5 4.5h9M6 4.5v-2h4v2M5 6v6.5h6V6M7 7.5v3M9 7.5v3",
   alert: "M8 2.5 14 13H2zM8 6v3.5M8 11.5h.01",
+  info: "M8 7.5v4M8 4.5h.01",
   down: "m4 6 4 4 4-4",
 };
 

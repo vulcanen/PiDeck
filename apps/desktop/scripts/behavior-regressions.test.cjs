@@ -97,11 +97,8 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
     providerRetryMaxRetries: 2,
     providerRetryMaxRetryDelayMs: 45000,
     branchSummaryReserveTokens: 4096,
-    branchSummarySkipPrompt: true,
     websocketConnectTimeoutMs: 9000,
     thinkingBudgets: { low: 4096, high: 32768 },
-    hideThinkingBlock: true,
-    showCacheMissNotices: true,
     imageAutoResize: false,
     blockImages: true,
     defaultProjectTrust: "always",
@@ -111,15 +108,11 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
     sessionDir: ".pi/sessions",
     enableSkillCommands: false,
     enableInstallTelemetry: false,
-    enableAnalytics: true,
-    warningsAnthropicExtraUsage: false,
   }, storage);
   assert.deepEqual(current.retry.provider, { maxRetries: 2, unknown: true, timeoutMs: 120000, maxRetryDelayMs: 45000 });
-  assert.deepEqual(current.branchSummary, { reserveTokens: 4096, skipPrompt: true });
+  assert.deepEqual(current.branchSummary, { reserveTokens: 4096 });
   assert.equal(current.websocketConnectTimeoutMs, 9000);
   assert.deepEqual(current.thinkingBudgets, { low: 4096, high: 32768 });
-  assert.equal(current.hideThinkingBlock, true);
-  assert.equal(current.showCacheMissNotices, true);
   assert.deepEqual(current.images, { autoResize: false, blockImages: true });
   assert.equal(current.defaultProjectTrust, "always");
   assert.equal(current.shellPath, "C:/Program Files/Git/bin/bash.exe");
@@ -128,8 +121,6 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
   assert.equal(current.sessionDir, ".pi/sessions");
   assert.equal(current.enableSkillCommands, false);
   assert.equal(current.enableInstallTelemetry, false);
-  assert.equal(current.enableAnalytics, true);
-  assert.deepEqual(current.warnings, { anthropicExtraUsage: false });
   await updatePiSettings(manager, {}, { defaultTools: null, httpProxy: "" }, storage);
   assert.equal(current.defaultTools, undefined);
   assert.equal(current.httpProxy, undefined);
@@ -495,6 +486,8 @@ test("manual compaction queue preserves ordering and supports queue mutations", 
   assert.match(hostSource, /case "sessions\.reload"[\s\S]*?await session\.reload\(\{[\s\S]*?beforeSessionStart:[\s\S]*?permissionEngine\.resetUi/);
   assert.match(hostSource, /case "agent\.executeBash"[\s\S]*?session\.executeBash/);
   assert.match(hostSource, /case "settings\.update"[\s\S]*?updatePiSettings/);
+  assert.match(hostSource, /nativeLlamaCommand[\s\S]*?extensionRunner\.setUIContext\(extensionUiContext, "tui"\)/);
+  assert.match(hostSource, /case "extension\.ui\.input"[\s\S]*?permissionEngine\.inputUi/);
   assert.match(settingsHandlerSource, /setDefaultModelAndProvider/);
 });
 
@@ -521,6 +514,34 @@ test("Extension UI maps serializable presentation APIs and reports TUI-only capa
   assert.deepEqual(events.filter((event) => event.type === "extension.ui.presentation").map((event) => event.action), ["status", "working-message", "working-visible", "working-indicator", "widget", "title", "editor-text", "reset"]);
   assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "setFooter").length, 1);
   assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "theme").length, 0);
+});
+
+test("Extension UI forwards custom Pi component renders and terminal input", async () => {
+  const requests = [];
+  const events = [];
+  const engine = new PermissionEngine({
+    emitApproval: () => undefined,
+    emitEvent: (_taskId, event) => events.push(event),
+    emitUiRequest: (requestId, taskId, request) => requests.push({ requestId, taskId, ...request }),
+  });
+  const ui = engine.createUi("task");
+  let received;
+  const result = ui.custom((_tui, _theme, _keybindings, done) => ({
+    render: () => ["Pi screen"],
+    handleInput: (data) => {
+      received = data;
+      if (data === "done") done("completed");
+    },
+    invalidate: () => undefined,
+  }));
+  await Promise.resolve();
+  assert.equal(requests[0].kind, "custom");
+  assert.deepEqual(requests[0].lines, ["Pi screen"]);
+  engine.inputUi(requests[0].requestId, "\x1b[B");
+  assert.equal(received, "\x1b[B");
+  engine.inputUi(requests[0].requestId, "done");
+  assert.equal(await result, "completed");
+  assert.equal(events.some((event) => event.type === "extension.ui.dismiss" && event.requestId === requests[0].requestId), true);
 });
 
 test("language switch button presents the target language", () => {
@@ -558,6 +579,8 @@ test("Extension commands report completion without clearing an existing model ru
   assert.match(hostSource, /return "extension-command"/);
   assert.match(hostSource, /result: \{ disposition \}/);
   assert.match(rendererSource, /promptResult\?\.disposition === "extension-command" && !continuingExecution/);
+  assert.match(rendererSource, /const extensionCommandCandidate = isRegisteredExtensionCommand\(text\)/);
+  assert.match(rendererSource, /!continuingExecution && !extensionCommandCandidate/);
 });
 
 test("session reload keeps persisted messages from before context compaction", async () => {
@@ -1179,6 +1202,28 @@ test("light and dark semantic text colors remain readable on primary surfaces", 
   }
 });
 
+test("notifications preserve severity and use semantic theme surfaces", () => {
+  const overlays = readText(path.join(__dirname, "../src/renderer/app-overlays.tsx"));
+  const runtimeEvents = readText(path.join(__dirname, "../src/renderer/use-runtime-events.ts"));
+  const notice = readText(path.join(__dirname, "../src/renderer/use-notice.ts"));
+  const styles = readText(path.join(__dirname, "../src/renderer/styles.css"));
+  assert.match(overlays, /toast toast-\$\{item\.kind\}/);
+  assert.match(overlays, /item\.kind === "warning" \? t\.noticeWarning/);
+  assert.match(overlays, /item\.kind === "info" \? "info" : "alert"/);
+  assert.match(runtimeEvents, /level === "error" \|\| level === "warning"/);
+  assert.match(runtimeEvents, /showNotice\(event\.message, noticeKind\(event\.level\)\)/);
+  assert.match(runtimeEvents, /runtimeStartFailed[\s\S]*?, "error"\)/);
+  assert.match(runtimeEvents, /model\.fallback[\s\S]*?showNotice\(event\.message, "warning"\)/);
+  assert.match(runtimeEvents, /prompt_error[\s\S]*?showNotice\(event\.message, "error"\)/);
+  assert.match(notice, /NoticeKind = "info" \| "warning" \| "error"/);
+  assert.match(notice, /if \(kind !== "error"\)/);
+  assert.match(styles, /\.toast \{[\s\S]*?background: var\(--surface-raised\); color: var\(--text\);/);
+  assert.match(styles, /\.toast\.toast-info \{/);
+  assert.match(styles, /\.toast\.toast-warning \{/);
+  assert.match(styles, /\.toast\.toast-error \{/);
+  assert.doesNotMatch(styles, /\.toast \{[^}]*background: var\(--text\);[^}]*color: var\(--canvas\);/);
+});
+
 test("packaged Pi adapter paths are detected on macOS and Windows", () => {
   const macPath = "/Applications/PiDeck.app/Contents/Resources/app.asar/node_modules/@pideck/pi-adapter/dist";
   const windowsPath = "C:\\Program Files\\PiDeck\\resources\\app.asar\\node_modules\\@pideck\\pi-adapter\\dist";
@@ -1256,6 +1301,11 @@ test("packaged SBOM reports the lockfile-pinned Electron runtime as a framework"
 test("native window colors follow the Renderer theme contract", () => {
   assert.deepEqual(windowThemeColors("dark"), { background: "#1f1e1b", symbol: "#f3f0e8" });
   assert.deepEqual(windowThemeColors("light"), { background: "#f7f6f1", symbol: "#27251f" });
+  const main = readText(path.join(__dirname, "../src/main/index.ts"));
+  const theme = readText(path.join(__dirname, "../src/main/window-theme.ts"));
+  assert.match(theme, /transparentTitleBarOverlay = "rgba\(0, 0, 0, 0\)"/);
+  assert.match(main, /titleBarOverlay: \{ color: transparentTitleBarOverlay/);
+  assert.match(main, /setTitleBarOverlay\(\{ color: transparentTitleBarOverlay/);
 });
 
 test("each platform package target inherits the runtime whitelist", () => {

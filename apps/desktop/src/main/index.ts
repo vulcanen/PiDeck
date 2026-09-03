@@ -7,7 +7,7 @@ import path from "node:path";
 import type { AppLanguage, PiHostRequest, PiHostResponse, PiPackageResourceType, ScopedModelSelection, WindowTheme } from "@pideck/contracts";
 import { appMenuCopy, copy } from "@pideck/i18n";
 import { assertKnownProjectCwd, assertTrustedIpcSender } from "./ipc-security";
-import { windowThemeColors } from "./window-theme";
+import { transparentTitleBarOverlay, windowThemeColors } from "./window-theme";
 import { buildApplicationMenuTemplate, popupApplicationMenu } from "./application-menu";
 import { externalEditorCommandForPath } from "./external-editor";
 
@@ -295,7 +295,7 @@ function applyWindowTheme(theme: WindowTheme): void {
   if (!hostWindow || hostWindow.isDestroyed()) return;
   hostWindow.setBackgroundColor(colors.background);
   if (process.platform !== "darwin") {
-    hostWindow.setTitleBarOverlay({ color: colors.background, symbolColor: colors.symbol, height: 48 });
+    hostWindow.setTitleBarOverlay({ color: transparentTitleBarOverlay, symbolColor: colors.symbol, height: 48 });
   }
 }
 
@@ -478,6 +478,7 @@ function registerIpcHandlers() {
     }
   });
   registerTrustedIpcHandler("extension-ui:resolve", (_event, requestId: string, value: string | boolean | undefined) => requestHost("extension.ui.resolve", { requestId, value }));
+  registerTrustedIpcHandler("extension-ui:input", (_event, requestId: string, data: string) => requestHost("extension.ui.input", { requestId, data }));
   registerTrustedIpcHandler("packages:list", (_event, cwd?: string) => requestHost("packages.list", { cwd: optionalKnownProjectCwd(cwd) ?? process.cwd() }));
   registerTrustedIpcHandler("packages:install", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.install", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
   registerTrustedIpcHandler("packages:remove", (_event, source: string, local?: boolean, cwd?: string) => requestHost("packages.remove", { source, local, cwd: local ? requireKnownProjectCwd(cwd) : (optionalKnownProjectCwd(cwd) ?? process.cwd()) }));
@@ -503,7 +504,7 @@ function createWindow() {
       ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 17 } }
       : {
           titleBarStyle: "hidden" as const,
-          titleBarOverlay: { color: initialWindowColors.background, symbolColor: initialWindowColors.symbol, height: 48 },
+          titleBarOverlay: { color: transparentTitleBarOverlay, symbolColor: initialWindowColors.symbol, height: 48 },
         }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),

@@ -121,7 +121,51 @@ function ExtensionUiDialog({ language, request, onResolve }: { language: Languag
   }, [request.requestId, request.timeoutMs]);
   useDialogFocus(dialogRef, () => onResolve(request.kind === "confirm" ? false : undefined));
   const titleParts = request.title.split(/\r?\n/);
-  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="extension-ui-title"><span className="eyebrow">Pi Extension</span><h2 id="extension-ui-title">{titleParts[0]}</h2>{titleParts.slice(1).map((line, index) => <p key={index}>{line}</p>)}{request.message && <p>{request.message}</p>}{remainingMs !== undefined && <p className="extension-ui-timeout" role="status">{t.extensionUiTimeRemaining(Math.ceil(remainingMs / 1000))}</p>}{request.kind === "select" && <div className="extension-ui-options">{(request.options ?? []).map((option) => <button type="button" className="button ghost" key={option} onClick={() => onResolve(option)}>{option}</button>)}</div>}{request.kind === "confirm" && <div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(false)}>{t.reject}</button><button type="button" className="button primary" onClick={() => onResolve(true)}>{t.approve}</button></div>}{(request.kind === "input" || request.kind === "editor") && <><textarea autoFocus value={value} onChange={(event) => setValue(event.target.value)} placeholder={request.placeholder} rows={request.kind === "editor" ? 8 : 3} /><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(undefined)}>{t.cancel}</button><button type="button" className="button primary" onClick={() => onResolve(value)}>{t.submit}</button></div></>}</div></div>;
+  return <div className="dialog-backdrop"><div ref={dialogRef} className="extension-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="extension-ui-title"><span className="eyebrow">{t.extensionUiTitle}</span><h2 id="extension-ui-title">{titleParts[0]}</h2>{titleParts.slice(1).map((line, index) => <p key={index}>{line}</p>)}{request.message && <p>{request.message}</p>}{remainingMs !== undefined && <p className="extension-ui-timeout" role="status">{t.extensionUiTimeRemaining(Math.ceil(remainingMs / 1000))}</p>}{request.kind === "select" && <div className="extension-ui-options">{(request.options ?? []).map((option) => <button type="button" className="button ghost" key={option} onClick={() => onResolve(option)}>{option}</button>)}</div>}{request.kind === "confirm" && <div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(false)}>{t.reject}</button><button type="button" className="button primary" onClick={() => onResolve(true)}>{t.approve}</button></div>}{(request.kind === "input" || request.kind === "editor") && <><textarea autoFocus value={value} onChange={(event) => setValue(event.target.value)} placeholder={request.placeholder} rows={request.kind === "editor" ? 8 : 3} /><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => onResolve(undefined)}>{t.cancel}</button><button type="button" className="button primary" onClick={() => onResolve(value)}>{t.submit}</button></div></>}</div></div>;
+}
+
+function domKeyToPiInput(event: KeyboardEvent): string | undefined {
+  if (event.isComposing || event.metaKey) return undefined;
+  const specialKeys: Record<string, string> = {
+    ArrowUp: "\x1b[A",
+    ArrowDown: "\x1b[B",
+    ArrowLeft: "\x1b[D",
+    ArrowRight: "\x1b[C",
+    Enter: "\r",
+    Escape: "\x1b",
+    Backspace: "\x7f",
+    Delete: "\x1b[3~",
+    Home: "\x1b[H",
+    End: "\x1b[F",
+    PageUp: "\x1b[5~",
+    PageDown: "\x1b[6~",
+  };
+  if (specialKeys[event.key]) {
+    const sequence = specialKeys[event.key]!;
+    return event.altKey && event.key === "Enter" ? "\x1b\r" : sequence;
+  }
+  if (event.key === "Tab") return undefined;
+  if (event.ctrlKey && event.key.length === 1) {
+    const code = event.key.toLowerCase().charCodeAt(0);
+    if (code >= 97 && code <= 122) return String.fromCharCode(code - 96);
+  }
+  if (event.altKey && event.key.length === 1) return `\x1b${event.key}`;
+  return event.key.length === 1 ? event.key : undefined;
+}
+
+function ExtensionCustomUiDialog({ language, request, onInput }: { language: Language; request: ExtensionUiRequest; onInput: (data: string) => void }) {
+  const t = copy[language];
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, () => onInput("\x1b"));
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target instanceof HTMLButtonElement && (event.key === "Enter" || event.key === " ")) return;
+    const data = domKeyToPiInput(event.nativeEvent);
+    if (!data) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onInput(data);
+  };
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onInput("\x1b"); }}><div ref={dialogRef} tabIndex={-1} className="extension-ui-dialog extension-custom-ui-dialog" role="dialog" aria-modal="true" aria-labelledby="extension-custom-ui-title" onKeyDown={handleKeyDown}><div className="extension-ui-custom-header"><span className="eyebrow" id="extension-custom-ui-title">{t.extensionUiTitle}</span><button type="button" className="icon-button" onClick={() => onInput("\x1b")} aria-label={t.cancel} title={t.cancel}><Icon name="x" size={14} /></button></div><pre className="extension-ui-custom-screen" aria-live="polite">{request.lines?.join("\n") ?? t.loading}</pre></div></div>;
 }
 
 function ImageContextMenu({ language, x, y, onCopy }: { language: Language; x: number; y: number; onCopy: () => void }) {
@@ -143,4 +187,4 @@ function ProjectRemoveDialog({ language, project, busy, onCancel, onConfirm }: {
   return <div className="dialog-backdrop"><div ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="project-remove-title" aria-describedby="project-remove-description"><span className="confirm-icon"><Icon name="alert" /></span><h2 id="project-remove-title">{t.removeProjectTitle}</h2><p id="project-remove-description">{t.removeProjectBody(project.name)}</p><div><button className="button ghost" disabled={busy} onClick={onCancel}>{t.cancel}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? t.removingProject : t.removeProject}</button></div></div></div>;
 }
 
-export { ImagePreview, CommandResultDialog, RenameSessionDialog, ResumeSessionDialog, TrustDialog, ScopedModelsDialog, ExtensionUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog };
+export { ImagePreview, CommandResultDialog, RenameSessionDialog, ResumeSessionDialog, TrustDialog, ScopedModelsDialog, ExtensionUiDialog, ExtensionCustomUiDialog, ImageContextMenu, ConfirmDialog, ProjectRemoveDialog };

@@ -4,7 +4,7 @@ const NOTICE_VISIBLE_MS = 3_400;
 const NOTICE_EXIT_MS = 220;
 const NOTICE_MAX = 4;
 
-export type NoticeKind = "info" | "error";
+export type NoticeKind = "info" | "warning" | "error";
 
 interface NoticeItem {
   id: number;
@@ -30,11 +30,11 @@ export function useNotice() {
   }, []);
 
   // Errors stay until dismissed so the user can read and act on them; info
-  // notices auto-dismiss like before.
+  // and warning notices auto-dismiss after a short, predictable interval.
   const showNotice = useCallback((message: string, kind: NoticeKind = "info") => {
     const id = ++counterRef.current;
     setNotices((current) => [...current, { id, message, kind, closing: false }].slice(-NOTICE_MAX));
-    if (kind === "info") {
+    if (kind !== "error") {
       const visibleTimer = window.setTimeout(() => dismiss(id), NOTICE_VISIBLE_MS);
       timersRef.current.set(id, visibleTimer);
     }

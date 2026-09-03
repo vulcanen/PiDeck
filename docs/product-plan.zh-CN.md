@@ -204,7 +204,7 @@ PiDeck 已将 `@gotgenes/pi-permission-system@25.4.0` 作为桌面 PiHost 的 Ex
 以下仍是计划，不是当前产品承诺：
 
 - Monaco Diff、任务级基线和逐块审阅。
-- Extension 的 TUI 专属 `custom`、组件 Widget、terminal input、同步 editor component、autocomplete provider、Footer、Header 等无法跨进程传递组件实例的能力。现有可操作兼容提示不代表桌面实现；实时编辑文本、扩展快捷键执行和 Pi 主题颜色映射已接入。
+- Extension 的组件 Widget、terminal input、同步 editor component、autocomplete provider、Footer、Header 等仍无法跨进程传递组件实例；TUI `custom` 已通过有界的画面/按键桥接适配，Pi 原生 `/llama` 可在桌面端运行。实时编辑文本、扩展快捷键执行和 Pi 主题颜色映射已接入。
 
 当前兼容基线还包括：手动压缩取消后不自动执行暂存提示、`/model provider/model`、带系统保存确认的 `/export 路径`，以及通过 Pi 锁定存储持久化的重试、压缩、代理、超时、默认工具高级配置。具体行为和重启要求见[功能矩阵](pi-cli-feature-matrix.zh-CN.md#命令设置与-extension-兼容)。
 
