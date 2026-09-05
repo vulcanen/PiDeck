@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const NOTICE_VISIBLE_MS = 3_400;
+const NOTICE_VISIBLE_MS = 8_000;
 const NOTICE_EXIT_MS = 220;
 const NOTICE_MAX = 4;
 
@@ -30,7 +30,7 @@ export function useNotice() {
   }, []);
 
   // Errors stay until dismissed so the user can read and act on them; info
-  // and warning notices auto-dismiss after a short, predictable interval.
+  // and warning notices remain long enough to scan before auto-dismissing.
   const showNotice = useCallback((message: string, kind: NoticeKind = "info") => {
     const id = ++counterRef.current;
     setNotices((current) => [...current, { id, message, kind, closing: false }].slice(-NOTICE_MAX));

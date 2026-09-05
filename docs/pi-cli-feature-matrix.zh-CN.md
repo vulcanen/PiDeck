@@ -71,7 +71,7 @@
 
 当前已接入的桌面命令包括 `/settings`、`/reload`、`/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。`/trust` 打开与项目右键菜单相同的项目级状态与授权界面；`/settings` 写入 Pi 自己的用户级设置；`/reload` 调用当前 AgentSession 的真实 reload API；`/import` 会打开 Electron 原生 JSONL 选择器，不接受 Renderer 提供的路径；`/share` 仍要求本机安装并登录 `gh` CLI。
 
-`/fork`、`/clone` 与 `/tree` 暂不在 Composer 建议和快捷设置中显示，并列入待支持列表。它们需要把 Pi 的 Session Tree 分支导航、会话替换和消息时间线恢复完整映射到 PiDeck，当前手动输入会提示待支持，不会伪装成已执行。
+`/fork`、`/clone` 与 `/tree` 已进入 Composer 建议和快捷设置，共用响应式 Session Tree 浏览器。默认显示对话节点，可切换全部技术事件，支持搜索、方向键导航、活动路径/当前位置/分叉点标记，以及操作前的节点影响预览。Fork 仅允许选择 Pi 支持的用户消息，并在新会话 Composer 恢复所选文本；clone 将当前叶节点复制为新会话；tree 保持当前会话，可选生成可取消的离开分支摘要。会话替换与时间线均重新绑定到 Pi 的权威会话标识。
 
 ## 权限与审批边界
 

@@ -18,6 +18,7 @@ After building, verify at least:
 - `providers.list`
 - `sessions.create`
 - `sessions.capabilities`
+- `sessions.tree`、`sessions.fork`、`sessions.clone`、`sessions.navigateTree`（通过真实 PiHost IPC 验证会话树与会话替换）
 - `workspace.snapshot`
 
 Real model prompts produce network and Provider side effects; never run them automatically without explicit user authorization.

@@ -267,7 +267,7 @@ function requestHost(command: PiHostRequest["command"], payload?: unknown) {
       // signaled by agent_settled, not by the RPC response, so a fixed timeout
       // would only ever misreport a long-but-healthy run as failed. Leave it
       // unbounded; a crashed PiHost still rejects via the exit handler.
-      : command === "agent.prompt" || command === "input.externalEdit" || command === "sessions.compact" || command === "extension.shortcut.invoke"
+      : command === "agent.prompt" || command === "input.externalEdit" || command === "sessions.compact" || command === "sessions.navigateTree" || command === "extension.shortcut.invoke"
         ? 0
         : command.startsWith("packages.")
           ? 10 * 60_000
@@ -417,6 +417,10 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("sessions:generateTitle", (_event, taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => requestHost("sessions.generateTitle", { taskId, message, cwd: requireKnownProjectCwd(cwd), model }));
   registerTrustedIpcHandler("sessions:stats", (_event, taskId: string, cwd?: string) => requestHost("sessions.stats", { taskId, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:share", (_event, taskId: string, cwd?: string) => requestHost("sessions.share", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:tree", (_event, taskId: string, cwd?: string) => requestHost("sessions.tree", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:fork", (_event, taskId: string, entryId: string, cwd?: string) => requestHost("sessions.fork", { taskId, entryId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:clone", (_event, taskId: string, cwd?: string) => requestHost("sessions.clone", { taskId, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("sessions:navigate-tree", (_event, taskId: string, entryId: string, options?: { summarize?: boolean; customInstructions?: string }, cwd?: string) => requestHost("sessions.navigateTree", { taskId, entryId, ...options, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("sessions:changelog", () => requestHost("app.changelog"));
   registerTrustedIpcHandler("models:list", () => requestHost("models.list"));
   registerTrustedIpcHandler("models:refresh", () => requestHost("models.refresh"));

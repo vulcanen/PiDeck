@@ -5,7 +5,7 @@ import type {
 } from "@pideck/contracts";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, open, readFile, readlink } from "node:fs/promises";
+import { lstat, open, readFile, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 
 export const MAX_REVIEW_FILES = 200;
@@ -286,10 +286,16 @@ async function dirtyNameState(repoRoot: string, head: string | undefined, pathsp
 }
 
 export async function inspectWorkspaceChangeState(cwd: string, signal?: AbortSignal): Promise<WorkspaceChangeInspection> {
-  const resolvedCwd = path.resolve(cwd);
+  let resolvedCwd: string;
+  try {
+    resolvedCwd = await realpath(path.resolve(cwd));
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return inspectionFailure(error);
+  }
   let repoRoot: string;
   try {
-    repoRoot = path.resolve((await execFileBuffer("git", ["-C", resolvedCwd, "rev-parse", "--show-toplevel"], 256 * 1024, signal)).toString("utf8").trim());
+    repoRoot = await realpath(path.resolve((await execFileBuffer("git", ["-C", resolvedCwd, "rev-parse", "--show-toplevel"], 256 * 1024, signal)).toString("utf8").trim()));
   } catch (error) {
     if (signal?.aborted) throw error;
     return inspectionFailure(error);

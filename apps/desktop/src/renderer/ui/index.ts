@@ -20,3 +20,4 @@ export { PiSettings } from "./pi-settings";
 export { QuickSettingsBoundary, QuickSettings } from "./quick-settings";
 export { ApplicationMenu } from "./application-menu";
 export { SelectControl, type SelectControlOption } from "./select-control";
+export { SessionBranchDialog, type SessionBranchMode } from "./session-branch-dialog";

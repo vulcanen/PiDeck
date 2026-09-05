@@ -50,6 +50,10 @@ const bridge: PideckBridge = {
     generateTitle: (taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => ipcRenderer.invoke("sessions:generateTitle", taskId, message, cwd, model),
     stats: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:stats", taskId, cwd),
     share: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:share", taskId, cwd),
+    tree: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:tree", taskId, cwd),
+    fork: (taskId: string, entryId: string, cwd?: string) => ipcRenderer.invoke("sessions:fork", taskId, entryId, cwd),
+    clone: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:clone", taskId, cwd),
+    navigateTree: (taskId: string, entryId: string, options?: { summarize?: boolean; customInstructions?: string }, cwd?: string) => ipcRenderer.invoke("sessions:navigate-tree", taskId, entryId, options, cwd),
     changelog: () => ipcRenderer.invoke("sessions:changelog"),
   },
   models: {

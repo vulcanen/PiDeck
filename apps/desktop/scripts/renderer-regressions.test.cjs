@@ -72,7 +72,7 @@ test("manual compaction exposes Stop, aborts its controller, and preserves stage
   const main = fs.readFileSync(path.join(__dirname, "../src/main/index.ts"), "utf8");
   assert.match(controller, /onStop: \(\) => void abortActive\(\),\s*isSending: isWorking/);
   const abortHandler = host.slice(host.indexOf('case "agent.abort"'), host.indexOf('case "agent.setThinkingLevel"'));
-  assert.match(abortHandler, /session\.abortCompaction\(\);\s*await session\.abort\(\)/);
+  assert.match(abortHandler, /session\.abortCompaction\(\);\s*session\.abortBranchSummary\?\.\(\);\s*await session\.abort\(\)/);
   assert.match(host, /resumeManualCompactionQueue\(payload\.taskId, stateKey, session, completed\)/);
   assert.match(host, /trackQueuedPrompt\(stateKey, entry\.delivery, entry\.text, entry\.images, entry\.id\)/);
   assert.match(main, /command === "input.externalEdit" \|\| command === "sessions.compact"/);
@@ -402,7 +402,10 @@ test("/settings opens the Pi settings surface backed by SettingsManager", () => 
   );
 
   assert.match(controller, /command === "settings"[\s\S]*?setPiSettingsOpen\(true\)/);
-  assert.match(controller, /new Set\(\["fork", "clone", "tree"\]\)/);
+  assert.match(controller, /command === "fork"[\s\S]*?openSessionBranch\("fork"\)/);
+  assert.match(controller, /command === "clone"[\s\S]*?openSessionBranch\("clone"\)/);
+  assert.match(controller, /command === "tree"[\s\S]*?openSessionBranch\("tree"\)/);
+  assert.doesNotMatch(controller, /pendingPiCommands/);
   assert.match(capabilities, /name: "settings"/);
   assert.match(settingsUi, /window\.pideck\.settings\.get/);
   assert.match(settingsUi, /window\.pideck\.settings\.update/);
@@ -953,6 +956,16 @@ test("model menu hides its scrollbar without disabling overflow scrolling", () =
   assert.match(rendererSource("ui/composer.tsx"), /className="inline-menu model-menu"[^>]*data-conversation-scroll-island="true"/);
   assert.match(rendererSource("ui/composer.tsx"), /onWheelCapture=\{\(event\) => event\.stopPropagation\(\)\}/);
   assert.match(rendererSource("ui/message-timeline.tsx"), /\[data-conversation-scroll-island\], \.inline-menu, \.suggestion-popover, \.select-control-menu/);
+});
+
+test("session tree uses fixed branch rails instead of message-depth width", () => {
+  const styles = rendererSource("styles.css");
+  const dialog = rendererSource("ui/session-branch-dialog.tsx");
+
+  assert.match(styles, /\.session-branch-row \{[^}]*grid-template-columns:\s*52px minmax\(0, 1fr\)/);
+  assert.doesNotMatch(styles, /--tree-depth/);
+  assert.match(dialog, /SESSION_TREE_PAGE_SIZE = 160/);
+  assert.match(dialog, /visibleEntries\.map/);
 });
 
 test("renderer controls share theme tokens across surfaces and modes", () => {

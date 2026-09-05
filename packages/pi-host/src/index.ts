@@ -57,7 +57,8 @@ import {
   summarizeSessionChangeReview,
 } from "./session-change-review-store.js";
 import { sessionTranscriptMessages } from "./session-transcript.js";
-import { createTrustAwareSettingsManager, readProjectTrustStatus } from "./project-trust.js";
+import { canonicalProjectPath, createTrustAwareSettingsManager, readProjectTrustStatus } from "./project-trust.js";
+import { buildSessionTreeSnapshot } from "./session-tree.js";
 
 function execFileText(file: string, args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -1099,6 +1100,19 @@ function sdkVersion(): string | null {
   }
 }
 
+function taskSummaryFromAgentSession(session: any, cwd: string) {
+  const taskId = session.sessionId ?? session.sessionManager?.getSessionId?.();
+  const titleSource = session.sessionName || session.sessionManager?.getSessionName?.() || firstUserText(session.sessionManager);
+  return {
+    id: taskId,
+    title: deriveSessionTitle(titleSource) || session.sessionName || taskId.slice(0, 8),
+    projectId: cwd,
+    state: "idle" as const,
+    model: session.model ? `${session.model.provider}/${session.model.id}` : "No model selected",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
   const stateKey = sessionStateKey(taskId, cwd);
   const existing = agentSessions.get(stateKey);
@@ -1418,18 +1432,10 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       agentSessionRevisions.set(nextStateKey, permissionEngine.revision);
       agentSessionPackageRevisions.set(nextStateKey, packageConfigRevision);
       await bindSession(session, runtime.diagnostics as any[]);
-      const titleSource = session.sessionName || firstUserText(session.sessionManager);
       emit(previousTaskId, {
         type: "session.replaced",
         previousTaskId,
-        task: {
-          id: nextTaskId,
-          title: deriveSessionTitle(titleSource) || session.sessionName || nextTaskId.slice(0, 8),
-          projectId: nextCwd,
-          state: "idle",
-          model: session.model ? `${session.model.provider}/${session.model.id}` : "No model selected",
-          updatedAt: new Date().toISOString(),
-        },
+        task: taskSummaryFromAgentSession(session, nextCwd),
       });
       if (runtime.modelFallbackMessage) emit(nextTaskId, { type: "model.fallback", message: runtime.modelFallbackMessage });
     });
@@ -1586,7 +1592,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         const sdk = await loadPiSdk();
         const agentDir = sdk.getAgentDir?.() ?? path.join(process.env.USERPROFILE || process.env.HOME || process.cwd(), ".pi", "agent");
         if (!sdk.ProjectTrustStore) throw new Error("Pi project trust is not available in this runtime");
-        new sdk.ProjectTrustStore(agentDir).set(payload.cwd, payload.trusted);
+        new sdk.ProjectTrustStore(agentDir).set(canonicalProjectPath(payload.cwd), payload.trusted);
         invalidateResourceSessions();
         send({ id: request.id, ok: true, result: readProjectTrustStatus(sdk, payload.cwd, agentDir) });
         return;
@@ -1778,6 +1784,78 @@ async function handle(request: PiHostRequest): Promise<void> {
             extensionShortcuts: await extensionShortcuts(session),
           },
         });
+        return;
+      }
+      case "sessions.tree": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        send({ id: request.id, ok: true, result: jsonSafe(buildSessionTreeSnapshot(session)) });
+        return;
+      }
+      case "sessions.fork": {
+        const payload = request.payload as { taskId?: string; entryId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || !payload.entryId) throw new Error("taskId and entryId are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        if (session.isStreaming || session.isCompacting || agentRunReservations.has(stateKey)) throw new Error("Wait for the current agent run or compaction to finish before forking the session");
+        if (!session.getUserMessagesForForking?.().some((message: any) => message.entryId === payload.entryId)) throw new Error("The selected entry is not a user message that can be forked");
+        const runtime = agentSessionRuntimes.get(stateKey);
+        if (!runtime) throw new Error("The Pi session runtime is not available");
+        const result = await runtime.fork(payload.entryId);
+        send({
+          id: request.id,
+          ok: true,
+          result: jsonSafe({
+            cancelled: result.cancelled,
+            ...(result.cancelled ? {} : { task: taskSummaryFromAgentSession(runtime.session, runtime.cwd), editorText: result.selectedText ?? "" }),
+          }),
+        });
+        return;
+      }
+      case "sessions.clone": {
+        const payload = request.payload as { taskId?: string; cwd?: string } | undefined;
+        if (!payload?.taskId) throw new Error("taskId is required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        if (session.isStreaming || session.isCompacting || agentRunReservations.has(stateKey)) throw new Error("Wait for the current agent run or compaction to finish before cloning the session");
+        const leafId = session.sessionManager?.getLeafId?.();
+        if (!leafId) throw new Error("Cannot clone an empty session");
+        const runtime = agentSessionRuntimes.get(stateKey);
+        if (!runtime) throw new Error("The Pi session runtime is not available");
+        const result = await runtime.fork(leafId, { position: "at" });
+        send({
+          id: request.id,
+          ok: true,
+          result: jsonSafe({
+            cancelled: result.cancelled,
+            ...(result.cancelled ? {} : { task: taskSummaryFromAgentSession(runtime.session, runtime.cwd), editorText: "" }),
+          }),
+        });
+        return;
+      }
+      case "sessions.navigateTree": {
+        const payload = request.payload as { taskId?: string; entryId?: string; summarize?: boolean; customInstructions?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || !payload.entryId) throw new Error("taskId and entryId are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        if (session.isStreaming || session.isCompacting || agentRunReservations.has(stateKey)) throw new Error("Wait for the current agent run or compaction to finish before navigating the session tree");
+        if (!session.sessionManager?.getEntry?.(payload.entryId)) throw new Error("The selected session entry no longer exists");
+        if (payload.entryId === session.sessionManager?.getLeafId?.()) {
+          send({ id: request.id, ok: true, result: { cancelled: false } });
+          return;
+        }
+        const result = await session.navigateTree(payload.entryId, {
+          summarize: payload.summarize ?? false,
+          ...(payload.customInstructions?.trim() ? { customInstructions: payload.customInstructions.trim() } : {}),
+        });
+        if (!result.cancelled && !result.aborted) {
+          emit(payload.taskId, { type: "message.snapshot", replace: true, messages: jsonSafe(sessionTranscriptMessages(session, (await loadPiSdk()).sessionEntryToContextMessages)) });
+        }
+        send({ id: request.id, ok: true, result: jsonSafe({ cancelled: result.cancelled || Boolean(result.aborted), editorText: result.editorText }) });
         return;
       }
       case "sessions.compact": {
@@ -2135,6 +2213,7 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (session) {
           session.abortBash?.();
           session.abortCompaction();
+          session.abortBranchSummary?.();
           await session.abort();
         }
         send({ id: request.id, ok: true, result: undefined });

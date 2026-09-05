@@ -12,6 +12,7 @@ interface GlobalShortcutsOptions {
   commandDialogOpen: boolean;
   renameOpen: boolean;
   resumeOpen: boolean;
+  sessionBranchOpen: boolean;
   trustOpen: boolean;
   scopedModelsOpen: boolean;
   pendingDelete: boolean;
@@ -32,14 +33,14 @@ interface GlobalShortcutsOptions {
 }
 
 export function useGlobalShortcuts({
-  searchInputRef, settingsOpen, piSettingsOpen, quickSettingsOpen, packagesOpen, extensionUiOpen, commandDialogOpen, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
+  searchInputRef, settingsOpen, piSettingsOpen, quickSettingsOpen, packagesOpen, extensionUiOpen, commandDialogOpen, renameOpen, resumeOpen, sessionBranchOpen, trustOpen, scopedModelsOpen, pendingDelete, pendingProjectRemove, previewImage,
   thinkingMenuOpen, modelMenuOpen, suggestionMode, contextMenu, projectContextMenu, imageContextMenu, piKeybindings,
   onPiCommands, onTranscriptSearch, onQuickSettings, onCreateTask, onCloseMenus,
 }: GlobalShortcutsOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
-      const modalOpen = settingsOpen || piSettingsOpen || quickSettingsOpen || packagesOpen || extensionUiOpen || commandDialogOpen || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
+      const modalOpen = settingsOpen || piSettingsOpen || quickSettingsOpen || packagesOpen || extensionUiOpen || commandDialogOpen || renameOpen || resumeOpen || sessionBranchOpen || trustOpen || scopedModelsOpen || pendingDelete || pendingProjectRemove || previewImage;
       if (modalOpen) return;
       if (matchesPiKeybinding(event, piKeybindings, "tui.altScreen.search")) { event.preventDefault(); onTranscriptSearch?.(); return; }
       if (modifier && event.key.toLowerCase() === "k") { event.preventDefault(); onPiCommands(); return; }
@@ -54,5 +55,5 @@ export function useGlobalShortcuts({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandDialogOpen, contextMenu, extensionUiOpen, imageContextMenu, modelMenuOpen, onCloseMenus, onCreateTask, onPiCommands, onQuickSettings, onTranscriptSearch, packagesOpen, pendingDelete, pendingProjectRemove, piKeybindings, piSettingsOpen, previewImage, projectContextMenu, quickSettingsOpen, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
+  }, [commandDialogOpen, contextMenu, extensionUiOpen, imageContextMenu, modelMenuOpen, onCloseMenus, onCreateTask, onPiCommands, onQuickSettings, onTranscriptSearch, packagesOpen, pendingDelete, pendingProjectRemove, piKeybindings, piSettingsOpen, previewImage, projectContextMenu, quickSettingsOpen, renameOpen, resumeOpen, searchInputRef, scopedModelsOpen, sessionBranchOpen, settingsOpen, suggestionMode, thinkingMenuOpen, trustOpen]);
 }

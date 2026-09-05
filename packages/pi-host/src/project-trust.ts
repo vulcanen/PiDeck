@@ -1,9 +1,19 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { ProjectTrustStatus } from "@pideck/contracts";
 import type { PiSdk } from "@pideck/pi-adapter";
 
-function pathKey(value: string): string {
+export function canonicalProjectPath(value: string): string {
   const resolved = path.resolve(value);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function pathKey(value: string): string {
+  const resolved = canonicalProjectPath(value);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
@@ -15,7 +25,7 @@ export function readProjectTrustStatus(sdk: PiSdk, cwd: string, agentDir: string
   if (!sdk.SettingsManager || !sdk.ProjectTrustStore || !sdk.hasTrustRequiringProjectResources) {
     throw new Error("Pi project trust is not available in this runtime");
   }
-  const resolvedCwd = path.resolve(cwd);
+  const resolvedCwd = canonicalProjectPath(cwd);
   const bootstrapSettings = sdk.SettingsManager.create(resolvedCwd, agentDir, { projectTrusted: false });
   const policy = defaultPolicy(bootstrapSettings.getDefaultProjectTrust?.());
   const hasTrustRequiringResources = sdk.hasTrustRequiringProjectResources(resolvedCwd);

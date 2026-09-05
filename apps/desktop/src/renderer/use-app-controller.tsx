@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, PiKeybindings, ProjectTrustStatus, QueueDelivery, QueueMode, ProviderSummary, ScopedModelSelection, SessionCapabilities, WorkspaceSnapshot } from "@pideck/contracts";
+import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, PiKeybindings, ProjectTrustStatus, QueueDelivery, QueueMode, ProviderSummary, ScopedModelSelection, SessionCapabilities, SessionTreeSnapshot, WorkspaceSnapshot } from "@pideck/contracts";
 import { deriveSessionTitle, isDefaultSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
@@ -21,6 +21,7 @@ import { useStreamDeltas } from "./use-stream-deltas";
 import { loadQueueForCurrentTask } from "./queue-load";
 import { activatePaletteCommand, type PaletteCommand } from "./palette-command";
 import { firstPiKeybinding, matchesPiKeybinding } from "./pi-keybindings";
+import type { SessionBranchMode } from "./ui";
 
 export function useAppController() {
 
@@ -83,6 +84,11 @@ export function useAppController() {
   const [commandDialog, setCommandDialog] = useState<{ title: string; body: string } | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
+  const [sessionBranchMode, setSessionBranchMode] = useState<SessionBranchMode | null>(null);
+  const [sessionTreeSnapshot, setSessionTreeSnapshot] = useState<SessionTreeSnapshot | null>(null);
+  const [sessionTreeLoading, setSessionTreeLoading] = useState(false);
+  const [sessionTreeBusy, setSessionTreeBusy] = useState(false);
+  const [sessionTreeError, setSessionTreeError] = useState<string | null>(null);
   const [trustOpen, setTrustOpen] = useState(false);
   const [trustProject, setTrustProject] = useState<ProjectSummary | null>(null);
   const [trustStatus, setTrustStatus] = useState<ProjectTrustStatus | null>(null);
@@ -115,6 +121,7 @@ export function useAppController() {
   const optimisticTaskIdsRef = useRef<Record<string, Set<string>>>({});
   const projectLoadRequestRef = useRef(0);
   const modelSelectionRequestRef = useRef(0);
+  const sessionTreeRequestRef = useRef(0);
   const initialLoadStartedRef = useRef(false);
   const queueEditDraftRef = useRef<{ text: string; images: ImageAttachment[]; delivery: QueueDelivery } | null>(null);
   const composerHistoryRef = useRef(new ComposerHistory());
@@ -530,32 +537,29 @@ export function useAppController() {
   }, [activeTaskId, projectCwd, showNotice]);
 
   const modelOptions = useMemo(() => [...models].filter((model) => model.authConfigured).sort((a, b) => a.providerName.localeCompare(b.providerName) || a.name.localeCompare(b.name)), [models]);
-  const hiddenSlashCommandNames = useMemo(() => new Set(["fork", "clone", "tree"]), []);
   const suggestions = useMemo(() => {
     if (suggestionMode === "mention") return (workspace?.files ?? []).filter((file) => file.kind === "file" && file.path.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
-    const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const slashItems = [
-      ...visibleSlashCommands.map((item) => ({ ...item, description: item.source === "extension" ? item.description : localizeCommandDescription(item.name, item.description, language) })),
+      ...slashCommands.map((item) => ({ ...item, description: item.source === "extension" ? item.description : localizeCommandDescription(item.name, item.description, language) })),
       ...prompts.map((item) => ({ name: item.name, description: item.description ?? "" })),
       ...skills.map((item) => ({ name: item.name, description: item.description ?? "" })),
     ];
     return slashItems.filter((item) => item.name.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
-  }, [capabilities, hiddenSlashCommandNames, language, suggestionMode, suggestionQuery, workspace]);
+  }, [capabilities, language, suggestionMode, suggestionQuery, workspace]);
   const paletteCommands = useMemo(() => {
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
     const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
-    const visibleSlashCommands = slashCommands.filter((item) => !hiddenSlashCommandNames.has(item.name.toLowerCase()));
     const commands = [
-      ...visibleSlashCommands.map((item) => ({ ...item, description: item.source === "extension" ? item.description : localizeCommandDescription(item.name, item.description, language) })),
+      ...slashCommands.map((item) => ({ ...item, description: item.source === "extension" ? item.description : localizeCommandDescription(item.name, item.description, language) })),
       ...prompts.map((item) => ({ name: item.name, description: item.description ?? "", source: "prompt" })),
       ...skills.map((item) => ({ name: item.name, description: item.description ?? "", source: "skill" })),
     ];
     return Array.from(new Map(commands.map((command) => [command.name, command])).values());
-  }, [capabilities, hiddenSlashCommandNames, language]);
+  }, [capabilities, language]);
   const commandNames = useMemo(() => paletteCommands.map((command) => command.name), [paletteCommands]);
 
   useSessionData({
@@ -574,6 +578,30 @@ export function useAppController() {
     setContextUsage,
     showNotice,
   });
+
+  function handleSessionReplaced(task: TaskSummary) {
+    rememberOptimisticTask(task);
+    setProjectTasksByCwd((current) => ({
+      ...current,
+      [task.projectId]: sortTasksByUpdatedAt([task, ...(current[task.projectId] ?? []).filter((item) => item.id !== task.id)]),
+    }));
+    setExpandedProjectCwds((current) => current.includes(task.projectId) ? current : [...current, task.projectId]);
+    if (task.projectId === projectCwd) {
+      setTasks((current) => sortTasksByUpdatedAt([task, ...current.filter((item) => item.id !== task.id)]));
+      setActiveTask(task);
+      return;
+    }
+    setActiveTask(null);
+    setCapabilities(null);
+    setActiveModel(null);
+    setContextUsage(undefined);
+    setQueueState(null);
+    setWorkspace(null);
+    setProjectSwitching(true);
+    void loadProjectData(task.projectId, task.id, true, task, true)
+      .finally(() => setProjectSwitching(false));
+    void window.pideck.projects.list(task.projectId).then(setProjects).catch(() => undefined);
+  }
 
   useRuntimeEvents({
     projectCwd,
@@ -599,29 +627,7 @@ export function useAppController() {
     refreshWorkspace,
     onQueueActivity: followLatest,
     onExtensionEditorText: (text: string) => { setComposer(text); setSuggestionMode(null); },
-    onSessionReplaced: (task: TaskSummary) => {
-      rememberOptimisticTask(task);
-      setProjectTasksByCwd((current) => ({
-        ...current,
-        [task.projectId]: sortTasksByUpdatedAt([task, ...(current[task.projectId] ?? []).filter((item) => item.id !== task.id)]),
-      }));
-      setExpandedProjectCwds((current) => current.includes(task.projectId) ? current : [...current, task.projectId]);
-      if (task.projectId === projectCwd) {
-        setTasks((current) => sortTasksByUpdatedAt([task, ...current.filter((item) => item.id !== task.id)]));
-        setActiveTask(task);
-        return;
-      }
-      setActiveTask(null);
-      setCapabilities(null);
-      setActiveModel(null);
-      setContextUsage(undefined);
-      setQueueState(null);
-      setWorkspace(null);
-      setProjectSwitching(true);
-      void loadProjectData(task.projectId, task.id, true, task, true)
-        .finally(() => setProjectSwitching(false));
-      void window.pideck.projects.list(task.projectId).then(setProjects).catch(() => undefined);
-    },
+    onSessionReplaced: handleSessionReplaced,
     onChangeReviewUpdated: changeReview.applyUpdatedReview,
     onChangeReviewStatus: changeReview.applyReviewStatus,
   });
@@ -642,6 +648,15 @@ export function useAppController() {
     setTranscriptSearchResult({ current: 0, total: 0 });
   }, [activeTaskId]);
 
+  useEffect(() => {
+    sessionTreeRequestRef.current += 1;
+    setSessionBranchMode(null);
+    setSessionTreeSnapshot(null);
+    setSessionTreeError(null);
+    setSessionTreeLoading(false);
+    setSessionTreeBusy(false);
+  }, [activeTaskId]);
+
   // The timeline owns the real scroll state. Reset only the transient affordance
   // when the active task changes; the new timeline will publish its restored
   // at-end state during initialization.
@@ -657,6 +672,7 @@ export function useAppController() {
     commandDialogOpen: Boolean(commandDialog),
     renameOpen,
     resumeOpen,
+    sessionBranchOpen: Boolean(sessionBranchMode),
     trustOpen,
     scopedModelsOpen,
     pendingDelete: Boolean(pendingDelete),
@@ -818,6 +834,107 @@ export function useAppController() {
     catch (error) { showNotice(error instanceof Error ? error.message : String(error)); }
   }
 
+  async function loadSessionTree(task: TaskSummary = activeTask as TaskSummary) {
+    if (!task || !projectCwd) return;
+    const requestId = ++sessionTreeRequestRef.current;
+    setSessionTreeLoading(true);
+    setSessionTreeError(null);
+    try {
+      const tree = await window.pideck.sessions.tree(task.id, projectCwd);
+      if (requestId !== sessionTreeRequestRef.current) return;
+      setSessionTreeSnapshot(tree);
+    } catch (error) {
+      if (requestId !== sessionTreeRequestRef.current) return;
+      setSessionTreeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (requestId === sessionTreeRequestRef.current) setSessionTreeLoading(false);
+    }
+  }
+
+  function openSessionBranch(mode: SessionBranchMode) {
+    if (!activeTask) { showNotice(t.noSessions); return; }
+    if (isWorking) { showNotice(t.sessionTreeWaitUntilIdle, "warning"); return; }
+    setSessionBranchMode(mode);
+    setSessionTreeSnapshot(null);
+    setSessionTreeError(null);
+    void loadSessionTree(activeTask);
+  }
+
+  function closeSessionBranch(force = false) {
+    if (sessionTreeBusy && !force) return;
+    sessionTreeRequestRef.current += 1;
+    setSessionBranchMode(null);
+    setSessionTreeSnapshot(null);
+    setSessionTreeError(null);
+    setSessionTreeLoading(false);
+  }
+
+  async function forkSession(entryId: string) {
+    if (!activeTask || sessionTreeBusy) return;
+    const sourceTask = activeTask;
+    setSessionTreeBusy(true);
+    setSessionTreeError(null);
+    try {
+      const result = await window.pideck.sessions.fork(sourceTask.id, entryId, projectCwd);
+      if (result.cancelled) { showNotice(t.sessionTreeOperationCancelled); return; }
+      if (result.task) handleSessionReplaced(result.task);
+      setComposer(result.editorText ?? "");
+      setSuggestionMode(null);
+      closeSessionBranch(true);
+      showNotice(t.forkSessionDone);
+    } catch (error) {
+      setSessionTreeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSessionTreeBusy(false);
+    }
+  }
+
+  async function cloneSession() {
+    if (!activeTask || sessionTreeBusy) return;
+    const sourceTask = activeTask;
+    setSessionTreeBusy(true);
+    setSessionTreeError(null);
+    try {
+      const result = await window.pideck.sessions.clone(sourceTask.id, projectCwd);
+      if (result.cancelled) { showNotice(t.sessionTreeOperationCancelled); return; }
+      if (result.task) handleSessionReplaced(result.task);
+      setComposer("");
+      setSuggestionMode(null);
+      closeSessionBranch(true);
+      showNotice(t.cloneSessionDone);
+    } catch (error) {
+      setSessionTreeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSessionTreeBusy(false);
+    }
+  }
+
+  async function navigateSessionTree(entryId: string, options: { summarize: boolean; customInstructions?: string }) {
+    if (!activeTask || sessionTreeBusy) return;
+    const taskId = activeTask.id;
+    setSessionTreeBusy(true);
+    setSessionTreeError(null);
+    try {
+      const result = await window.pideck.sessions.navigateTree(taskId, entryId, options, projectCwd);
+      if (result.cancelled) { showNotice(t.sessionTreeOperationCancelled); return; }
+      if (result.editorText && !composer.trim()) setComposer(result.editorText);
+      setSuggestionMode(null);
+      setMessageReload((current) => current + 1);
+      closeSessionBranch(true);
+      showNotice(t.sessionTreeNavigated);
+    } catch (error) {
+      setSessionTreeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSessionTreeBusy(false);
+    }
+  }
+
+  async function abortSessionTreeOperation() {
+    if (!activeTask) return;
+    try { await window.pideck.agent.abort(activeTask.id, projectCwd); }
+    catch (error) { showNotice(error instanceof Error ? error.message : String(error), "error"); }
+  }
+
   async function shareSession() {
     if (!activeTask) return showNotice(t.noSessions);
     try {
@@ -935,11 +1052,12 @@ export function useAppController() {
     else if (command === "hotkeys") action = () => showHotkeys();
     else if (command === "trust") action = async () => { if (/^(?:yes|true|trust|on)$/i.test(argument)) await resolveTrust(true); else if (/^(?:no|false|untrust|off)$/i.test(argument)) await resolveTrust(false); else await openProjectTrust(); };
     else if (command === "resume") action = () => setResumeOpen(true);
+    else if (command === "fork") action = () => openSessionBranch("fork");
+    else if (command === "clone") action = () => openSessionBranch("clone");
+    else if (command === "tree") action = () => openSessionBranch("tree");
     else if (command === "quit") action = () => window.pideck.app.quit();
     else if (command === "scoped-models") action = () => { if (!activeTask) showNotice(t.noSessions); else setScopedModelsOpen(true); };
     else if (command === "settings") action = () => setPiSettingsOpen(true);
-    const knownUiCommands = new Set(["fork", "clone", "tree"]);
-    if (!action && knownUiCommands.has(command)) action = () => showNotice(t.pendingPiCommands);
     if (!action) return false;
     onAccepted?.();
     await action();
@@ -1486,7 +1604,7 @@ export function useAppController() {
     composerProps, jumpToLatest, sendPrompt, abortActive,
     paletteCommands, composer, updateComposer, compactSession, exportSession, selectPaletteCommand,
     quickSettingsOpen, quickSettingsPage, setQuickSettingsOpen, openQuickSettings,
-    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, scopedModelsOpen, setScopedModelsOpen,
+    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, sessionBranchMode, sessionTreeSnapshot, sessionTreeLoading, sessionTreeBusy, sessionTreeError, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, scopedModelsOpen, setScopedModelsOpen,
     importSession, renameSession, openProjectTrust, resolveTrust, saveScopedModels,
     notices, dismissNotice, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,
     removingProjectCwd, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen, providerFocus, previewImage,
@@ -1496,6 +1614,7 @@ export function useAppController() {
     deleteTask, removeProject, refreshModels, showNotice, resolveExtensionUi, sendExtensionUiInput, handlePermissionStatus, patchTaskUi,
     updateTaskLists, setMessageReload, openImageContextMenu,
     openProviderSettings,
+    openSessionBranch, closeSessionBranch, loadSessionTree, forkSession, cloneSession, navigateSessionTree, abortSessionTreeOperation,
   };
 }
 

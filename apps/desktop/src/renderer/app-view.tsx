@@ -61,12 +61,12 @@ export function AppView({ controller }: { controller: AppController }) {
     setMessageReload, showNotice, handlePermissionStatus, openQuickSettings, quickSettingsOpen,
     patchTaskUi, updateTaskLists, restartHost,
     pendingDelete, pendingProjectRemove, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen,
-    commandDialog, renameOpen, resumeOpen, trustOpen, scopedModelsOpen, previewImage,
+    commandDialog, renameOpen, resumeOpen, sessionBranchMode, trustOpen, scopedModelsOpen, previewImage,
   } = controller;
   const reviewDrawerOpen = changeReview.reviewOpen && reviewDrawer;
   const modalOverlayOpen = Boolean(
     quickSettingsOpen || pendingDelete || pendingProjectRemove || extensionUiRequest || packagesOpen || settingsOpen || piSettingsOpen
-    || commandDialog || renameOpen || resumeOpen || trustOpen || scopedModelsOpen || previewImage,
+    || commandDialog || renameOpen || resumeOpen || sessionBranchMode || trustOpen || scopedModelsOpen || previewImage,
   );
   return <>
   <div

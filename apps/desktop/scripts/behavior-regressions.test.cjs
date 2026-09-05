@@ -22,6 +22,7 @@ const { replaceQuotedAbsolutePaths } = require("../../../packages/pi-host/dist/e
 const { copySessionChangeReviewStore, deleteSessionChangeReviewStore, flushSessionChangeReviewStore, loadSessionChangeReviews, persistSessionChangeReview, sanitizeSessionChangeReview, sessionChangeReviewStorePath, summarizeSessionChangeReview } = require("../../../packages/pi-host/dist/session-change-review-store.js");
 const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/session-transcript.js");
 const { createTrustAwareSettingsManager, readProjectTrustStatus } = require("../../../packages/pi-host/dist/project-trust.js");
+const { buildSessionTreeSnapshot } = require("../../../packages/pi-host/dist/session-tree.js");
 const { buildChangeFileTree, parseUnifiedPatch, reviewTreeKeyboardAction, sideBySideRows } = require("../dist/renderer/change-review-model.js");
 const { ComposerHistory } = require("../dist/renderer/composer-history.js");
 const { commandModel, exportArguments } = require("../dist/renderer/pi-command-arguments.js");
@@ -145,6 +146,61 @@ test("PiHost DTO validation rejects coercible booleans and unknown fields", () =
   assert.throws(() => validatePiHostPayload("providers.setApiKey", { providerId: "openai", secret: "secret" }), /apiKey/);
   assert.doesNotThrow(() => validatePiHostPayload("settings.update", { modelThinkingLevels: { "openai/gpt-test": "max", "anthropic/claude": null } }));
   assert.throws(() => validatePiHostPayload("settings.update", { modelThinkingLevels: { "openai/gpt-test": "unsupported" } }), /modelThinkingLevels/);
+  assert.doesNotThrow(() => validatePiHostPayload("sessions.fork", { taskId: "task", entryId: "entry", cwd: "/workspace" }));
+  assert.doesNotThrow(() => validatePiHostPayload("sessions.navigateTree", { taskId: "task", entryId: "entry", summarize: true, customInstructions: "Keep decisions" }));
+  assert.throws(() => validatePiHostPayload("sessions.navigateTree", { taskId: "task", entryId: "entry", summarize: "yes" }), /summarize/);
+  assert.throws(() => validatePiHostPayload("sessions.fork", { taskId: "task", entryId: "" }), /entryId/);
+});
+
+test("session tree DTO preserves branches and exposes only serializable summaries", () => {
+  const skillInstructions = "# Review\n".repeat(100).trimEnd();
+  const user = { type: "message", id: "u1", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: `<skill name="review" location="/skills/review/SKILL.md">\n${skillInstructions}\n</skill>\n\nOriginal request` }] } };
+  const assistant = { type: "message", id: "a1", parentId: "u1", timestamp: "2026-01-01T00:01:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "First answer" }] } };
+  const branch = { type: "message", id: "u2", parentId: "u1", timestamp: "2026-01-01T00:02:00.000Z", message: { role: "user", content: "Alternative" } };
+  const entries = new Map([[user.id, user], [assistant.id, assistant], [branch.id, branch]]);
+  const snapshot = buildSessionTreeSnapshot({
+    getUserMessagesForForking: () => [{ entryId: "u1", text: "Original request" }, { entryId: "u2", text: "Alternative" }],
+    sessionManager: {
+      getLeafId: () => "a1",
+      getEntry: id => entries.get(id),
+      getTree: () => [{ entry: user, label: "Start", children: [{ entry: assistant, children: [] }, { entry: branch, children: [] }] }],
+    },
+  });
+  assert.equal(snapshot.entries.length, 3);
+  assert.deepEqual(snapshot.entries.map(entry => [entry.id, entry.depth, entry.active, entry.forkable]), [
+    ["u1", 0, true, true], ["a1", 1, true, false], ["u2", 1, false, true],
+  ]);
+  assert.equal(snapshot.entries[0].childCount, 2);
+  assert.equal(snapshot.entries[0].label, "Start");
+  assert.equal(snapshot.entries[0].preview, "/skill:review Original request");
+  assert.doesNotMatch(snapshot.entries[0].preview, /# Review/);
+  assert.doesNotThrow(() => structuredClone(snapshot));
+});
+
+test("session tree projection stays iterative and bounded for very deep conversations", () => {
+  const entries = new Map();
+  const rootEntry = { type: "message", id: "entry-0", parentId: null, message: { role: "user", content: "Start" } };
+  const root = { entry: rootEntry, children: [] };
+  entries.set(rootEntry.id, rootEntry);
+  let node = root;
+  for (let index = 1; index < 8_000; index += 1) {
+    const entry = { type: "message", id: `entry-${index}`, parentId: `entry-${index - 1}`, message: { role: index % 2 ? "assistant" : "user", content: `Message ${index}` } };
+    const child = { entry, children: [] };
+    node.children.push(child);
+    node = child;
+    entries.set(entry.id, entry);
+  }
+  const snapshot = buildSessionTreeSnapshot({
+    getUserMessagesForForking: () => [],
+    sessionManager: {
+      getLeafId: () => "entry-7999",
+      getEntry: id => entries.get(id),
+      getTree: () => [root],
+    },
+  });
+  assert.equal(snapshot.entries.length, 5_000);
+  assert.equal(snapshot.entries.at(-1).depth, 4_999);
+  assert.equal(snapshot.truncated, true);
 });
 
 test("project trust gates Pi resources and reports saved, inherited, and default decisions", () => {
@@ -180,6 +236,21 @@ test("project trust gates Pi resources and reports saved, inherited, and default
   entry = null;
   assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").source, "not-required");
   assert.equal(readProjectTrustStatus(sdk, project, "agent-dir").trusted, false);
+});
+
+test("project trust treats filesystem aliases as the same saved project", t => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-trust-alias-"));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  const canonical = fs.realpathSync(project);
+  const sdk = {
+    hasTrustRequiringProjectResources: cwd => cwd === canonical,
+    ProjectTrustStore: class { getEntry() { return { path: canonical, decision: true }; } },
+    SettingsManager: { create: () => ({ getDefaultProjectTrust: () => "ask" }) },
+  };
+  const status = readProjectTrustStatus(sdk, project, "agent-dir");
+  assert.equal(status.cwd, canonical);
+  assert.equal(status.source, "saved");
+  assert.equal(status.trusted, true);
 });
 
 test("application menu requests allow only fixed groups and finite bounded anchors", () => {
@@ -1216,7 +1287,10 @@ test("notifications preserve severity and use semantic theme surfaces", () => {
   assert.match(runtimeEvents, /model\.fallback[\s\S]*?showNotice\(event\.message, "warning"\)/);
   assert.match(runtimeEvents, /prompt_error[\s\S]*?showNotice\(event\.message, "error"\)/);
   assert.match(notice, /NoticeKind = "info" \| "warning" \| "error"/);
+  assert.match(notice, /NOTICE_VISIBLE_MS = 8_000/);
   assert.match(notice, /if \(kind !== "error"\)/);
+  assert.match(overlays, /<button className="toast-close"[\s\S]*?dismissNotice\(item\.id\)/);
+  assert.doesNotMatch(overlays, /item\.kind === "error" && <button className="toast-close"/);
   assert.match(styles, /\.toast \{[\s\S]*?background: var\(--surface-raised\); color: var\(--text\);/);
   assert.match(styles, /\.toast\.toast-info \{/);
   assert.match(styles, /\.toast\.toast-warning \{/);
@@ -1246,6 +1320,47 @@ test("Pi permission Extension is locked consistently across workspaces", () => {
   assert.equal(lock.packages["node_modules/@gotgenes/pi-permission-system"].version, "25.4.0");
   assert.equal(installed.version, "25.4.0");
   assert.equal(installed.exports["."].default, "./src/service.ts");
+});
+
+test("PiDeck repairs an escaped config newline and writes an explicit bash fallback", (t) => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-permission-config-"));
+  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
+  const configPath = path.join(agentDir, "extensions", "pi-permission-system", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify({ permission: { "*": "allow", bash: { rm: "deny" } }, yoloMode: false }, null, 2)}\\n`);
+  execFileSync(process.execPath, ["-e", `const { PermissionEngine } = require(${JSON.stringify(path.join(__dirname, "../../../packages/permission-engine/dist/index.js"))}); new PermissionEngine({ emitApproval() {}, emitEvent() {} });`], { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir } });
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  assert.deepEqual(config.permission.bash, { rm: "deny", "*": "allow" });
+  assert.deepEqual(Object.keys(config.permission.bash), ["*", "rm"]);
+});
+
+test("permission mode preserves explicit bash policy and rejects malformed config without changing mode", (t) => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-permission-config-"));
+  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
+  execFileSync(process.execPath, ["-e", `
+    const assert = require("node:assert/strict");
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const { PermissionEngine } = require(${JSON.stringify(path.join(__dirname, "../../../packages/permission-engine/dist/index.js"))});
+    const configPath = path.join(process.env.PI_CODING_AGENT_DIR, "extensions/pi-permission-system/config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    (async () => {
+      for (const bash of ["deny", { "*": "deny", "git status": "allow" }]) {
+        fs.writeFileSync(configPath, JSON.stringify({ permission: { "*": "ask", bash }, custom: true }));
+        const engine = new PermissionEngine({ emitApproval() {}, emitEvent() {} });
+        await engine.setMode("allow");
+        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        assert.deepEqual(config.permission.bash, bash);
+        assert.equal(config.custom, true);
+      }
+      fs.writeFileSync(configPath, "{malformed");
+      const engine = new PermissionEngine({ emitApproval() {}, emitEvent() {} });
+      await assert.rejects(engine.setMode("allow"));
+      assert.equal(engine.status().mode, "ask");
+      assert.equal(engine.revision, 0);
+      assert.equal(fs.readFileSync(configPath, "utf8"), "{malformed");
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `], { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir } });
 });
 
 test("project-scoped IPC rejects unknown and prefix-confusable directories", () => {

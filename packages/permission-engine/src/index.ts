@@ -56,12 +56,29 @@ function resolvePermissionExtensionPath(): string | undefined {
   return candidates.find((candidate) => existsSync(candidate));
 }
 
+function readPermissionConfig(): Record<string, unknown> {
+  const configPath = permissionConfigPath();
+  const raw = readFileSync(configPath, "utf8");
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch (error) {
+    if (!raw.endsWith("\\n")) throw error;
+    const repaired = JSON.parse(raw.slice(0, -2)) as Record<string, unknown>;
+    writeFileSync(configPath, `${JSON.stringify(repaired, null, 2)}\n`, "utf8");
+    return repaired;
+  }
+}
+
 function loadPermissionMode(): PermissionMode {
   try {
-    const config = JSON.parse(readFileSync(permissionConfigPath(), "utf8")) as { yoloMode?: boolean; permission?: Record<string, unknown> };
+    const config = readPermissionConfig() as { yoloMode?: boolean; permission?: Record<string, unknown> };
     if (config.yoloMode) return "yolo";
     const fallback = config.permission?.["*"];
-    if (fallback === "allow" || fallback === "ask" || fallback === "deny") return fallback;
+    if (fallback === "allow" || fallback === "ask" || fallback === "deny") {
+      const bash = config.permission?.bash;
+      if (fallback === "allow" && typeof bash !== "string" && (!bash || typeof bash !== "object" || !Object.hasOwn(bash, "*"))) persistPermissionMode(fallback);
+      return fallback;
+    }
   } catch {
     // Use PiDeck's safe ask default when no plugin config is available.
   }
@@ -71,9 +88,12 @@ function loadPermissionMode(): PermissionMode {
 function persistPermissionMode(mode: PermissionMode): void {
   const configPath = permissionConfigPath();
   let config: Record<string, unknown> = {};
-  try { if (existsSync(configPath)) config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>; } catch { config = {}; }
+  if (existsSync(configPath)) config = readPermissionConfig();
   const policy = mode === "yolo" ? "ask" : mode;
-  config.permission = { ...(typeof config.permission === "object" && config.permission ? config.permission : {}), "*": policy };
+  const permission = typeof config.permission === "object" && config.permission ? config.permission as Record<string, unknown> : {};
+  const bash = typeof permission.bash === "object" && permission.bash ? permission.bash as Record<string, unknown> : {};
+  const hasBashFallback = typeof permission.bash === "string" || Object.hasOwn(bash, "*");
+  config.permission = { ...permission, "*": policy, ...(!hasBashFallback ? { bash: { "*": policy, ...bash } } : {}) };
   config.yoloMode = mode === "yolo";
   mkdirSync(path.dirname(configPath), { recursive: true });
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -115,6 +135,7 @@ export class PermissionEngine {
   }
 
   async setMode(mode: PermissionMode): Promise<PermissionStatus> {
+    persistPermissionMode(mode);
     this.mode = mode;
     this.revisionValue += 1;
     if (mode === "allow" || mode === "yolo" || mode === "deny") {
@@ -127,7 +148,6 @@ export class PermissionEngine {
       this.approvalWaiters.clear();
       this.approvalTaskIds.clear();
     }
-    persistPermissionMode(mode);
     return this.status();
   }
 

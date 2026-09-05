@@ -165,7 +165,7 @@ Commands currently mapped or to be mapped to native UI:
 - `/copy`, `/changelog`, `/hotkeys`, `/resume`, `/quit` → Renderer/Electron desktop operations.
 - `/trust` → the project-scoped Pi-resource status and decision UI backed by Pi `ProjectTrustStore`; the same UI is available in the project context menu and during new-project onboarding under the default `ask` policy.
 - `/scoped-models` → Pi model scoping.
-- `/fork`, `/clone`, `/tree` → not shown yet; on the to-support list.
+- `/fork`, `/clone`, `/tree` → unified responsive Session Tree browser with search, conversation/all-event filtering, keyboard navigation, current/active/branch markers, selected-node previews, optional abortable abandoned-branch summaries, and authoritative Session replacement/timeline restoration.
 
 Commands without a stable Bridge must not be executed by the model as plain prompts, nor be faked as completed. The UI should show an actionable "not yet supported on the desktop" message.
 

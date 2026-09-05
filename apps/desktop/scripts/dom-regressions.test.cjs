@@ -5,7 +5,7 @@ const { Window } = require("happy-dom");
 
 function installDom() {
   const dom = new Window({ url: "http://localhost/" });
-  for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "Event", "KeyboardEvent", "MouseEvent", "MutationObserver", "ResizeObserver", "getComputedStyle"]) {
+  for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "Event", "KeyboardEvent", "MouseEvent", "MutationObserver", "ResizeObserver", "getComputedStyle", "CSS"]) {
     if (key in dom) global[key] = dom[key];
   }
   global.requestAnimationFrame = dom.requestAnimationFrame.bind(dom);
@@ -13,6 +13,76 @@ function installDom() {
   global.IS_REACT_ACT_ENVIRONMENT = true;
   return dom;
 }
+
+test("Session Tree dialog filters technical entries and supports keyboard node selection", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { SessionBranchDialog } = require("../dist/renderer/ui/session-branch-dialog.js");
+  const navigations = [];
+  const snapshot = {
+    leafId: "a1",
+    truncated: false,
+    entries: [
+      { id: "u1", parentId: null, type: "message", role: "user", preview: "Build it", depth: 0, childCount: 1, active: true, current: false, forkable: true },
+      { id: "tool1", parentId: "u1", type: "message", role: "tool", preview: "tool output", depth: 1, childCount: 1, active: true, current: false, forkable: false },
+      { id: "a1", parentId: "tool1", type: "message", role: "assistant", preview: "Done", depth: 2, childCount: 0, active: true, current: true, forkable: false },
+    ],
+  };
+  const root = createRoot(dom.document.body);
+  await act(async () => { root.render(React.createElement(SessionBranchDialog, {
+    language: "en", mode: "tree", snapshot, loading: false, busy: false, error: null,
+    onRetry() {}, onClose() {}, onAbort() {}, onFork() {}, onClone() {}, onNavigate: (...args) => navigations.push(args),
+  })); await flushReact(); });
+  assert.equal(dom.document.querySelectorAll('[role="treeitem"]').length, 2);
+  const current = dom.document.querySelector('[aria-current="true"]');
+  assert.equal(current.textContent.includes("Done"), true);
+  assert.equal(dom.document.querySelector(".session-branch-footer .primary").disabled, true);
+  const allEntries = [...dom.document.querySelectorAll(".session-branch-filter button")].find(button => button.textContent === "All events");
+  await act(async () => allEntries.click());
+  assert.equal(dom.document.querySelectorAll('[role="treeitem"]').length, 3);
+  const first = dom.document.querySelector('[data-session-entry-id="u1"]');
+  await act(async () => first.click());
+  assert.equal(dom.document.querySelector(".session-branch-footer .primary").disabled, false);
+  await act(async () => dom.document.querySelector(".session-branch-footer .primary").click());
+  assert.deepEqual(navigations, [["u1", { summarize: false }]]);
+  await act(async () => root.unmount());
+  dom.close();
+});
+
+test("Session Tree keeps long linear conversations left-aligned and bounds mounted rows", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { SessionBranchDialog } = require("../dist/renderer/ui/session-branch-dialog.js");
+  const entries = Array.from({ length: 401 }, (_, index) => ({
+    id: `entry-${index}`,
+    parentId: index ? `entry-${index - 1}` : null,
+    type: "message",
+    role: index % 2 ? "assistant" : "user",
+    preview: `Message ${index}`,
+    depth: index,
+    childCount: index === 400 ? 0 : 1,
+    active: true,
+    current: index === 400,
+    forkable: index % 2 === 0,
+  }));
+  const root = createRoot(dom.document.body);
+  await act(async () => { root.render(React.createElement(SessionBranchDialog, {
+    language: "en", mode: "tree", snapshot: { leafId: "entry-400", truncated: false, entries }, loading: false, busy: false, error: null,
+    onRetry() {}, onClose() {}, onAbort() {}, onFork() {}, onClone() {}, onNavigate() {},
+  })); await flushReact(); });
+  const rows = [...dom.document.querySelectorAll(".session-branch-row")];
+  assert.equal(rows.length, 81);
+  assert.equal(rows.every(row => row.dataset.treeLane === "0" && row.getAttribute("aria-level") === "1"), true);
+  assert.equal(dom.document.querySelector(".session-branch-pagination span").textContent, "321-401 / 401");
+  const previous = dom.document.querySelector(".session-branch-pagination button:first-child");
+  await act(async () => { previous.click(); await flushReact(); });
+  assert.equal(dom.document.querySelectorAll(".session-branch-row").length, 160);
+  assert.equal(dom.document.querySelector(".session-branch-pagination span").textContent, "161-320 / 401");
+  await act(async () => root.unmount());
+  dom.close();
+});
 
 async function flushReact() {
   await new Promise((resolve) => setTimeout(resolve, 0));

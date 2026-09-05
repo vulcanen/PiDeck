@@ -94,6 +94,35 @@ export interface PiSessionStats {
   contextUsage?: ContextUsage;
 }
 
+export type SessionTreeEntryRole = "user" | "assistant" | "tool" | "system" | "other";
+
+export interface SessionTreeEntrySummary {
+  id: string;
+  parentId: string | null;
+  type: string;
+  role: SessionTreeEntryRole;
+  preview: string;
+  label?: string;
+  timestamp?: string;
+  depth: number;
+  childCount: number;
+  active: boolean;
+  current: boolean;
+  forkable: boolean;
+}
+
+export interface SessionTreeSnapshot {
+  entries: SessionTreeEntrySummary[];
+  leafId: string | null;
+  truncated: boolean;
+}
+
+export interface SessionBranchResult {
+  cancelled: boolean;
+  task?: TaskSummary;
+  editorText?: string;
+}
+
 export interface SessionRunRecord {
   id: string;
   startedAt: number;
@@ -362,6 +391,10 @@ export interface PideckBridge {
     generateTitle(taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }): Promise<string | null>;
     stats(taskId: string, cwd?: string): Promise<PiSessionStats>;
     share(taskId: string, cwd?: string): Promise<{ url: string; gistUrl: string }>;
+    tree(taskId: string, cwd?: string): Promise<SessionTreeSnapshot>;
+    fork(taskId: string, entryId: string, cwd?: string): Promise<SessionBranchResult>;
+    clone(taskId: string, cwd?: string): Promise<SessionBranchResult>;
+    navigateTree(taskId: string, entryId: string, options?: { summarize?: boolean; customInstructions?: string }, cwd?: string): Promise<SessionBranchResult>;
     changelog(): Promise<string>;
   };
   models: {
@@ -463,6 +496,10 @@ export type PiHostCommand =
   | "sessions.generateTitle"
   | "sessions.stats"
   | "sessions.share"
+  | "sessions.tree"
+  | "sessions.fork"
+  | "sessions.clone"
+  | "sessions.navigateTree"
   | "models.list"
   | "models.refresh"
   | "workspace.snapshot"
@@ -557,6 +594,16 @@ const piHostPayloadSchemas = {
   "sessions.generateTitle": payload({ taskId: z.string(), message: z.string(), cwd: z.string().optional(), model: modelReference.optional() }),
   "sessions.stats": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "sessions.share": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.tree": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.fork": payload({ taskId: z.string(), entryId: z.string().min(1).max(512), cwd: z.string().optional() }),
+  "sessions.clone": payload({ taskId: z.string(), cwd: z.string().optional() }),
+  "sessions.navigateTree": payload({
+    taskId: z.string(),
+    entryId: z.string().min(1).max(512),
+    summarize: z.boolean().optional(),
+    customInstructions: z.string().max(20_000).optional(),
+    cwd: z.string().optional(),
+  }),
   "models.list": emptyPayload,
   "models.refresh": emptyPayload,
   "workspace.snapshot": payload({ cwd: z.string() }),

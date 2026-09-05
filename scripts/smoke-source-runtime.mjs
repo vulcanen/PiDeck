@@ -83,7 +83,8 @@ await new Promise((resolve, reject) => {
       if (message.event.action === "theme" && message.event.theme?.appearance === "light") extensionThemeSeen = true;
     }
     if (message?.type === "agent.event" && message.event?.type === "session.replaced") {
-      extensionReplacementSeen = Boolean(message.event.task?.id && message.event.previousTaskId === taskId);
+      const replacedExpectedTask = Boolean(message.event.task?.id && message.event.previousTaskId === taskId);
+      extensionReplacementSeen = replacedExpectedTask;
       if (message.event.task?.id) taskId = message.event.task.id;
       return;
     }
@@ -247,6 +248,22 @@ await new Promise((resolve, reject) => {
     if (message?.id === "session-change-review") {
       if (!message.ok || message.result !== null) {
         finish(new Error(`Unexpected sessions.changeReview response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "session-tree", command: "sessions.tree", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "session-tree") {
+      if (!message.ok || !Array.isArray(message.result?.entries) || !message.result?.leafId || !message.result.entries.some((entry) => entry.current && entry.active)) {
+        finish(new Error(`Unexpected sessions.tree response: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "session-clone", command: "sessions.clone", payload: { taskId, cwd: root } });
+      return;
+    }
+    if (message?.id === "session-clone") {
+      if (message.ok || !String(message.error ?? "").includes("has not been saved yet")) {
+        finish(new Error(`Unsaved sessions.clone did not return an actionable error: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "session-capabilities", command: "sessions.capabilities", payload: { taskId, cwd: root } });

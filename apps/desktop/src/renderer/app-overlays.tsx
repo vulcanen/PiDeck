@@ -1,4 +1,4 @@
-import { CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, PiSettings, ProjectRemoveDialog, ProviderSettings, QuickSettings, QuickSettingsBoundary, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, TrustDialog, copyImageToClipboard } from "./ui";
+import { CommandResultDialog, ConfirmDialog, ExtensionUiDialog, handleRovingMenuKeyDown, ImageContextMenu, ImagePreview, PackageSettings, PiSettings, ProjectRemoveDialog, ProviderSettings, QuickSettings, QuickSettingsBoundary, RenameSessionDialog, ResumeSessionDialog, ScopedModelsDialog, SessionBranchDialog, TrustDialog, copyImageToClipboard } from "./ui";
 import { Icon } from "@pideck/ui-system";
 import { ExtensionCustomUiDialog } from "./ui/dialogs";
 import type { AppController } from "./use-app-controller";
@@ -18,7 +18,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     extensionUiRequest, setExtensionUiRequest, showNotice, dismissNotice, sendExtensionUiInput,
     packagesOpen, setMessageReload, settingsOpen, setSettingsOpen, piSettingsOpen, setPiSettingsOpen, providerFocus, setProviderFocus, refreshModels,
     commandDialog, setCommandDialog, renameOpen, setRenameOpen, renameSession,
-    resumeOpen, setResumeOpen, selectTask, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, openProjectTrust, resolveTrust,
+    resumeOpen, setResumeOpen, selectTask, sessionBranchMode, sessionTreeSnapshot, sessionTreeLoading, sessionTreeBusy, sessionTreeError, closeSessionBranch, loadSessionTree, forkSession, cloneSession, navigateSessionTree, abortSessionTreeOperation, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, openProjectTrust, resolveTrust,
     scopedModelsOpen, setScopedModelsOpen, modelOptions, capabilities, saveScopedModels,
     previewImage, setPreviewImage, imageContextMenu, setImageContextMenu, openImageContextMenu,
   } = controller;
@@ -45,7 +45,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
           <span className="toast-kind" title={kindLabel} aria-hidden="true"><Icon name={item.kind === "info" ? "info" : "alert"} size={14} /></span>
           <span className="sr-only">{kindLabel}: </span>
           <span className="toast-message">{item.message}</span>
-          {item.kind === "error" && <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>}
+          <button className="toast-close" type="button" title={t.closeNotice} aria-label={t.closeNotice} onClick={() => dismissNotice(item.id)}><Icon name="x" size={12} /></button>
         </div>;
       })}
     </div>}
@@ -61,6 +61,7 @@ export function AppOverlays({ controller }: { controller: AppController }) {
     {commandDialog && <CommandResultDialog language={language} title={commandDialog.title} body={commandDialog.body} onClose={() => setCommandDialog(null)} />}
     {renameOpen && activeTask && <RenameSessionDialog language={language} currentName={activeTask.title} onSave={(name) => void renameSession(name)} onClose={() => setRenameOpen(false)} />}
     {resumeOpen && <ResumeSessionDialog language={language} project={activeProject} tasks={tasks} activeTaskId={activeTask?.id} onSelect={(task) => { if (activeProject) void selectTask(activeProject, task); setResumeOpen(false); }} onClose={() => setResumeOpen(false)} />}
+    {sessionBranchMode && <SessionBranchDialog language={language} mode={sessionBranchMode} snapshot={sessionTreeSnapshot} loading={sessionTreeLoading} busy={sessionTreeBusy} error={sessionTreeError} onRetry={() => void loadSessionTree()} onClose={() => closeSessionBranch()} onAbort={() => void abortSessionTreeOperation()} onFork={(entryId) => void forkSession(entryId)} onClone={() => void cloneSession()} onNavigate={(entryId, options) => void navigateSessionTree(entryId, options)} />}
     {trustOpen && trustProject && trustStatus && <TrustDialog language={language} project={trustProject} status={trustStatus} busy={trustBusy} onResolve={(trusted) => void resolveTrust(trusted)} onClose={() => { if (!trustBusy) setTrustOpen(false); }} />}
     {scopedModelsOpen && <ScopedModelsDialog language={language} models={modelOptions} selectedModels={capabilities?.scopedModels ?? []} onSave={(models, persist) => void saveScopedModels(models, persist)} onClose={() => setScopedModelsOpen(false)} />}
     {previewImage && <ImagePreview image={previewImage} language={language} onClose={() => setPreviewImage(null)} onContextMenuImage={openImageContextMenu} />}

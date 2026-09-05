@@ -163,7 +163,7 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 - `/copy`、`/changelog`、`/hotkeys`、`/resume`、`/quit` → Renderer/Electron 桌面操作。
 - `/trust` → 由 Pi `ProjectTrustStore` 支持的项目级 Pi 资源状态与授权界面；项目右键菜单和全局默认策略为 `ask` 时的新项目引导使用同一界面。
 - `/scoped-models` → Pi 模型范围设置。
-- `/fork`、`/clone`、`/tree` → 暂不显示，列入待支持列表。
+- `/fork`、`/clone`、`/tree` → 统一响应式 Session Tree 浏览器，支持搜索、对话/全部事件过滤、键盘导航、当前位置/活动路径/分叉点标记、节点预览、可选且可取消的离开分支摘要，以及权威会话替换与时间线恢复。
 
 没有稳定 Bridge 的命令不得让模型把它当普通 Prompt 执行，也不得伪装成已经完成。UI 应显示可操作的“当前桌面端尚未支持”提示。
 

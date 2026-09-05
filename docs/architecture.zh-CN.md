@@ -11,7 +11,9 @@
 
 `extensions.syncEditor/invokeShortcut` 对应 `extension.editor.sync/extension.shortcut.invoke`，校验项目作用域与文本长度。前者只更新按项目/会话隔离的展示镜像，不创建 Agent；后者根据生效键位重新查询 Pi `ExtensionRunner.getShortcuts()`、同步当前草稿，并用真实 `createContext()` 执行处理器。`SessionCapabilities.extensionShortcuts` 只包含 key/description。`use-extension-editor.ts` 阻止输入法组合、重复按键、并行处理器和模态窗口中的快捷键派发。实时文本是异步桌面镜像，不冒充同步跨进程 TUI 组件。
 
-PiHost `extension-theme.ts` 保留真实 SDK Theme 对象及资源主题；`pi-adapter` 对版本对应的主题模块进行能力检测。稳定 Proxy 保证 SDK 复制 UI context 后 `ui.theme` 仍随选择更新。`extension.ui.presentation` 的 `action: "theme"` 携带 `ExtensionThemeSnapshot`，只传浅深色信息与十六进制颜色；Renderer 校验固定 token 白名单后作用于当前会话的工作区及浮层。TUI factory 仍明确不支持，既不调用也不跨进程序列化。
+PiHost `extension-theme.ts` 保留真实 SDK Theme 对象及资源主题；`pi-adapter` 对版本对应的主题模块进行能力检测。稳定 Proxy 保证 SDK 复制 UI context 后 `ui.theme` 仍随选择更新。`extension.ui.presentation` 的 `action: "theme"` 携带 `ExtensionThemeSnapshot`，只传浅深色信息与十六进制颜色；Renderer 校验固定 token 白名单后作用于当前会话的工作区及浮层。交互式 `custom` factory 适配为有界的终端风格文本行和按键输入，组件实例不跨进程序列化。
+
+Session Tree 使用固定宽度分支轨道，不随每条消息递增缩进。Host 迭代投影最多 5,000 个节点并明确提示截断；Renderer 每页最多 160 行。Skill 消息只展示技能名与用户请求，不展开嵌入的指令正文。普通/警告通知保留八秒，错误通知保留到手动关闭，所有通知均有关闭按钮。权限配置仅修复有效 JSON 末尾多出的字面量 `\n`；其他解析或写入失败不会覆盖文件或改变内存中的权限模式。缺失的 bash 默认规则会显式补齐，已有命令规则与显式默认规则保持不变。
 
 手动压缩按钮依据 `isSending || isCompacting` 显示停止，先调用 `abortCompaction()` 再调用 `abort()`。取消/失败后暂存消息携带原 ID、顺序、文本和图片返回 Pi 原生队列，不自动执行。手动压缩和交互式扩展快捷键不使用普通 60 秒请求超时，但进程断开仍拒绝等待中的请求。
 
@@ -299,7 +301,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - Pi ModelRuntime → Provider 设置、模型选择和思考等级。
 - Pi slash command / Prompt / Skill catalog → Composer 建议和快捷设置中的可搜索 Pi 命令子页。
 - Pi Agent event → 流式回复、工具过程、审批和运行状态。
-- Pi Session export/compact → 快捷设置中的会话操作；Session Tree 的 `/fork`、`/clone`、`/tree` 仍列入待支持。
+- Pi Session export/compact → 快捷设置中的会话操作；Session Tree 的 `/fork`、`/clone`、`/tree` → 统一的焦点约束分支浏览器。PiHost 将 `SessionManager.getTree()` 投影为有界的可序列化摘要，标记活动路径并校验选中节点。Fork 调用 `AgentSessionRuntime.fork()`，将 Pi 返回的用户原文放入新会话的 Composer；clone 在当前叶节点复制会话；tree 在原会话内导航，可选调用 Pi 可取消的分支摘要。会话替换事件先将 Renderer 绑定到新的 Pi 会话标识，再加载时间线。
 - Pi Agent steering/follow-up queue → Composer 队列面板、投递方式、图片、提升、编辑、删除和批处理模式。自动压缩期间输入进入 Pi 原生队列；手动压缩结束时没有活跃 Agent run，因此 PiHost 使用按 Session 隔离的暂存队列，压缩后启动第一条并将其余消息按序交回 Pi。两条路径共用稳定 ID 的队列操作，预检门闩继续阻止并发直接 prompt。
 - Pi Package 管理 → 快捷设置中的 Pi packages 设置面板。
 - 顶栏齿轮 / `Ctrl/Cmd + ,` 打开精简的快捷设置首页；任务操作与 Pi 命令进入子页，`Ctrl/Cmd + K` 可直接打开 Pi 命令子页；原顶栏 Provider 和独立命令入口已移除。所有设置抽屉在 macOS 与 Windows 上均从 `--titlebar-height` 下方展开。
