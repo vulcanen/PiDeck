@@ -120,6 +120,10 @@ try {
     return { rows: rows.length, branches: rows.some((row) => Array.from(row.querySelectorAll('em')).some((item) => /2|branch|分支/i.test(item.textContent ?? ''))), current: Boolean(document.querySelector('.session-branch-row[aria-current="true"]')), skillCompact: rows.some((row) => row.innerText.includes('/skill:review Shared baseline request')), skillBodyHidden: !dialogText.includes('Fixture skill instructions'), dialog: document.querySelector('.session-branch-dialog')?.getBoundingClientRect().toJSON(), browserWidth: browser?.width ?? 0, maxRowWidth: Math.max(0, ...rows.map((row) => row.getBoundingClientRect().width)), copyLeftSpread: Math.max(0, ...copyLefts) - Math.min(...copyLefts) };
   })()`);
   if (treeState.rows < 6 || treeState.rows > 160 || !treeState.branches || !treeState.current || !treeState.skillCompact || !treeState.skillBodyHidden || treeState.maxRowWidth > treeState.browserWidth || treeState.copyLeftSpread > 1) throw new Error(`Tree browser is incomplete or unbounded: ${JSON.stringify({ treeOpenMs, ...treeState })}`);
+  await clickRow("Shared baseline reply");
+  await waitFor(`Boolean(document.querySelector('.session-branch-preview.primary'))`);
+  const detailTypography = await evaluate(`(() => { const element = document.querySelector('.session-branch-preview.primary'); const style = getComputedStyle(element); return { tag: element?.tagName, fontSize: style.fontSize, fontWeight: style.fontWeight, fontFamily: style.fontFamily }; })()`);
+  if (detailTypography.tag !== "P" || detailTypography.fontSize !== "13px" || detailTypography.fontWeight !== "400" || /Iowan|Baskerville|Songti|STSong|Noto Serif|Times New Roman/i.test(detailTypography.fontFamily)) throw new Error(`Session Tree detail typography is too heavy: ${JSON.stringify(detailTypography)}`);
   const treeScreenshot = await screenshot("session-tree-open.png");
   if (stressEntries > 160) {
     await click(".session-branch-pagination button:first-child");

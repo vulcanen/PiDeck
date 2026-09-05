@@ -974,6 +974,7 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .session-branch-detail h3 { margin: 13px 0 10px; overflow-wrap: anywhere; color: var(--text); font: 600 var(--font-size-title)/1.35 var(--font-serif); }
 .session-branch-detail p { margin: 0 0 16px; color: var(--muted); font-size: var(--font-size-label); line-height: var(--line-height-reading); }
 .session-branch-preview { white-space: pre-wrap; }
+.session-branch-preview.primary { margin-top: 13px; color: var(--text); font-size: var(--font-size-body); font-weight: 400; }
 .session-branch-detail dl { display: grid; gap: 1px; margin: 18px 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-control); }
 .session-branch-detail dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 11px; background: var(--surface-muted); font-size: var(--font-size-label); }
 .session-branch-detail dt { color: var(--muted); }

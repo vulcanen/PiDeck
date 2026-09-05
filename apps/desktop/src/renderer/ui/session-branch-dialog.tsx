@@ -202,8 +202,7 @@ export function SessionBranchDialog({
               <dl><div><dt>{t.sessionTreeActiveEntries}</dt><dd>{entries.length}</dd></div><div><dt>{t.sessionTreeDestination}</dt><dd>{t.cloneSessionNewTask}</dd></div></dl>
             </> : selected ? <>
               <div className="session-branch-detail-heading"><span>{entryKind(selected, t)}</span>{selected.current && <strong>{t.sessionTreeCurrentPoint}</strong>}</div>
-              <h3>{selected.label || selected.preview || entryKind(selected, t)}</h3>
-              {selected.label && selected.preview && <p className="session-branch-preview">{selected.preview}</p>}
+              {selected.label ? <><h3>{selected.label}</h3>{selected.preview && <p className="session-branch-preview">{selected.preview}</p>}</> : <p className="session-branch-preview primary">{selected.preview || entryKind(selected, t)}</p>}
               <dl>{formattedTime && <div><dt>{t.sessionTreeTime}</dt><dd>{formattedTime}</dd></div>}<div><dt>{t.sessionTreePath}</dt><dd>{selected.active ? t.sessionTreeActivePath : t.sessionTreeOtherBranch}</dd></div></dl>
               {mode === "fork" && <p className="session-branch-impact">{t.forkSessionImpact}</p>}
               {mode === "tree" && selected.current && <p className="session-branch-impact neutral">{t.sessionTreeAlreadyHere}</p>}
