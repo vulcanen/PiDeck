@@ -12,10 +12,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Pi-backed `/settings`, live `/reload`, and user `!command` / `!!command` desktop mappings, including persisted default model/Thinking selection.
 - Serializable Extension UI status, working indicator, Widget, title, and editor presentation, with explicit compatibility notices for TUI-only component APIs.
-- Pi 0.84.4 SDK compatibility, including explicit forwarding of Pi's Extension UI
-  prompt lifecycle events and the AgentSession queue API.
-- Updated the bundled `@gotgenes/pi-permission-system` Extension to `25.4.0` and
-  synchronized its lockfile, package notices, and runtime version regression.
+- Pi 0.85.1 SDK compatibility, including its dynamically discovered GPT-6 Astra
+  model catalog and upstream Agent, provider, and session fixes.
+- Updated the bundled `@gotgenes/pi-permission-system` Extension to `31.1.1` and
+  synchronized its lockfile, package notices, and runtime compatibility checks.
 - Pi 0.84.3 `/thinking` command mapping and optional PowerShell `defaultTools`
   compatibility on Windows.
 - Native GitHub Actions installers for macOS arm64, macOS x64, and Windows x64.
@@ -36,10 +36,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Running execution summaries are now non-expandable elapsed-time indicators; completed process details move into a bounded, internally scrollable summary.
 - Conversation typography now uses a consistent turn/continuation/section rhythm; consecutive Assistant commentary flows naturally into a low-emphasis inline live Activity view without hidden status placeholders, while retaining unique timeline identities.
 - The queued-message panel now uses a denser responsive layout, previews queued image thumbnails, and supports editing a queued message in its original Pi queue position.
-- Updated the Pi CLI / SDK compatibility baseline to 0.84.4. Pi 0.84.4 has no
-  documented breaking-change section; its new prompt events and RPC
-  `clear_queue` command are additive, while PiDeck continues to use the direct
-  AgentSession bridge for queue mutations.
+- Updated the Pi CLI / SDK compatibility baseline to 0.85.1. Its public root
+  runtime exports remain compatible with PiDeck; OpenAI Codex OAuth preflight
+  now covers fixed-loopback SDK versions through 0.85.1.
 - Packaged builds now prefer the bundled, lockfile-pinned Pi SDK unless an
   explicit `PIDECK_PI_MODULE` override is supplied.
 

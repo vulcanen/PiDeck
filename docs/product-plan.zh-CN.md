@@ -19,7 +19,7 @@ Provider API Key、OAuth、Token 刷新和 Session 文件仍由 Pi Runtime 管�
 
 ## 2. 当前实现基线
 
-Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.84.4`。PiDeck 不显式传入 `createAgentSession.tools`，因此 Pi 0.84.4 会应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时传入 `{ persist: true }`，因此模型和思考等级变更会写入 Pi 的用户级设置；`/thinking [level]` 映射到桌面思考等级选择器，`/settings` 编辑同一份 SettingsManager 默认值。Pi 0.84.4 新增的 `ui_prompt_start` / `ui_prompt_end` 会在 PiHost 边界归一化为可序列化 Agent 事件；桌面更丰富的队列编辑仍使用直接 AgentSession 队列 API，SDK 的 RPC `clear_queue` 不属于当前直连 Host 传输。
+Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.85.1`。PiDeck 不显式传入 `createAgentSession.tools`，由 Pi 应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时传入 `{ persist: true }`，因此模型和思考等级变更会写入 Pi 的用户级设置；`/thinking [level]` 映射到桌面思考等级选择器，`/settings` 编辑同一份 SettingsManager 默认值。Pi 的 `ui_prompt_start` / `ui_prompt_end` 会在 PiHost 边界归一化为可序列化 Agent 事件；桌面更丰富的队列编辑仍使用直接 AgentSession 队列 API，SDK 的 RPC `clear_queue` 不属于当前直连 Host 传输。Pi 0.85.1 的 GPT-6 Astra 目录由 `ModelRuntime` 动态读取，其 fork 压缩边界、分支摘要、会话导入、代理、Qwen 目录及 OpenAI Codex SSE 修复会直接进入现有桌面映射。
 
 项目 Pi 资源遵循 Pi 的授权模型，不把“已打开项目”等同于自动允许加载。当项目存在受保护的设置、Extension、Skill、Prompt、主题、包、系统提示或项目 `.agents/skills` 时，PiDeck 会显示项目保存、父目录继承或全局默认的最终决定，并将其传给 `SettingsManager.create(..., { projectTrusted })`。在全局策略为 `ask` 且新增项目尚无决定时打开询问界面；同一项目级入口保留在项目右键菜单中。
 
@@ -105,7 +105,7 @@ packages/
 16. 在 Pi Session 自定义 entry 中持久化每次 Agent 运行的精确起止时间，关闭并重启后保持“已处理”耗时一致。
 17. 从 Composer 摘要打开有界的 Git 单轮变更审查：响应式无障碍面板、详情延迟加载、轮次/文件/目录恢复、筛选、统一/Codex 风格拆分 diff、变更块导航，以及明确的可用性、错误与截断状态。
 18. 配置带顺序和单模型 thinking 等级的模型范围；管理单个 Pi Package 资源、检查/执行更新并刷新同一 Pi Runtime 的模型目录。
-19. 使用提示历史、Tab/Enter 资源补全、Pi 配置的外部编辑器、图片粘贴/拖放、Pi `keybindings.json` 驱动的模型/thinking/搜索/编辑器快捷键，以及可展开折叠消息的当前会话搜索。Pi 设置页明确区分自动优先级与自定义用户命令，显示当前生效来源，并可通过系统应用选择器填充命令（Windows 可执行程序、macOS 应用或可执行文件）。选中的命令仍通过 Pi 自带的锁定设置存储持久化；清除覆盖后恢复自动优先级。对于 Unix 上包含空格的已选绝对路径，PiHost 仅在一次编辑期间创建别名，以兼容 Pi 0.84.4 的外部编辑器 helper。
+19. 使用提示历史、Tab/Enter 资源补全、Pi 配置的外部编辑器、图片粘贴/拖放、Pi `keybindings.json` 驱动的模型/thinking/搜索/编辑器快捷键，以及可展开折叠消息的当前会话搜索。Pi 设置页明确区分自动优先级与自定义用户命令，显示当前生效来源，并可通过系统应用选择器填充命令（Windows 可执行程序、macOS 应用或可执行文件）。选中的命令仍通过 Pi 自带的锁定设置存储持久化；清除覆盖后恢复自动优先级。对于 Unix 上包含空格的已选绝对路径，PiHost 仅在一次编辑期间创建别名，以兼容 Pi 的外部编辑器 helper。
 20. 通过 `npm run cli -- <参数>` / `pideck-cli` 使用无头兼容入口；Print、JSON、RPC、stdin JSONL 与 Auth Print 全部直接委托给 Pi 官方 `main()`。
 
 ## 4. 消息与对话行为
@@ -181,7 +181,7 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 
 ### 7.2 `@gotgenes/pi-permission-system` 现状
 
-PiDeck 已将 `@gotgenes/pi-permission-system@25.4.0` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。该版本会将 bash 中的 `$HOME`、`${HOME}` 与 `$PWD` 路径解析后纳入 `external_directory` 检查，并改进子 Agent 审批转发、Authorizer Chain 记录以及重定向和 heredoc 内嵌套命令的权限判断。桌面端提供以下模式：
+PiDeck 已将 `@gotgenes/pi-permission-system@31.1.1` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。它保留 PiDeck 使用的扁平 `permission` / `yoloMode` 配置，同时增加读写方向路径策略、无法解析 Bash 及重定向的安全关闭处理、按 Session 定位的权限服务和动态工具面过滤。PiDeck 不使用该扩展已删除的 root service accessor，也不对 decision attribution 枚举做穷尽分支。桌面端提供以下模式：
 
 - `allow`：静默允许工具执行。
 - `ask`：执行前由 Pi 权限系统请求审批。

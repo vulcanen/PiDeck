@@ -7,8 +7,8 @@ This deterministic inventory is generated from package-lock.json.
 
 @antfu/install-pkg@1.1.0 — MIT
   https://www.npmjs.com/package/%40antfu%2Finstall-pkg/v/1.1.0
-@anthropic-ai/sdk@0.91.1 — MIT
-  https://www.npmjs.com/package/%40anthropic-ai%2Fsdk/v/0.91.1
+@anthropic-ai/sdk@0.123.0 — MIT
+  https://www.npmjs.com/package/%40anthropic-ai%2Fsdk/v/0.123.0
 @aws-crypto/crc32@5.2.0 — Apache-2.0
   https://www.npmjs.com/package/%40aws-crypto%2Fcrc32/v/5.2.0
 @aws-crypto/sha256-browser@5.2.0 — Apache-2.0
@@ -65,24 +65,74 @@ This deterministic inventory is generated from package-lock.json.
   https://www.npmjs.com/package/%40braintree%2Fsanitize-url/v/7.1.2
 @chevrotain/types@11.1.2 — Apache-2.0
   https://www.npmjs.com/package/%40chevrotain%2Ftypes/v/11.1.2
-@earendil-works/pi-agent-core@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-agent-core/v/0.84.4
-@earendil-works/pi-ai@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-ai/v/0.84.4
-@earendil-works/pi-client@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-client/v/0.84.4
-@earendil-works/pi-coding-agent@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-coding-agent/v/0.84.4
-@earendil-works/pi-protocol@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-protocol/v/0.84.4
-@earendil-works/pi-telemetry@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-telemetry/v/0.84.4
-@earendil-works/pi-tui@0.84.4 — MIT
-  https://www.npmjs.com/package/%40earendil-works%2Fpi-tui/v/0.84.4
+@earendil-works/chord@0.85.1 — MIT
+  https://www.npmjs.com/package/%40earendil-works%2Fchord/v/0.85.1
+@earendil-works/pi-agent-core@0.85.1 — MIT
+  https://www.npmjs.com/package/%40earendil-works%2Fpi-agent-core/v/0.85.1
+@earendil-works/pi-ai@0.85.1 — MIT
+  https://www.npmjs.com/package/%40earendil-works%2Fpi-ai/v/0.85.1
+@earendil-works/pi-coding-agent@0.85.1 — MIT
+  https://www.npmjs.com/package/%40earendil-works%2Fpi-coding-agent/v/0.85.1
+@earendil-works/pi-telemetry@0.85.1 — MIT
+  https://www.npmjs.com/package/%40earendil-works%2Fpi-telemetry/v/0.85.1
+@earendil-works/pi-tui@0.85.1 — MIT
+  https://www.npmjs.com/package/%40earendil-works%2Fpi-tui/v/0.85.1
+@esbuild/aix-ppc64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Faix-ppc64/v/0.28.1
+@esbuild/android-arm@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fandroid-arm/v/0.28.1
+@esbuild/android-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fandroid-arm64/v/0.28.1
+@esbuild/android-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fandroid-x64/v/0.28.1
+@esbuild/darwin-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fdarwin-arm64/v/0.28.1
+@esbuild/darwin-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fdarwin-x64/v/0.28.1
+@esbuild/freebsd-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Ffreebsd-arm64/v/0.28.1
+@esbuild/freebsd-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Ffreebsd-x64/v/0.28.1
+@esbuild/linux-arm@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-arm/v/0.28.1
+@esbuild/linux-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-arm64/v/0.28.1
+@esbuild/linux-ia32@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-ia32/v/0.28.1
+@esbuild/linux-loong64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-loong64/v/0.28.1
+@esbuild/linux-mips64el@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-mips64el/v/0.28.1
+@esbuild/linux-ppc64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-ppc64/v/0.28.1
+@esbuild/linux-riscv64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-riscv64/v/0.28.1
+@esbuild/linux-s390x@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-s390x/v/0.28.1
+@esbuild/linux-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Flinux-x64/v/0.28.1
+@esbuild/netbsd-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fnetbsd-arm64/v/0.28.1
+@esbuild/netbsd-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fnetbsd-x64/v/0.28.1
+@esbuild/openbsd-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fopenbsd-arm64/v/0.28.1
+@esbuild/openbsd-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fopenbsd-x64/v/0.28.1
+@esbuild/openharmony-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fopenharmony-arm64/v/0.28.1
+@esbuild/sunos-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fsunos-x64/v/0.28.1
+@esbuild/win32-arm64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fwin32-arm64/v/0.28.1
+@esbuild/win32-ia32@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fwin32-ia32/v/0.28.1
+@esbuild/win32-x64@0.28.1 — MIT
+  https://www.npmjs.com/package/%40esbuild%2Fwin32-x64/v/0.28.1
 @google/genai@1.52.0 — Apache-2.0
   https://www.npmjs.com/package/%40google%2Fgenai/v/1.52.0
-@gotgenes/pi-permission-system@25.4.0 — MIT
-  https://www.npmjs.com/package/%40gotgenes%2Fpi-permission-system/v/25.4.0
+@gotgenes/pi-permission-system@31.1.1 — MIT
+  https://www.npmjs.com/package/%40gotgenes%2Fpi-permission-system/v/31.1.1
 @iconify/types@2.0.0 — MIT
   https://www.npmjs.com/package/%40iconify%2Ftypes/v/2.0.0
 @iconify/utils@3.1.4 — MIT
@@ -183,6 +233,8 @@ This deterministic inventory is generated from package-lock.json.
   https://www.npmjs.com/package/%40smithy%2Futil-buffer-from/v/2.2.0
 @smithy/util-utf8@2.3.0 — Apache-2.0
   https://www.npmjs.com/package/%40smithy%2Futil-utf8/v/2.3.0
+@stablelib/base64@1.0.1 — MIT
+  https://www.npmjs.com/package/%40stablelib%2Fbase64/v/1.0.1
 @types/d3@7.4.3 — MIT
   https://www.npmjs.com/package/%40types%2Fd3/v/7.4.3
 @types/d3-array@3.2.2 — MIT
@@ -435,12 +487,16 @@ entities@6.0.1 — BSD-2-Clause
   https://www.npmjs.com/package/entities/v/6.0.1
 es-toolkit@1.52.0 — MIT
   https://www.npmjs.com/package/es-toolkit/v/1.52.0
+esbuild@0.28.1 — MIT
+  https://www.npmjs.com/package/esbuild/v/0.28.1
 escape-string-regexp@5.0.0 — MIT
   https://www.npmjs.com/package/escape-string-regexp/v/5.0.0
 estree-util-is-identifier-name@3.0.0 — MIT
   https://www.npmjs.com/package/estree-util-is-identifier-name/v/3.0.0
 extend@3.0.2 — MIT
   https://www.npmjs.com/package/extend/v/3.0.2
+fast-sha256@1.3.0 — Unlicense
+  https://www.npmjs.com/package/fast-sha256/v/1.3.0
 fast-xml-builder@1.2.0 — MIT
   https://www.npmjs.com/package/fast-xml-builder/v/1.2.0
 fast-xml-parser@5.7.3 — MIT
@@ -513,8 +569,6 @@ inline-style-parser@0.2.7 — MIT
   https://www.npmjs.com/package/inline-style-parser/v/0.2.7
 internmap@1.0.1 — ISC
   https://www.npmjs.com/package/internmap/v/1.0.1
-internmap@2.0.3 — ISC
-  https://www.npmjs.com/package/internmap/v/2.0.3
 is-alphabetical@2.0.1 — MIT
   https://www.npmjs.com/package/is-alphabetical/v/2.0.1
 is-alphanumerical@2.0.1 — MIT
@@ -743,6 +797,8 @@ signal-exit@3.0.7 — ISC
   https://www.npmjs.com/package/signal-exit/v/3.0.7
 space-separated-tokens@2.0.2 — MIT
   https://www.npmjs.com/package/space-separated-tokens/v/2.0.2
+standardwebhooks@1.1.1 — MIT
+  https://www.npmjs.com/package/standardwebhooks/v/1.1.1
 strictdom@1.0.1 — MIT
   https://www.npmjs.com/package/strictdom/v/1.0.1
 stringify-entities@4.0.4 — MIT

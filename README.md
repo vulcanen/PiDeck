@@ -10,7 +10,7 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的开源桌面界面，�
 
 > **声明**：PiDeck 是独立的非官方项目，与 Pi 官方团队无隶属关系，也未获得其背书。PiDeck 不实现第二套 Agent、模型目录、会话存储或凭据系统；相关能力仍以 Pi CLI / Pi SDK 为权威来源。
 
-当前适配基线：Pi CLI / SDK `0.84.4`，Electron `43.3.0`。
+当前适配基线：Pi CLI / SDK `0.85.1`，Electron `43.3.0`。
 
 ![PiDeck 深色主题工作台，显示项目侧栏、空会话区域和消息输入区](docs/assets/pideck-workspace.png)
 
@@ -39,7 +39,7 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的开源桌面界面，�
 
 将文件名中的 `VERSION` 替换为 Release 显示的版本号。Mac 的“关于本机”中显示“芯片”时选择 arm64；显示“处理器”时选择 Intel x64。
 
-PiDeck 安装包包含项目锁定的 Pi SDK，不要求另行安装 Pi CLI。正式安装包始终优先使用内置的 `0.84.4`；只有显式设置 `PIDECK_PI_MODULE` 才会覆盖它，用于开发或兼容性测试。
+PiDeck 安装包包含项目锁定的 Pi SDK，不要求另行安装 Pi CLI。正式安装包始终优先使用内置的 `0.85.1`；只有显式设置 `PIDECK_PI_MODULE` 才会覆盖它，用于开发或兼容性测试。
 
 ## 安装
 
@@ -102,7 +102,7 @@ Select-String -Path .\SHA256SUMS.txt -Pattern 'PiDeck-VERSION-windows-x64-setup.
 - 任务基线 Diff 审查已经接入，支持统一/拆分视图、筛选、语法高亮和变更块导航；变更块接受/撤销以及可编辑合并仍未实现。
 - Pi Print、JSON、RPC、stdin 和 Auth Print 兼容通道当前未暴露到桌面端。
 - Extension 的交互式 `custom` UI 已通过受限的终端式画面/输入桥接，文本 Widget、实时编辑器文本和主题颜色也已支持；组件 Widget、Footer/Header 实例、通用终端输入、同步编辑器组件和自动补全仍不支持跨桌面桥接。
-- 显式覆盖的外部 Pi SDK 可能改变 API 行为；非 `0.84.4` 版本不在当前兼容保证内。
+- 显式覆盖的外部 Pi SDK 可能改变 API 行为；非 `0.85.1` 版本不在当前兼容保证内。
 
 ## 从源码运行
 

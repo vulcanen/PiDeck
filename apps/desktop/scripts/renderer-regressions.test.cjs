@@ -486,7 +486,7 @@ test("OpenAI Codex OAuth prefers the loopback callback and restores the desktop 
   );
 
   assert.match(host, /OPENAI_CODEX_LOOPBACK_PORT = 1455/);
-  assert.match(host, /OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS = new Set\(\["0\.84\.2", "0\.84\.3", "0\.84\.4"\]\)/);
+  assert.match(host, /OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS = new Set\(\["0\.84\.2", "0\.84\.3", "0\.84\.4", "0\.85\.0", "0\.85\.1"\]\)/);
   assert.match(host, /await waiter\.beforeResolve\?\.\(payload\.value as string\);\s+authWaiters\.delete/);
   assert.match(host, /PIDECK_OAUTH_CALLBACK_UNAVAILABLE/);
   assert.match(host, /signal\?\.addEventListener\("abort", onAbort, \{ once: true \}\)/);

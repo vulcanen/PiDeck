@@ -206,7 +206,7 @@ function emitAuth(requestId: string, event: unknown) {
  * the value already entered in the settings form for the first prompt; any
  * additional provider-specific fields still use the normal interactive prompt.
  */
-const OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS = new Set(["0.84.2", "0.84.3", "0.84.4"]);
+const OPENAI_CODEX_FIXED_LOOPBACK_SDK_VERSIONS = new Set(["0.84.2", "0.84.3", "0.84.4", "0.85.0", "0.85.1"]);
 const OPENAI_CODEX_LOOPBACK_PORT = 1455;
 
 function isOpenAICodexBrowserMethodPrompt(providerId: string, prompt: any): boolean {
@@ -217,7 +217,7 @@ function isOpenAICodexBrowserMethodPrompt(providerId: string, prompt: any): bool
 }
 
 /**
- * Pi 0.84.2–0.84.4's OpenAI Codex browser flow silently falls back to manual URL
+ * Pi 0.84.2–0.85.1's OpenAI Codex browser flow silently falls back to manual URL
  * entry when its fixed loopback listener cannot bind. Probe the same endpoint
  * immediately before Pi starts it so the UI can keep the method picker open
  * and offer device-code login instead of presenting a mysterious stale form.

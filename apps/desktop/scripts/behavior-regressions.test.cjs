@@ -1315,10 +1315,10 @@ test("Pi permission Extension is locked consistently across workspaces", () => {
   const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
   const installed = JSON.parse(fs.readFileSync(path.join(root, "node_modules/@gotgenes/pi-permission-system/package.json"), "utf8"));
 
-  assert.equal(rootPackage.dependencies["@gotgenes/pi-permission-system"], "^25.4.0");
-  assert.equal(desktopPackage.dependencies["@gotgenes/pi-permission-system"], "^25.4.0");
-  assert.equal(lock.packages["node_modules/@gotgenes/pi-permission-system"].version, "25.4.0");
-  assert.equal(installed.version, "25.4.0");
+  assert.equal(rootPackage.dependencies["@gotgenes/pi-permission-system"], "^31.1.1");
+  assert.equal(desktopPackage.dependencies["@gotgenes/pi-permission-system"], "^31.1.1");
+  assert.equal(lock.packages["node_modules/@gotgenes/pi-permission-system"].version, "31.1.1");
+  assert.equal(installed.version, "31.1.1");
   assert.equal(installed.exports["."].default, "./src/service.ts");
 });
 
@@ -1557,7 +1557,7 @@ test("Pi model summaries omit thinking levels explicitly disabled by the SDK", (
   assert.deepEqual(summary.thinkingLevels, ["off", "low", "medium", "high", "xhigh"]);
 });
 
-test("Pi 0.84.4 applies project defaultTools including PowerShell when creating an AgentSession", async () => {
+test("Pi 0.85.1 applies project defaultTools including PowerShell when creating an AgentSession", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-pi-settings-"));
   const projectDir = path.join(root, "project");
   const agentDir = path.join(root, "agent");
