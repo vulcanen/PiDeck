@@ -1,4 +1,4 @@
-import type { PermissionMode, PermissionStatus } from "@pideck/contracts";
+import type { ExtensionAutocompleteResult, ExtensionInputDispatchResult, PermissionMode, PermissionStatus } from "@pideck/contracts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -17,6 +17,47 @@ type CustomUiComponent = {
   invalidate?(): void;
   dispose?(): void;
 };
+type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
+type ComponentFactory = (tui: any, theme: any, data?: any) => CustomUiComponent;
+type AutocompleteItem = { value: string; label: string; description?: string };
+type AutocompleteProvider = {
+  triggerCharacters?: string[];
+  getSuggestions(lines: string[], cursorLine: number, cursorCol: number, options: { signal: AbortSignal; force?: boolean }): Promise<{ items: AutocompleteItem[]; prefix: string } | null>;
+  applyCompletion(lines: string[], cursorLine: number, cursorCol: number, item: AutocompleteItem, prefix: string): { lines: string[]; cursorLine: number; cursorCol: number };
+};
+type EditorComponent = CustomUiComponent & {
+  getText(): string;
+  setText(text: string): void;
+  onSubmit?: (text: string) => void;
+  onChange?: (text: string) => void;
+  setAutocompleteProvider?: (provider: AutocompleteProvider) => void;
+};
+type ExtensionUiScope = {
+  taskId: string;
+  statuses: Map<string, string>;
+  terminalHandlers: Set<TerminalInputHandler>;
+  autocompleteProvider?: AutocompleteProvider;
+  editorFactory?: (tui: any, theme: any, keybindings: ExtensionKeybindings) => EditorComponent;
+  editor?: EditorComponent;
+  components: Map<string, CustomUiComponent>;
+  renderTimers: Map<string, ReturnType<typeof setTimeout>>;
+  footerSubscriptions: Set<() => void>;
+  disposed: boolean;
+};
+
+const COMPONENT_WIDTH = 96;
+const CURSOR_MARKER = "\x1b_pi:c\x07";
+
+function sanitizeLines(lines: unknown, maxLines: number, cursor = ""): string[] {
+  if (!Array.isArray(lines)) return [];
+  return lines.slice(0, maxLines).filter((line): line is string => typeof line === "string").map((line) => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, cursor)).slice(0, 4096));
+}
+
+function textOffset(lines: string[], line: number, column: number): number {
+  let offset = 0;
+  for (let index = 0; index < line; index += 1) offset += (lines[index]?.length ?? 0) + 1;
+  return offset + column;
+}
 
 const plainText = (text: string) => text;
 
@@ -125,6 +166,7 @@ export class PermissionEngine {
     dispose(): void;
     resolve(value: unknown): void;
   }>();
+  private readonly extensionUiScopes = new Map<string, ExtensionUiScope>();
 
   constructor(private readonly callbacks: PermissionEngineCallbacks) {}
 
@@ -186,6 +228,7 @@ export class PermissionEngine {
   /** Deny any pending approval/UI waits belonging to a session being torn down so its Promise never hangs. */
   dispose(scopeId: string): void {
     this.editorTexts.delete(scopeId);
+    this.disposeExtensionScope(scopeId);
     const prefix = `${encodeURIComponent(scopeId)}:`;
     for (const [requestId, resolve] of this.approvalWaiters.entries()) {
       if (requestId.startsWith(prefix)) {
@@ -244,10 +287,29 @@ export class PermissionEngine {
       waiter.resolve(undefined);
       this.callbacks.emitEvent(taskId, { type: "extension.ui.dismiss", requestId, reason: "aborted" });
     }
+    for (const [scopeId, scope] of this.extensionUiScopes.entries()) {
+      if (scope.taskId === taskId) this.disposeExtensionScope(scopeId);
+    }
     this.callbacks.emitEvent(taskId, { type: "extension.ui.presentation", action: "reset" });
   }
 
-  createUi(taskId: string, scopeId = taskId, themes?: { theme: any; getAllThemes(): any[]; getTheme(name: string): any; setTheme(value: any): { success: boolean; error?: string } }, extensionKeybindings?: ExtensionKeybindings) {
+  private disposeExtensionScope(scopeId: string): void {
+    const scope = this.extensionUiScopes.get(scopeId);
+    if (!scope) return;
+    scope.disposed = true;
+    for (const timer of scope.renderTimers.values()) clearTimeout(timer);
+    scope.renderTimers.clear();
+    for (const component of scope.components.values()) component.dispose?.();
+    scope.components.clear();
+    for (const unsubscribe of scope.footerSubscriptions) unsubscribe();
+    scope.footerSubscriptions.clear();
+    scope.editor?.dispose?.();
+    scope.editor = undefined;
+    scope.terminalHandlers.clear();
+    this.extensionUiScopes.delete(scopeId);
+  }
+
+  createUi(taskId: string, scopeId = taskId, themes?: { theme: any; getAllThemes(): any[]; getTheme(name: string): any; setTheme(value: any): { success: boolean; error?: string } }, extensionKeybindings?: ExtensionKeybindings, footerData?: { getGitBranch(): string | null; getProviderCount(): number; onBranchChange(callback: () => void): () => void }) {
     const request = <T extends string | boolean | undefined>(kind: "select" | "confirm" | "input" | "editor", payload: Record<string, unknown>, opts?: { signal?: AbortSignal; timeout?: number }) => new Promise<T | undefined>((resolve) => {
       const requestId = `${encodeURIComponent(scopeId)}:extension:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
       const settle = (value: string | boolean | undefined, reason?: "timeout" | "aborted") => {
@@ -292,29 +354,132 @@ export class PermissionEngine {
       unsupported.add(capability);
       this.callbacks.emitEvent(taskId, { type: "extension.ui.unsupported", capability });
     };
+    this.disposeExtensionScope(scopeId);
+    const scope: ExtensionUiScope = {
+      taskId,
+      statuses: new Map(),
+      terminalHandlers: new Set(),
+      components: new Map(),
+      renderTimers: new Map(),
+      footerSubscriptions: new Set(),
+      disposed: false,
+    };
+    this.extensionUiScopes.set(scopeId, scope);
+    const keybindings = extensionKeybindings ?? {
+      matches(data: string, keybinding: string): boolean {
+        const keys: Record<string, string[]> = {
+          "tui.select.up": ["\x1b[A", "\x1bOA"],
+          "tui.select.down": ["\x1b[B", "\x1bOB"],
+          "tui.select.confirm": ["\r", "\n"],
+          "tui.select.cancel": ["\x1b"],
+        };
+        return keys[keybinding]?.includes(data) ?? false;
+      },
+    };
+    const renderComponent = (key: string, action: "widget" | "header" | "footer" | "editor", maxLines: number, payload: Record<string, unknown> = {}) => {
+      if (scope.disposed) return;
+      const component = action === "editor" ? scope.editor : scope.components.get(key);
+      if (!component) return;
+      try {
+        present(action, { ...payload, lines: sanitizeLines(component.render(COMPONENT_WIDTH), maxLines, action === "editor" ? "▌" : "") });
+      } catch (error) {
+        present(action, { ...payload, lines: undefined });
+        this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+      }
+    };
+    const scheduleRender = (key: string, action: "widget" | "header" | "footer" | "editor", maxLines: number, payload: Record<string, unknown> = {}) => {
+      if (scope.disposed || scope.renderTimers.has(key)) return;
+      scope.renderTimers.set(key, setTimeout(() => {
+        scope.renderTimers.delete(key);
+        renderComponent(key, action, maxLines, payload);
+      }, 50));
+    };
+    const createTui = (key: string, action: "widget" | "header" | "footer" | "editor", maxLines: number, payload: Record<string, unknown> = {}) => ({
+      mode: "regular",
+      children: [] as unknown[],
+      terminal: { rows: 40, columns: COMPONENT_WIDTH, hideCursor() {}, showCursor() {}, setTitle: (title: string) => present("title", { title }) },
+      requestRender: () => scheduleRender(key, action, maxLines, payload),
+      setFocus: () => undefined,
+      addInputListener: (handler: TerminalInputHandler) => { scope.terminalHandlers.add(handler); present("terminal-input", { active: true }); },
+      removeInputListener: (handler: TerminalInputHandler) => { scope.terminalHandlers.delete(handler); present("terminal-input", { active: scope.terminalHandlers.size > 0 }); },
+      addChild: () => undefined,
+      removeChild: () => undefined,
+      clear: () => undefined,
+      start: () => undefined,
+      stop: () => undefined,
+      showOverlay: () => ({ hide() {}, show() {}, dispose() {}, isVisible: true }),
+    });
+    const replaceComponent = (key: string, action: "widget" | "header" | "footer", factory: ComponentFactory | undefined, maxLines: number, payload: Record<string, unknown> = {}) => {
+      const old = scope.components.get(key);
+      old?.dispose?.();
+      scope.components.delete(key);
+      const timer = scope.renderTimers.get(key);
+      if (timer) clearTimeout(timer);
+      scope.renderTimers.delete(key);
+      if (!factory) { present(action, { ...payload, lines: undefined }); return; }
+      try {
+        const component = factory(createTui(key, action, maxLines, payload), themes?.theme ?? desktopPlainTextTheme, action === "footer" ? {
+          getGitBranch: () => footerData?.getGitBranch() ?? null,
+          getExtensionStatuses: () => new Map(scope.statuses),
+          getAvailableProviderCount: () => footerData?.getProviderCount() ?? 0,
+          onBranchChange: (callback: () => void) => {
+            if (!footerData) return () => undefined;
+            const unsubscribe = footerData.onBranchChange(callback);
+            scope.footerSubscriptions.add(unsubscribe);
+            return () => { scope.footerSubscriptions.delete(unsubscribe); unsubscribe(); };
+          },
+        } : undefined);
+        scope.components.set(key, component);
+        renderComponent(key, action, maxLines, payload);
+      } catch (error) {
+        present(action, { ...payload, lines: undefined });
+        this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+      }
+    };
+    const editorTheme = {
+      borderColor: plainText,
+      selectList: {
+        selectedPrefix: plainText,
+        selectedText: plainText,
+        description: plainText,
+        scrollInfo: plainText,
+        noMatch: plainText,
+      },
+    };
     return {
       select: (title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }) => request<string>("select", { title, options }, opts),
       confirm: (title: string, message: string, opts?: { signal?: AbortSignal; timeout?: number }) => request<boolean>("confirm", { title, message }, opts),
       input: (title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }) => request<string>("input", { title, placeholder }, opts),
       notify: (message: string, type?: string) => this.callbacks.emitEvent(taskId, { type: "extension.ui.notify", message: stripVTControlCharacters(message), level: type ?? "info" }),
-      onTerminalInput: () => { warnUnsupported("onTerminalInput"); return () => undefined; },
-      setStatus: (key: string, text?: string) => present("status", { key, text: text === undefined ? undefined : stripVTControlCharacters(text) }),
+      onTerminalInput: (handler: TerminalInputHandler) => { scope.terminalHandlers.add(handler); present("terminal-input", { active: true }); return () => { scope.terminalHandlers.delete(handler); present("terminal-input", { active: scope.terminalHandlers.size > 0 }); }; },
+      setStatus: (key: string, text?: string) => {
+        const sanitized = text === undefined ? undefined : stripVTControlCharacters(text);
+        if (sanitized) scope.statuses.set(key, sanitized); else scope.statuses.delete(key);
+        present("status", { key, text: sanitized });
+        if (scope.components.has("footer")) scheduleRender("footer", "footer", 12);
+      },
       setWorkingMessage: (message?: string) => present("working-message", { message }),
       setWorkingVisible: (visible: boolean) => present("working-visible", { visible }),
       setWorkingIndicator: (indicator?: { frames?: string[]; intervalMs?: number }) => present("working-indicator", { indicator: indicator ? { frames: indicator.frames, interval: indicator.intervalMs } : undefined }),
       setHiddenThinkingLabel: (label?: string) => present("hidden-thinking-label", { label }),
       setWidget: (key: string, content?: string[] | (() => unknown), options?: Record<string, unknown>) => {
-        if (content !== undefined && !Array.isArray(content)) { warnUnsupported("setWidget(component)"); return; }
-        present("widget", { key, lines: content?.map(stripVTControlCharacters), placement: options?.placement });
+        const placement = options?.placement === "belowEditor" ? "belowEditor" : "aboveEditor";
+        if (content === undefined || Array.isArray(content)) {
+          replaceComponent(`widget:${key}`, "widget", undefined, 10, { key, placement });
+          present("widget", { key, lines: content === undefined ? undefined : sanitizeLines(content, 10), placement });
+          return;
+        }
+        replaceComponent(`widget:${key}`, "widget", content as ComponentFactory, 10, { key, placement });
       },
-      setFooter: () => warnUnsupported("setFooter"),
-      setHeader: () => warnUnsupported("setHeader"),
+      setFooter: (factory?: ComponentFactory) => replaceComponent("footer", "footer", factory, 12),
+      setHeader: (factory?: ComponentFactory) => replaceComponent("header", "header", factory, 12),
       setTitle: (title: string) => present("title", { title }),
       custom: <T>(factory: (tui: any, theme: any, keybindings: ExtensionKeybindings, done: (result: T) => void) => CustomUiComponent | Promise<CustomUiComponent>, _options?: Record<string, unknown>) => new Promise<T | undefined>((resolve) => {
         const requestId = `${encodeURIComponent(scopeId)}:extension-custom:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
         let component: CustomUiComponent | undefined;
         let settled = false;
         let dirty = false;
+        let renderTimer: ReturnType<typeof setTimeout> | undefined;
         const keybindings = extensionKeybindings ?? {
           matches(data: string, keybinding: string): boolean {
             const keys: Record<string, string[]> = {
@@ -338,9 +503,19 @@ export class PermissionEngine {
             settle(undefined);
           }
         };
+        const scheduleRender = () => {
+          dirty = true;
+          if (settled || renderTimer) return;
+          renderTimer = setTimeout(() => {
+            renderTimer = undefined;
+            render();
+          }, 50);
+        };
         const settle = (value: T | undefined, reason?: "aborted") => {
           if (settled) return;
           settled = true;
+          if (renderTimer) clearTimeout(renderTimer);
+          renderTimer = undefined;
           const waiter = this.customUiWaiters.get(requestId);
           if (waiter) {
             this.customUiWaiters.delete(requestId);
@@ -369,7 +544,7 @@ export class PermissionEngine {
         };
         this.customUiWaiters.set(requestId, waiter);
         const tui = {
-          requestRender: () => { dirty = true; render(); },
+          requestRender: scheduleRender,
           setFocus: () => undefined,
         };
         const done = (value: T) => settle(value);
@@ -387,7 +562,7 @@ export class PermissionEngine {
           component = next;
           for (const input of waiter.pendingInputs.splice(0)) waiter.handleInput(input);
           render();
-          if (dirty) render();
+          if (dirty) scheduleRender();
         }).catch((error: unknown) => {
           this.customUiWaiters.delete(requestId);
           component?.dispose?.();
@@ -395,17 +570,78 @@ export class PermissionEngine {
           this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
         });
       }),
-      pasteToEditor: (text: string) => { editorText = (this.editorTexts.get(scopeId) ?? editorText) + text; this.editorTexts.set(scopeId, editorText); present("editor-text", { text: editorText }); },
-      setEditorText: (text: string) => { editorText = text; this.editorTexts.set(scopeId, text); present("editor-text", { text }); },
+      pasteToEditor: (text: string) => {
+        editorText = (this.editorTexts.get(scopeId) ?? editorText) + text;
+        this.editorTexts.set(scopeId, editorText);
+        scope.editor?.setText(editorText);
+        if (scope.editor) scheduleRender("editor", "editor", 80, { active: true });
+        present("editor-text", { text: editorText });
+      },
+      setEditorText: (text: string) => {
+        editorText = text;
+        this.editorTexts.set(scopeId, text);
+        scope.editor?.setText(text);
+        if (scope.editor) scheduleRender("editor", "editor", 80, { active: true });
+        present("editor-text", { text });
+      },
       getEditorText: () => this.editorTexts.get(scopeId) ?? editorText,
-      setEditorComponent: () => warnUnsupported("setEditorComponent"),
-      getEditorComponent: () => { warnUnsupported("getEditorComponent"); return undefined; },
+      setEditorComponent: (factory?: ExtensionUiScope["editorFactory"]) => {
+        scope.editor?.dispose?.();
+        scope.editor = undefined;
+        scope.editorFactory = factory;
+        const timer = scope.renderTimers.get("editor");
+        if (timer) clearTimeout(timer);
+        scope.renderTimers.delete("editor");
+        if (!factory) { present("editor", { active: false, lines: undefined }); return; }
+        try {
+          const component = factory(createTui("editor", "editor", 80, { active: true }), editorTheme, keybindings);
+          scope.editor = component;
+          component.onChange = (text: string) => {
+            editorText = text;
+            this.editorTexts.set(scopeId, text);
+            present("editor-text", { text });
+            scheduleRender("editor", "editor", 80, { active: true });
+          };
+          component.onSubmit = (text: string) => {
+            editorText = text;
+            this.editorTexts.set(scopeId, text);
+            present("editor-submit", { text });
+          };
+          if (scope.autocompleteProvider) component.setAutocompleteProvider?.(scope.autocompleteProvider);
+          component.setText(editorText);
+          renderComponent("editor", "editor", 80, { active: true });
+        } catch (error) {
+          scope.editor = undefined;
+          scope.editorFactory = undefined;
+          present("editor", { active: false, lines: undefined });
+          this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+      getEditorComponent: () => scope.editorFactory,
       editor: async (title: string, prefill?: string) => {
         const value = await request<string>("editor", { title, prefill });
         if (typeof value === "string") { editorText = value; this.editorTexts.set(scopeId, value); }
         return value;
       },
-      addAutocompleteProvider: () => { warnUnsupported("addAutocompleteProvider"); },
+      addAutocompleteProvider: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => {
+        const fallback: AutocompleteProvider = scope.autocompleteProvider ?? {
+          async getSuggestions() { return null; },
+          applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+            const line = lines[cursorLine] ?? "";
+            const start = Math.max(0, cursorCol - prefix.length);
+            const next = [...lines];
+            next[cursorLine] = `${line.slice(0, start)}${item.value}${line.slice(cursorCol)}`;
+            return { lines: next, cursorLine, cursorCol: start + item.value.length };
+          },
+        };
+        try {
+          scope.autocompleteProvider = factory(fallback);
+          scope.editor?.setAutocompleteProvider?.(scope.autocompleteProvider);
+          present("autocomplete", { active: true, triggerCharacters: sanitizeLines(scope.autocompleteProvider.triggerCharacters, 32) });
+        } catch (error) {
+          this.callbacks.emitEvent(taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+        }
+      },
       get theme() { return themes?.theme ?? desktopPlainTextTheme; },
       getAllThemes: () => { if (themes) return themes.getAllThemes(); warnUnsupported("getAllThemes"); return []; },
       getTheme: (name: string) => { if (themes) return themes.getTheme(name); warnUnsupported("getTheme"); return undefined; },
@@ -417,6 +653,92 @@ export class PermissionEngine {
 
   syncEditorText(scopeId: string, text: string): void {
     this.editorTexts.set(scopeId, text);
+    const scope = this.extensionUiScopes.get(scopeId);
+    scope?.editor?.setText(text);
+    if (scope?.editor) {
+      const timer = scope.renderTimers.get("editor");
+      if (!timer) scope.renderTimers.set("editor", setTimeout(() => {
+        scope.renderTimers.delete("editor");
+        if (scope.disposed || !scope.editor) return;
+        try {
+          this.callbacks.emitEvent(scope.taskId, { type: "extension.ui.presentation", action: "editor", active: true, lines: sanitizeLines(scope.editor.render(COMPONENT_WIDTH), 80, "▌") });
+        } catch (error) {
+          this.callbacks.emitEvent(scope.taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+        }
+      }, 50));
+    }
+  }
+
+  dispatchInput(scopeId: string, data: string): ExtensionInputDispatchResult {
+    const scope = this.extensionUiScopes.get(scopeId);
+    if (!scope || scope.disposed) return { consume: false, data };
+    let nextData = data;
+    for (const handler of scope.terminalHandlers) {
+      try {
+        const result = handler(nextData);
+        if (typeof result?.data === "string") nextData = result.data;
+        if (result?.consume) return { consume: true, ...(nextData !== data ? { data: nextData } : {}) };
+      } catch (error) {
+        this.callbacks.emitEvent(scope.taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (scope.editor) {
+      try {
+        scope.editor.handleInput?.(nextData);
+        const text = scope.editor.getText();
+        this.editorTexts.set(scopeId, text);
+        this.callbacks.emitEvent(scope.taskId, { type: "extension.ui.presentation", action: "editor-text", text });
+        const timer = scope.renderTimers.get("editor");
+        if (!timer) scope.renderTimers.set("editor", setTimeout(() => {
+          scope.renderTimers.delete("editor");
+          if (!scope.editor || scope.disposed) return;
+          this.callbacks.emitEvent(scope.taskId, { type: "extension.ui.presentation", action: "editor", active: true, lines: sanitizeLines(scope.editor.render(COMPONENT_WIDTH), 80, "▌") });
+        }, 50));
+        return { consume: true };
+      } catch (error) {
+        this.callbacks.emitEvent(scope.taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { consume: false, ...(nextData !== data ? { data: nextData } : {}) };
+  }
+
+  async autocomplete(scopeId: string, text: string, cursor: number, force = false): Promise<ExtensionAutocompleteResult | null> {
+    const scope = this.extensionUiScopes.get(scopeId);
+    const provider = scope?.autocompleteProvider;
+    if (!scope || scope.disposed || !provider) return null;
+    const safeCursor = Math.max(0, Math.min(cursor, text.length));
+    const lines = text.split("\n");
+    const before = text.slice(0, safeCursor).split("\n");
+    const cursorLine = before.length - 1;
+    const cursorCol = before.at(-1)?.length ?? 0;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        provider.getSuggestions(lines, cursorLine, cursorCol, { signal: controller.signal, force }),
+        new Promise<null>((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(null); }, 1500); }),
+      ]);
+      if (!result || controller.signal.aborted || !Array.isArray(result.items)) return null;
+      const prefix = typeof result.prefix === "string" ? result.prefix.slice(0, 4096) : "";
+      const items = result.items.slice(0, 12).flatMap((item) => {
+        if (!item || typeof item.value !== "string" || typeof item.label !== "string") return [];
+        try {
+          const applied = provider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+          if (!applied || !Array.isArray(applied.lines)) return [];
+          const nextLines = applied.lines.map((line) => typeof line === "string" ? line : "");
+          const nextText = nextLines.join("\n").slice(0, 1_000_000);
+          const nextCursor = Math.min(nextText.length, textOffset(nextLines, Math.max(0, applied.cursorLine), Math.max(0, applied.cursorCol)));
+          return [{ value: item.value.slice(0, 4096), label: stripVTControlCharacters(item.label).slice(0, 4096), ...(typeof item.description === "string" ? { description: stripVTControlCharacters(item.description).slice(0, 4096) } : {}), text: nextText, cursor: nextCursor }];
+        } catch { return []; }
+      });
+      return items.length ? { prefix, items } : null;
+    } catch (error) {
+      if (!controller.signal.aborted) this.callbacks.emitEvent(scope.taskId, { type: "extension.error", error: error instanceof Error ? error.message : String(error) });
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+      controller.abort();
+    }
   }
 
   async beforeToolCallWithExtension(taskId: string, context: any, previous: BeforeToolCall | undefined, extensionLoaded: boolean, signal?: AbortSignal, scopeId = taskId): Promise<unknown> {

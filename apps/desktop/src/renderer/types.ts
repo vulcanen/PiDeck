@@ -1,6 +1,6 @@
 export type Theme = "light" | "dark";
 export type ThemePreference = "system" | Theme;
-export type SuggestionMode = "slash" | "mention" | null;
+export type SuggestionMode = "slash" | "mention" | "extension" | null;
 export type WorkingPhase = "thinking" | "responding" | "tool" | "compacting" | "retrying" | "summarizing" | null;
 export type RetryStatus = {
   kind: "agent" | "summarization";
@@ -35,6 +35,11 @@ export type TaskUiState = {
   toolName?: string;
   extensionStatuses?: Record<string, string>;
   extensionWidgets?: Array<{ key: string; lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
+  extensionHeader?: string[];
+  extensionFooter?: string[];
+  extensionEditor?: { active: boolean; lines: string[] };
+  extensionTerminalInputActive?: boolean;
+  extensionAutocomplete?: { active: boolean; triggerCharacters: string[] };
   extensionWorkingMessage?: string;
   extensionWorkingVisible?: boolean;
   extensionWorkingFrames?: string[];

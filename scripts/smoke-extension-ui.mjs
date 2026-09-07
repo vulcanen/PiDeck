@@ -88,6 +88,7 @@ async function withTimeout(promise, label, milliseconds = 60_000) {
 
 try {
   await withTimeout(connected, "PiHost startup", 30_000);
+  await request("projects.setTrust", { cwd: projectDir, trusted: true });
   const created = await request("sessions.create", { cwd: projectDir, name: "Extension UI smoke" });
   taskId = created.id;
   const capabilities = await request("sessions.capabilities", { taskId, cwd: projectDir });

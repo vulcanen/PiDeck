@@ -302,6 +302,25 @@ export interface ExtensionUiRequest {
   lines?: string[];
 }
 
+export interface ExtensionInputDispatchResult {
+  consume: boolean;
+  data?: string;
+}
+
+export interface ExtensionAutocompleteItem {
+  value: string;
+  label: string;
+  description?: string;
+  /** Complete editor state produced by Pi's registered provider. */
+  text: string;
+  cursor: number;
+}
+
+export interface ExtensionAutocompleteResult {
+  prefix: string;
+  items: ExtensionAutocompleteItem[];
+}
+
 export interface PiPackageSummary {
   source: string;
   scope: "user" | "project";
@@ -442,6 +461,8 @@ export interface PideckBridge {
     invokeShortcut(taskId: string, key: string, text: string, cwd?: string): Promise<void>;
     resolveUi(requestId: string, value: string | boolean | undefined): Promise<void>;
     sendUiInput(requestId: string, data: string): Promise<void>;
+    dispatchInput(taskId: string, data: string, cwd?: string): Promise<ExtensionInputDispatchResult>;
+    autocomplete(taskId: string, text: string, cursor: number, force?: boolean, cwd?: string): Promise<ExtensionAutocompleteResult | null>;
   };
   packages: {
     list(cwd?: string): Promise<PiPackageSummary[]>;
@@ -530,6 +551,8 @@ export type PiHostCommand =
   | "extension.shortcut.invoke"
   | "extension.ui.resolve"
   | "extension.ui.input"
+  | "extension.input.dispatch"
+  | "extension.autocomplete"
   | "packages.list"
   | "packages.install"
   | "packages.remove"
@@ -644,6 +667,8 @@ const piHostPayloadSchemas = {
   "extension.shortcut.invoke": payload({ taskId: z.string(), key: z.string().min(1).max(100), text: z.string().max(1000000), cwd: z.string().optional() }),
   "extension.ui.resolve": payload({ requestId: z.string(), value: z.union([z.string(), z.boolean()]).optional() }),
   "extension.ui.input": payload({ requestId: z.string(), data: z.string().max(1000) }),
+  "extension.input.dispatch": payload({ taskId: z.string(), data: z.string().max(1000000), cwd: z.string().optional() }),
+  "extension.autocomplete": payload({ taskId: z.string(), text: z.string().max(1000000), cursor: z.number().int().min(0).max(1000000), force: z.boolean().optional(), cwd: z.string().optional() }),
   "packages.list": payload({ cwd: z.string().optional() }),
   "packages.install": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),
   "packages.remove": payload({ source: z.string(), local: z.boolean().optional(), cwd: z.string().optional() }),

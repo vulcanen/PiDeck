@@ -3,15 +3,15 @@ import type { SessionCapabilities } from "@pideck/contracts";
 import { matchesPiKeybinding } from "./pi-keybindings";
 
 /** Mirror presentation state only; Pi keeps all extension handlers and contexts. */
-export function useExtensionEditor({ taskId, cwd, text, shortcuts, enabled, onError }: {
+export function useExtensionEditor({ taskId, cwd, text, shortcuts, enabled, syncEnabled = true, onError }: {
   taskId?: string; cwd: string; text: string; shortcuts: SessionCapabilities["extensionShortcuts"];
-  enabled: boolean; onError: (message: string) => void;
+  enabled: boolean; syncEnabled?: boolean; onError: (message: string) => void;
 }) {
   const running = useRef(false);
   useEffect(() => {
-    if (!taskId || !enabled || !window.pideck.extensions.syncEditor) return;
+    if (!taskId || !enabled || !syncEnabled || !window.pideck.extensions.syncEditor) return;
     void window.pideck.extensions.syncEditor(taskId, text, cwd).catch((error) => onError(String(error)));
-  }, [taskId, cwd, text, enabled, onError]);
+  }, [taskId, cwd, text, enabled, syncEnabled, onError]);
 
   useEffect(() => {
     if (!taskId || !enabled || !shortcuts?.length) return;

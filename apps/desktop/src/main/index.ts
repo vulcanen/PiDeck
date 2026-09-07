@@ -428,6 +428,8 @@ function registerIpcHandlers() {
   registerTrustedIpcHandler("input:keybindings", (_event, cwd?: string) => requestHost("input.keybindings", { cwd: optionalKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("extensions:sync-editor", (_event, taskId: string, text: string, cwd?: string) => requestHost("extension.editor.sync", { taskId, text, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("extensions:invoke-shortcut", (_event, taskId: string, key: string, text: string, cwd?: string) => requestHost("extension.shortcut.invoke", { taskId, key, text, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("extensions:dispatch-input", (_event, taskId: string, data: string, cwd?: string) => requestHost("extension.input.dispatch", { taskId, data, cwd: requireKnownProjectCwd(cwd) }));
+  registerTrustedIpcHandler("extensions:autocomplete", (_event, taskId: string, text: string, cursor: number, force?: boolean, cwd?: string) => requestHost("extension.autocomplete", { taskId, text, cursor, force, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("input:external-edit", (_event, content: string, cwd?: string) => requestHost("input.externalEdit", { content, cwd: requireKnownProjectCwd(cwd) }));
   registerTrustedIpcHandler("providers:list", () => requestHost("providers.list"));
   registerTrustedIpcHandler("providers:login", async (_event, providerId: string, method: "api-key" | "oauth", secret?: string, authOperationId?: string) => {

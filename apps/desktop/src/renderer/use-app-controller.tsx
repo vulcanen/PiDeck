@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionUiRequest, ModelSummary, PermissionStatus, PiKeybindings, ProjectTrustStatus, QueueDelivery, QueueMode, ProviderSummary, ScopedModelSelection, SessionCapabilities, SessionTreeSnapshot, WorkspaceSnapshot } from "@pideck/contracts";
+import type { AgentQueuedMessage, AgentQueueState, ContextUsage, ExtensionAutocompleteItem, ExtensionUiRequest, ModelSummary, PermissionStatus, PiKeybindings, ProjectTrustStatus, QueueDelivery, QueueMode, ProviderSummary, ScopedModelSelection, SessionCapabilities, SessionTreeSnapshot, WorkspaceSnapshot } from "@pideck/contracts";
 import { deriveSessionTitle, isDefaultSessionTitle, type ProjectSummary, type TaskSummary } from "@pideck/domain";
 import { copy, localizeCommandDescription } from "@pideck/i18n";
 import { fallbackSlashCommands } from "./pi-capabilities";
@@ -20,7 +20,7 @@ import { usePreferences } from "./use-preferences";
 import { useStreamDeltas } from "./use-stream-deltas";
 import { loadQueueForCurrentTask } from "./queue-load";
 import { activatePaletteCommand, type PaletteCommand } from "./palette-command";
-import { firstPiKeybinding, matchesPiKeybinding } from "./pi-keybindings";
+import { domKeyToTerminalInput, firstPiKeybinding, matchesPiKeybinding } from "./pi-keybindings";
 import type { SessionBranchMode } from "./ui";
 
 export function useAppController() {
@@ -101,6 +101,11 @@ export function useAppController() {
   const [suggestionMode, setSuggestionMode] = useState<SuggestionMode>(null);
   const [suggestionQuery, setSuggestionQuery] = useState("");
   const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [extensionSuggestions, setExtensionSuggestions] = useState<ExtensionAutocompleteItem[]>([]);
+  const extensionAutocompleteRequestRef = useRef(0);
+  const extensionAutocompleteTimerRef = useRef<number | undefined>(undefined);
+  const extensionInputQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const dispatchExtensionInputRef = useRef<(data: string, element?: HTMLTextAreaElement) => void>(() => undefined);
   const [runtimeStatus, setRuntimeStatus] = useState<"connected" | "starting" | "disconnected">("starting");
   const [contextMenu, setContextMenu] = useState<{ task: TaskSummary; x: number; y: number } | null>(null);
   const [projectContextMenu, setProjectContextMenu] = useState<{ project: ProjectSummary; x: number; y: number } | null>(null);
@@ -126,6 +131,7 @@ export function useAppController() {
   const queueEditDraftRef = useRef<{ text: string; images: ImageAttachment[]; delivery: QueueDelivery } | null>(null);
   const composerHistoryRef = useRef(new ComposerHistory());
   const handlePreviewImage = useCallback((image: PreviewImage) => setPreviewImage(image), []);
+  const handleCustomEditorPaste = useCallback((text: string) => dispatchExtensionInputRef.current(`\x1b[200~${text.slice(0, 999_988)}\x1b[201~`), []);
   const openImageContextMenu = useCallback((event: React.MouseEvent, image: PreviewImage) => {
     event.preventDefault();
     setContextMenu(null);
@@ -142,6 +148,12 @@ export function useAppController() {
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
   const shortcut = (key: string) => `${isMac ? "⌘" : "Ctrl+"}${key}`;
   const activeTaskUi = activeTask ? taskUi[activeTask.id] : undefined;
+  useEffect(() => {
+    extensionAutocompleteRequestRef.current += 1;
+    if (extensionAutocompleteTimerRef.current !== undefined) window.clearTimeout(extensionAutocompleteTimerRef.current);
+    setExtensionSuggestions([]);
+    setSuggestionMode((current) => current === "extension" ? null : current);
+  }, [activeTask?.id, activeTaskUi?.extensionAutocomplete?.active]);
   useSentImagesCache(sentImagesByTask, setSentImagesByTask);
   const isSending = Boolean(activeTaskUi?.isSending);
   const isCompacting = Boolean(activeTaskUi?.isCompacting);
@@ -538,6 +550,7 @@ export function useAppController() {
 
   const modelOptions = useMemo(() => [...models].filter((model) => model.authConfigured).sort((a, b) => a.providerName.localeCompare(b.providerName) || a.name.localeCompare(b.name)), [models]);
   const suggestions = useMemo(() => {
+    if (suggestionMode === "extension") return extensionSuggestions;
     if (suggestionMode === "mention") return (workspace?.files ?? []).filter((file) => file.kind === "file" && file.path.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
@@ -548,7 +561,7 @@ export function useAppController() {
       ...skills.map((item) => ({ name: item.name, description: item.description ?? "" })),
     ];
     return slashItems.filter((item) => item.name.toLowerCase().includes(suggestionQuery.toLowerCase())).slice(0, 12);
-  }, [capabilities, language, suggestionMode, suggestionQuery, workspace]);
+  }, [capabilities, extensionSuggestions, language, suggestionMode, suggestionQuery, workspace]);
   const paletteCommands = useMemo(() => {
     const slashCommands = Array.isArray(capabilities?.slashCommands) && capabilities.slashCommands.length ? capabilities.slashCommands : fallbackSlashCommands;
     const prompts = Array.isArray(capabilities?.prompts) ? capabilities.prompts : [];
@@ -627,6 +640,7 @@ export function useAppController() {
     refreshWorkspace,
     onQueueActivity: followLatest,
     onExtensionEditorText: (text: string) => { setComposer(text); setSuggestionMode(null); },
+    onExtensionEditorSubmit: (text: string) => { setComposer(text); setSuggestionMode(null); void sendPrompt(text); },
     onSessionReplaced: handleSessionReplaced,
     onChangeReviewUpdated: changeReview.applyUpdatedReview,
     onChangeReviewStatus: changeReview.applyReviewStatus,
@@ -693,7 +707,24 @@ export function useAppController() {
   });
 
   useExtensionEditor({ taskId: activeTaskId ?? undefined, cwd: projectCwd, text: composer,
-    shortcuts: capabilities?.extensionShortcuts, enabled: runtimeStatus === "connected" && !queueEdit, onError: showNotice });
+    shortcuts: capabilities?.extensionShortcuts, enabled: runtimeStatus === "connected" && !queueEdit,
+    syncEnabled: activeTaskUi?.extensionEditor?.active !== true, onError: showNotice });
+
+  useEffect(() => {
+    if (!activeTaskId || !activeTaskUi?.extensionTerminalInputActive) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.matches("input, textarea, button, [contenteditable='true'], .composer-extension-editor")) return;
+      const data = domKeyToTerminalInput(event);
+      if (!data) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      dispatchExtensionInputRef.current(data);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [activeTaskId, activeTaskUi?.extensionTerminalInputActive]);
 
   useEffect(() => {
     const close = () => { setContextMenu(null); setProjectContextMenu(null); setImageContextMenu(null); };
@@ -1135,8 +1166,8 @@ export function useAppController() {
     });
   }
 
-  async function sendPrompt() {
-    const text = composer.trim();
+  async function sendPrompt(textOverride?: string) {
+    const text = (textOverride ?? composer).trim();
     if (!text && !composerImages.length) return;
     if (suggestionMode && suggestions.length > 0) { applySuggestion(suggestions[suggestionIndex] as any); return; }
     if (queueEdit) {
@@ -1292,7 +1323,9 @@ export function useAppController() {
     if (!projectCwd || externalEditing) return;
     setExternalEditing(true);
     try {
-      updateComposer(await window.pideck.input.externalEdit(composer, projectCwd));
+      const value = await window.pideck.input.externalEdit(composer, projectCwd);
+      updateComposer(value);
+      if (activeTask && activeTaskUi?.extensionEditor?.active) await window.pideck.extensions.syncEditor(activeTask.id, value, projectCwd);
     } catch (error) {
       showNotice(error instanceof Error ? error.message : String(error), "error");
     } finally {
@@ -1323,9 +1356,29 @@ export function useAppController() {
     setTranscriptSearchResult({ current: 0, total: 0 });
   }
 
+  function requestExtensionAutocomplete(value: string, cursor = value.length, force = false) {
+    if (!activeTask || !activeTaskUi?.extensionAutocomplete?.active) return;
+    const requestId = ++extensionAutocompleteRequestRef.current;
+    void window.pideck.extensions.autocomplete(activeTask.id, value, cursor, force, projectCwd).then((result) => {
+      if (requestId !== extensionAutocompleteRequestRef.current) return;
+      if (!result?.items.length) {
+        setExtensionSuggestions([]);
+        setSuggestionMode((current) => current === "extension" ? null : current);
+        return;
+      }
+      setExtensionSuggestions(result.items);
+      setSuggestionMode("extension");
+      setSuggestionIndex(0);
+    }).catch((error) => {
+      if (requestId === extensionAutocompleteRequestRef.current) showNotice(error instanceof Error ? error.message : String(error), "error");
+    });
+  }
+
   function updateComposer(value: string, preserveHistory = false) {
     if (!preserveHistory && activeTask) composerHistoryRef.current.resetNavigation(activeTask.id);
     setComposer(value);
+    if (extensionAutocompleteTimerRef.current !== undefined) window.clearTimeout(extensionAutocompleteTimerRef.current);
+    if (activeTaskUi?.extensionAutocomplete?.active) extensionAutocompleteTimerRef.current = window.setTimeout(() => requestExtensionAutocomplete(value), 80);
     const mentionMatch = /(?:^|\s)@([^\s]*)$/.exec(value);
     if (mentionMatch) {
       setSuggestionMode("mention"); setSuggestionQuery(mentionMatch[1]); setSuggestionIndex(0); return;
@@ -1338,6 +1391,20 @@ export function useAppController() {
   }
 
   function applySuggestion(item: any) {
+    if (suggestionMode === "extension") {
+      if (typeof item.text === "string") {
+        setComposer(item.text);
+        const cursor = typeof item.cursor === "number" ? Math.max(0, Math.min(item.cursor, item.text.length)) : item.text.length;
+        window.requestAnimationFrame(() => {
+          const editor = document.querySelector<HTMLTextAreaElement>(".composer-editor-input");
+          editor?.focus();
+          editor?.setSelectionRange(cursor, cursor);
+        });
+      }
+      setExtensionSuggestions([]);
+      setSuggestionMode(null);
+      return;
+    }
     const prefix = suggestionMode === "mention" ? "@" : "/";
     const replacement = `${prefix}${suggestionMode === "mention" ? item.path : item.name} `;
     setComposer((current) => suggestionMode === "mention"
@@ -1503,12 +1570,64 @@ export function useAppController() {
     setProjectContextMenu({ project, x: Math.max(8, Math.min(x, window.innerWidth - 174)), y: Math.max(8, Math.min(y, window.innerHeight - 58)) });
   }
 
+  function dispatchExtensionInput(data: string, element?: HTMLTextAreaElement) {
+    if (!activeTask) return;
+    const taskId = activeTask.id;
+    const cwd = projectCwd;
+    const customEditorActive = Boolean(activeTaskUi?.extensionEditor?.active);
+    const run = async () => {
+      try {
+        const result = await window.pideck.extensions.dispatchInput(taskId, data, cwd);
+        if (result.consume || customEditorActive) return;
+        const nextData = result.data ?? data;
+        if (!element?.isConnected) return;
+        const start = element.selectionStart;
+        const end = element.selectionEnd;
+        const commit = (value: string, cursor: number) => {
+          element.value = value;
+          element.setSelectionRange(cursor, cursor);
+          updateComposer(value);
+        };
+        if (nextData === "\r") { void sendPrompt(element.value); return; }
+        if (nextData === "\x7f") {
+          const from = start === end && start > 0 ? start - 1 : start;
+          commit(`${element.value.slice(0, from)}${element.value.slice(end)}`, from);
+          return;
+        }
+        if (nextData === "\x1b[3~") {
+          const to = start === end ? Math.min(element.value.length, end + 1) : end;
+          commit(`${element.value.slice(0, start)}${element.value.slice(to)}`, start);
+          return;
+        }
+        if (nextData === "\t" || nextData === "\n" || (nextData.length === 1 && nextData >= " ")) {
+          commit(`${element.value.slice(0, start)}${nextData}${element.value.slice(end)}`, start + nextData.length);
+        }
+      } catch (error) {
+        showNotice(error instanceof Error ? error.message : String(error), "error");
+      }
+    };
+    extensionInputQueueRef.current = extensionInputQueueRef.current.then(run, run);
+  }
+  dispatchExtensionInputRef.current = dispatchExtensionInput;
+
   const composerProps = {
     sessionKey: activeTask?.id ?? projectCwd,
     value: composer,
     onChange: updateComposer,
     onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (event.nativeEvent.isComposing) return;
+      const terminalData = domKeyToTerminalInput(event.nativeEvent);
+      if (terminalData && (activeTaskUi?.extensionEditor?.active || activeTaskUi?.extensionTerminalInputActive)) {
+        event.preventDefault();
+        event.stopPropagation();
+        dispatchExtensionInput(terminalData, event.currentTarget instanceof HTMLTextAreaElement ? event.currentTarget : undefined);
+        return;
+      }
+      if (event.key === "Tab" && activeTaskUi?.extensionAutocomplete?.active && (!suggestionMode || suggestions.length === 0)) {
+        event.preventDefault();
+        requestExtensionAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart, true);
+        return;
+      }
       if (matchesPiKeybinding(event, piKeybindings, "app.editor.external")) { event.preventDefault(); void editComposerExternally(); return; }
       if (matchesPiKeybinding(event, piKeybindings, "app.thinking.cycle")) {
         event.preventDefault();
@@ -1554,6 +1673,9 @@ export function useAppController() {
     onSuggestion: applySuggestion,
     contextUsage,
     commandNames,
+    customEditorActive: activeTaskUi?.extensionEditor?.active === true,
+    customEditorLines: activeTaskUi?.extensionEditor?.lines,
+    onCustomEditorPaste: handleCustomEditorPaste,
     attachments: composerImages,
     onRemoveAttachment: (id: string) => setComposerImages((current) => current.filter((image) => image.id !== id)),
     onPreviewImage: handlePreviewImage,

@@ -26,7 +26,7 @@ export default function pideckRuntimeSmoke(pi) {
   pi.registerShortcut("ctrl+shift+y", {
     description: "PiDeck shortcut IPC smoke",
     handler: async (ctx) => {
-      if (ctx.mode !== "rpc" || ctx.ui.getEditorText() !== "live draft") throw new Error("Shortcut context/editor mirror mismatch");
+      if (ctx.mode !== "tui" || ctx.ui.getEditorText() !== "live draft") throw new Error("Shortcut context/editor mirror mismatch");
       ctx.ui.setEditorText("updated draft");
       if (!ctx.ui.getAllThemes().some((theme) => theme.name === "light")) throw new Error("Theme catalog unavailable");
       if (!ctx.ui.setTheme("light").success || ctx.ui.theme.name !== "light") throw new Error("Theme selection failed");
@@ -35,9 +35,9 @@ export default function pideckRuntimeSmoke(pi) {
   pi.registerCommand("pideck-runtime-smoke", {
     description: "Verify PiDeck extension runtime bindings",
     handler: async (_args, ctx) => {
-      if (ctx.mode !== "rpc") throw new Error(\`Expected rpc extension mode, received \${ctx.mode}\`);
+      if (ctx.mode !== "tui") throw new Error(\`Expected tui extension mode, received \${ctx.mode}\`);
       await ctx.waitForIdle();
-      ctx.ui.notify("pideck-runtime-smoke:rpc", "info");
+      ctx.ui.notify("pideck-runtime-smoke:tui", "info");
       const result = await ctx.newSession();
       if (result.cancelled) throw new Error("Extension-created session was cancelled");
     },
@@ -88,7 +88,7 @@ await new Promise((resolve, reject) => {
       if (message.event.task?.id) taskId = message.event.task.id;
       return;
     }
-    if (message?.type === "agent.event" && message.event?.type === "extension.ui.notify" && message.event.message === "pideck-runtime-smoke:rpc") {
+    if (message?.type === "agent.event" && message.event?.type === "extension.ui.notify" && message.event.message === "pideck-runtime-smoke:tui") {
       extensionModeSeen = true;
       return;
     }
@@ -383,7 +383,7 @@ await new Promise((resolve, reject) => {
     }
     if (message?.id === "extension-runtime-command") {
       if (!message.ok || message.result?.disposition !== "extension-command" || !extensionModeSeen || !extensionReplacementSeen) {
-        finish(new Error(`Extension runtime bindings did not execute through rpc mode and AgentSessionRuntime: ${JSON.stringify({ message, extensionModeSeen, extensionReplacementSeen })}`));
+        finish(new Error(`Extension runtime bindings did not execute through tui mode and AgentSessionRuntime: ${JSON.stringify({ message, extensionModeSeen, extensionReplacementSeen })}`));
         return;
       }
       finish();

@@ -101,7 +101,7 @@ Select-String -Path .\SHA256SUMS.txt -Pattern 'PiDeck-VERSION-windows-x64-setup.
 - `/fork`、`/clone`、`/tree` 已接入统一的 Session Tree 界面，支持分支预览、筛选、键盘导航、克隆/分叉后的任务切换，以及可选的离开分支摘要。
 - 任务基线 Diff 审查已经接入，支持统一/拆分视图、筛选、语法高亮和变更块导航；变更块接受/撤销以及可编辑合并仍未实现。
 - Pi Print、JSON、RPC、stdin 和 Auth Print 兼容通道当前未暴露到桌面端。
-- Extension 的交互式 `custom` UI 已通过受限的终端式画面/输入桥接，文本 Widget、实时编辑器文本和主题颜色也已支持；组件 Widget、Footer/Header 实例、通用终端输入、同步编辑器组件和自动补全仍不支持跨桌面桥接。
+- Extension 的交互式 `custom` UI、组件 Widget、Footer/Header、自定义编辑器、通用终端输入和自动补全均通过受限的终端式画面/输入桥接；实时编辑器文本与主题颜色也已支持。组件始终留在 PiHost，只把有界的纯文本画面和输入结果传给桌面端。
 - 显式覆盖的外部 Pi SDK 可能改变 API 行为；非 `0.85.1` 版本不在当前兼容保证内。
 
 ## 从源码运行

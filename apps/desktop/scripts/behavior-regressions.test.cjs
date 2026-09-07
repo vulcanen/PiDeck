@@ -557,15 +557,22 @@ test("manual compaction queue preserves ordering and supports queue mutations", 
   assert.match(hostSource, /case "sessions\.reload"[\s\S]*?await session\.reload\(\{[\s\S]*?beforeSessionStart:[\s\S]*?permissionEngine\.resetUi/);
   assert.match(hostSource, /case "agent\.executeBash"[\s\S]*?session\.executeBash/);
   assert.match(hostSource, /case "settings\.update"[\s\S]*?updatePiSettings/);
-  assert.match(hostSource, /nativeLlamaCommand[\s\S]*?extensionRunner\.setUIContext\(extensionUiContext, "tui"\)/);
+  assert.match(hostSource, /bindExtensions\?\.\(\{[\s\S]*?mode: "tui"/);
   assert.match(hostSource, /case "extension\.ui\.input"[\s\S]*?permissionEngine\.inputUi/);
   assert.match(settingsHandlerSource, /setDefaultModelAndProvider/);
 });
 
-test("Extension UI maps serializable presentation APIs and reports TUI-only capabilities", () => {
+test("Extension UI maps persistent component, terminal, editor, and autocomplete APIs", async () => {
   const events = [];
   const engine = new PermissionEngine({ emitApproval: () => undefined, emitEvent: (_taskId, event) => events.push(event) });
-  const ui = engine.createUi("task");
+  let branch = "main";
+  let branchChanged;
+  let branchUnsubscribed = false;
+  const ui = engine.createUi("task", "scope", undefined, undefined, {
+    getGitBranch: () => branch,
+    getProviderCount: () => 3,
+    onBranchChange: (callback) => { branchChanged = callback; return () => { branchUnsubscribed = true; }; },
+  });
   const boundUi = { ...ui };
   assert.equal(boundUi.theme.fg("accent", "Ready"), "Ready");
   assert.equal(boundUi.theme.bg("selectedBg", "Selected"), "Selected");
@@ -576,14 +583,58 @@ test("Extension UI maps serializable presentation APIs and reports TUI-only capa
   ui.setWorkingVisible(false);
   ui.setWorkingIndicator({ frames: ["a", "b"], interval: 80 });
   ui.setWidget("files", ["one", "two"], { placement: "aboveEditor" });
+  let widgetDisposed = false;
+  ui.setWidget("live", (tui) => ({ render: () => { tui.requestRender(); return ["\u001b[31mlive\u001b[0m"]; }, dispose: () => { widgetDisposed = true; } }), { placement: "belowEditor" });
+  ui.setHeader(() => ({ render: () => ["Header"] }));
+  ui.setFooter((tui, _theme, data) => {
+    const unsubscribe = data.onBranchChange(() => tui.requestRender());
+    return { render: () => [`Footer ${data.getGitBranch()} ${data.getAvailableProviderCount()} ${data.getExtensionStatuses().get("sync")}`], dispose: unsubscribe };
+  });
+  branch = "feature";
+  branchChanged();
   ui.setTitle("Extension title");
   ui.setEditorText("draft");
-  ui.setFooter(() => undefined);
-  ui.setFooter(() => undefined);
+  const received = [];
+  const unsubscribe = ui.onTerminalInput((data) => { received.push(data); return data === "x" ? { consume: true } : { data: data.toUpperCase() }; });
+  assert.deepEqual(engine.dispatchInput("scope", "x"), { consume: true });
+  assert.deepEqual(engine.dispatchInput("scope", "a"), { consume: false, data: "A" });
+  assert.deepEqual(received, ["x", "a"]);
+  unsubscribe();
+
+  let editorText = "";
+  const editorComponent = {
+    render: () => [`Editor ${editorText}`],
+    handleInput(data) { editorText += data; this.onChange?.(editorText); },
+    getText: () => editorText,
+    setText: (text) => { editorText = text; },
+  };
+  const editorFactory = () => editorComponent;
+  ui.setEditorComponent(editorFactory);
+  assert.equal(ui.getEditorComponent(), editorFactory);
+  assert.deepEqual(engine.dispatchInput("scope", "!"), { consume: true });
+  assert.equal(ui.getEditorText(), "draft!");
+  editorComponent.onSubmit("send me");
+
+  ui.addAutocompleteProvider(() => ({
+    triggerCharacters: [":"],
+    async getSuggestions() { return { prefix: ":a", items: [{ value: "alpha", label: "Alpha", description: "first" }] }; },
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      const line = lines[cursorLine];
+      const next = [...lines];
+      next[cursorLine] = `${line.slice(0, cursorCol - prefix.length)}${item.value}${line.slice(cursorCol)}`;
+      return { lines: next, cursorLine, cursorCol: cursorCol - prefix.length + item.value.length };
+    },
+  }));
+  assert.deepEqual(await engine.autocomplete("scope", "say :a now", 6), { prefix: ":a", items: [{ value: "alpha", label: "Alpha", description: "first", text: "say alpha now", cursor: 9 }] });
+  await new Promise((resolve) => setTimeout(resolve, 70));
 
   engine.resetUi("task");
-  assert.deepEqual(events.filter((event) => event.type === "extension.ui.presentation").map((event) => event.action), ["status", "working-message", "working-visible", "working-indicator", "widget", "title", "editor-text", "reset"]);
-  assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "setFooter").length, 1);
+  const actions = events.filter((event) => event.type === "extension.ui.presentation").map((event) => event.action);
+  for (const action of ["status", "widget", "header", "footer", "editor", "terminal-input", "autocomplete", "editor-submit", "reset"]) assert.equal(actions.includes(action), true, action);
+  assert.equal(widgetDisposed, true);
+  assert.equal(branchUnsubscribed, true);
+  assert.equal(events.some((event) => event.type === "extension.ui.presentation" && event.action === "footer" && event.lines?.[0] === "Footer feature 3 Ready"), true);
+  assert.equal(events.filter((event) => event.type === "extension.ui.unsupported").length, 0);
   assert.equal(events.filter((event) => event.type === "extension.ui.unsupported" && event.capability === "theme").length, 0);
 });
 

@@ -302,7 +302,6 @@ function emitExtensionUiRequest(requestId: string, taskId: string, request: Reco
 }
 
 const permissionEngine = new PermissionEngine({ emitApproval, emitEvent: emit, emitUiRequest: emitExtensionUiRequest });
-const extensionUiContexts = new WeakMap<object, object>();
 function jsonSafe<T>(value: T): T {
   try {
     return JSON.parse(JSON.stringify(value)) as T;
@@ -1260,20 +1259,45 @@ async function ensureAgentSession(taskId: string, cwd: string): Promise<any> {
       const boundStateKey = binding.stateKey;
       const permissionExtensionPath = resolvePermissionExtensionPath();
       const permissionExtensionLoaded = Boolean(permissionExtensionPath && session.extensionRunner?.getRegisteredCommands?.().some((command: any) => (command.invocationName ?? command.name) === "permission-system"));
-      // Keep the normal RPC mode so existing extensions can continue to detect
-      // the desktop transport. The native /llama command temporarily opts into
-      // interactive mode below because Pi's own implementation guards its
-      // component UI behind ctx.mode === "tui".
+      const [initialGitBranch, modelRuntime] = await Promise.all([
+        execFileText("git", ["branch", "--show-current"], { cwd: boundCwd, timeout: 1_000 }).then((value) => value.trim() || "detached").catch(() => null),
+        getModelRuntime(),
+      ]);
+      let gitBranch = initialGitBranch;
+      const footerData = {
+        getGitBranch: () => gitBranch,
+        getProviderCount: () => modelRuntime.getProviders().filter((provider: any) => modelRuntime.getModels(provider.id).length > 0).length,
+        onBranchChange: (callback: () => void) => {
+          let checking = false;
+          const timer = setInterval(() => {
+            if (checking) return;
+            checking = true;
+            void execFileText("git", ["branch", "--show-current"], { cwd: boundCwd, timeout: 1_000 })
+              .then((value) => value.trim() || "detached")
+              .catch(() => null)
+              .then((nextBranch) => {
+                if (nextBranch === gitBranch) return;
+                gitBranch = nextBranch;
+                try { callback(); } catch { /* Extension callbacks must not break the Host watcher. */ }
+              })
+              .finally(() => { checking = false; });
+          }, 2_000);
+          timer.unref();
+          return () => clearInterval(timer);
+        },
+      };
+      // PiDeck adapts Pi's interactive component surfaces, so extensions see
+      // the same TUI-capable mode they use in Pi's interactive application.
       const extensionUiContext = permissionEngine.createUi(
         boundTaskId,
         boundStateKey,
         sdk.themeApi ? createExtensionTheme(sdk.themeApi, session, (snapshot) => emit(boundTaskId, { type: "extension.ui.presentation", action: "theme", theme: snapshot })) : undefined,
         sdk.KeybindingsManager?.create(sdk.getAgentDir?.()),
+        footerData,
       );
-      if (session.extensionRunner) extensionUiContexts.set(session.extensionRunner, extensionUiContext);
       await session.bindExtensions?.({
         uiContext: extensionUiContext,
-        mode: "rpc",
+        mode: "tui",
         commandContextActions: {
           waitForIdle: () => runtime.session.waitForIdle(),
           newSession: async (options: any) => {
@@ -2090,27 +2114,12 @@ async function handle(request: PiHostRequest): Promise<void> {
             return "queued";
           }
           const promptText = payload.text ?? "";
-          const extensionRunner = session.extensionRunner;
-          const nativeLlamaCommand = /^\/llama(?:\s|$)/u.test(promptText) && Boolean(extensionRunner?.getCommand?.("llama"));
-          const extensionUiContext = extensionRunner ? extensionUiContexts.get(extensionRunner) : undefined;
-          if (nativeLlamaCommand && extensionUiContext && extensionRunner?.setUIContext) {
-            // Pi's /llama command deliberately requires ctx.mode === "tui".
-            // Temporarily expose that mode for this one command while retaining
-            // the normal RPC mode for every other extension and shortcut.
-            extensionRunner.setUIContext(extensionUiContext, "tui");
-          }
-          try {
-            await session.prompt(promptText, {
-              source: "interactive",
-              images,
-              ...(queuedDelivery && !extensionCommand ? { streamingBehavior: queuedDelivery } : {}),
-              ...(directReservation ? { preflightResult: (started: boolean) => directReservation.markStarted(started) } : {}),
-            });
-          } finally {
-            if (nativeLlamaCommand && extensionUiContext && extensionRunner?.setUIContext) {
-              extensionRunner.setUIContext(extensionUiContext, "rpc");
-            }
-          }
+          await session.prompt(promptText, {
+            source: "interactive",
+            images,
+            ...(queuedDelivery && !extensionCommand ? { streamingBehavior: queuedDelivery } : {}),
+            ...(directReservation ? { preflightResult: (started: boolean) => directReservation.markStarted(started) } : {}),
+          });
           if (queuedDelivery && !extensionCommand) {
             const current = queueState(session);
             reconcileQueuedPromptImages(stateKey, current.steering, current.followUp);
@@ -2569,6 +2578,22 @@ async function handle(request: PiHostRequest): Promise<void> {
         if (!shortcut) throw new Error(`Extension shortcut is no longer available: ${payload.key}`);
         await shortcut.handler(session.extensionRunner.createContext());
         send({ id: request.id, ok: true, result: undefined });
+        return;
+      }
+      case "extension.input.dispatch": {
+        const payload = request.payload as { taskId?: string; data?: string; cwd?: string } | undefined;
+        if (!payload?.taskId || typeof payload.data !== "string") throw new Error("taskId and data are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        await ensureAgentSession(payload.taskId, cwd);
+        send({ id: request.id, ok: true, result: permissionEngine.dispatchInput(sessionStateKey(payload.taskId, cwd), payload.data) });
+        return;
+      }
+      case "extension.autocomplete": {
+        const payload = request.payload as { taskId?: string; text?: string; cursor?: number; force?: boolean; cwd?: string } | undefined;
+        if (!payload?.taskId || typeof payload.text !== "string" || typeof payload.cursor !== "number") throw new Error("taskId, text and cursor are required");
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        await ensureAgentSession(payload.taskId, cwd);
+        send({ id: request.id, ok: true, result: await permissionEngine.autocomplete(sessionStateKey(payload.taskId, cwd), payload.text, payload.cursor, payload.force === true) });
         return;
       }
       case "extension.ui.resolve": {

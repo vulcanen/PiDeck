@@ -99,7 +99,7 @@ Use `x64` instead of `arm64` in the macOS example for an Intel Mac.
 - `/fork`, `/clone`, and `/tree` use a unified Session Tree interface with branch previews, filtering, keyboard navigation, task switching after clone/fork, and optional abandoned-branch summaries.
 - Task-baseline diff review is integrated, including unified/split views, filtering, syntax highlighting, and hunk navigation; chunk accept/revert and editable merge remain unimplemented.
 - Pi Print, JSON, RPC, stdin, and Auth Print compatibility channels are not currently exposed.
-- Interactive Extension `custom` UI is adapted through a bounded terminal-style screen/input bridge; text Widgets, live editor text, and theme colors are also supported. Component Widgets, Footer/Header instances, general terminal input, synchronous editor components, and autocomplete remain unsupported across the desktop bridge.
+- Interactive Extension `custom` UI, component Widgets, Footer/Header, custom editors, general terminal input, and autocomplete are adapted through a bounded terminal-style screen/input bridge; live editor text and theme colors are also supported. Components remain in PiHost, and only bounded plain-text screens and input results cross into the desktop process.
 - An explicitly overridden external Pi SDK may change API behavior; versions other than `0.85.1` are outside the current compatibility guarantee.
 
 ## Run from source

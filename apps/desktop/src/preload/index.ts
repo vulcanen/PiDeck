@@ -99,6 +99,8 @@ const bridge: PideckBridge = {
   extensions: {
     syncEditor: (taskId: string, text: string, cwd?: string) => ipcRenderer.invoke("extensions:sync-editor", taskId, text, cwd),
     invokeShortcut: (taskId: string, key: string, text: string, cwd?: string) => ipcRenderer.invoke("extensions:invoke-shortcut", taskId, key, text, cwd),
+    dispatchInput: (taskId: string, data: string, cwd?: string) => ipcRenderer.invoke("extensions:dispatch-input", taskId, data, cwd),
+    autocomplete: (taskId: string, text: string, cursor: number, force?: boolean, cwd?: string) => ipcRenderer.invoke("extensions:autocomplete", taskId, text, cursor, force, cwd),
     resolveUi: (requestId: string, value: string | boolean | undefined) => ipcRenderer.invoke("extension-ui:resolve", requestId, value),
     sendUiInput: (requestId: string, data: string) => ipcRenderer.invoke("extension-ui:input", requestId, data),
   },

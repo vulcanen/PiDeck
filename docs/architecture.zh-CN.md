@@ -93,7 +93,7 @@ PiHost 负责：
 - 通过 Pi `ProjectTrustStore` 与 `hasTrustRequiringProjectResources()` 计算项目 Pi 资源授权，并用项目保存、父目录继承或全局默认的最终决定创建项目 `SettingsManager` 与 `ResourceLoader`。
 - 读取/恢复 Pi Session，并通过 `SessionManager.appendCustomEntry()` 写入 `pideck.execution-run` 运行元数据。
 - 转发 Agent event、Approval event、Auth event 和 Extension UI 请求。
-- 持有 Pi `AgentSessionRuntime`，让 Extension command 获得 RPC mode（Pi 原生 `/llama` UI 使用限定范围的交互模式桥接）、官方 command-context actions、Session 替换/重绑定、诊断、异步错误、shutdown 请求，以及可取消/有超时的 Extension UI 请求。
+- 持有 Pi `AgentSessionRuntime`，让 Extension command 获得 TUI-capable mode、官方 command-context actions、Session 替换/重绑定、诊断、异步错误、shutdown 请求，以及可取消/有超时的 Extension UI 请求；组件仍由 PiHost 渲染，不进入 Renderer。
 - 执行 Pi built-in tools、Bash、Provider 登录、Pi package 管理、权限模式读写和会话操作。
 - 读取 Pi 生效的 keybindings 并调用 Pi 配置的外部编辑器 helper；Pi 设置页读取当前生效命令与来源，并通过 Pi 自带的锁定 `FileSettingsStorage` 写入用户命令。Pi 会先按空格拆分编辑器命令，因此在 macOS/Linux 上，PiHost 会把所选且带引号的绝对路径临时替换为不含空格的符号链接别名，调用同一个 Pi helper 后立即删除别名。Renderer 不直接启动编辑器，也不读取 Pi 配置文件。
 - 在报告 `runtime.status=connected` 前初始化 Pi 自带的代理感知 HTTP dispatcher，使 OAuth Token 交换、模型请求和 Provider HTTP 调用使用同一条 PiHost 网络路径。npm、pnpm、git 等 package manager 子进程仍使用各自的代理配置。
@@ -293,7 +293,7 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 
 认证提示通过 `providers.resolveAuth`（IPC `providers:auth-response`）回传文本、选择项或取消状态；取消会结束 Pi 的等待，不会遗留挂起的登录请求，PiHost 也会传播 Pi 的逐提示中止信号，避免 SDK 已取消的兜底提示残留 waiter。对于带版本保护的 Pi 0.84.2–0.85.1 OpenAI Codex 浏览器流程，PiHost 在确认浏览器登录方式前预检 SDK 的固定本地回调端点。预检失败时保留当前选择提示，由 Renderer 显示可操作错误，用户仍可选择 Pi 的设备码方式。SDK 并行给出的手动认证地址输入在本地回调等待期间仅作为次要兜底；`providers.login` 成功后 Main 会恢复并聚焦 PiDeck 窗口。
 
-`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update，以及 Pi 的 `ui_prompt_start` / `ui_prompt_end`。Extension UI 请求会在边界处明确归一化为可序列化的 `{ type, reason, kind, title?, lines? }` payload；普通对话框通过 `extension.ui.resolve`，Pi 自定义组件通过 `extension.ui.input` 转发终端按键序列。`agent_end` 的 `messages` 来自 Pi SDK，Renderer 在后续自动重试或队列续接前即可合并本轮消息；`agent_settled` 再读取最终 Session 快照。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
+`agent.event` 当前覆盖 Agent start/end、agent settled、turn start/end、message start/update/end/snapshot、tool execution start/update/end、queue update，以及 Pi 的 `ui_prompt_start` / `ui_prompt_end`。Extension UI 请求会在边界处明确归一化为可序列化的 `{ type, reason, kind, title?, lines? }` payload；普通对话框通过 `extension.ui.resolve`，Pi 自定义组件通过 `extension.ui.input` 转发终端按键序列。常驻的组件 Widget、Footer/Header 与 editor component 在 PiHost 内按固定宽度渲染、截断并合并高频刷新；`extension.input.dispatch` 保留 terminal input 的 consume/rewrite 链，`extension.autocomplete` 用超时与取消信号执行 Provider，并只返回应用补全后的文本、光标和有限候选。`agent_end` 的 `messages` 来自 Pi SDK，Renderer 在后续自动重试或队列续接前即可合并本轮消息；`agent_settled` 再读取最终 Session 快照。Renderer 只使用可序列化的归一化对象，不接触 AgentSession 实例。
 
 ## 7. Pi 能力映射
 

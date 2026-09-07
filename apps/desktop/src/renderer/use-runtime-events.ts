@@ -44,6 +44,7 @@ export interface RuntimeEventsOptions {
   onChangeReviewUpdated: (taskId: string, review: SessionChangeReview) => void;
   onChangeReviewStatus: (taskId: string, availability: SessionChangeReviewAvailability, reason?: SessionChangeReviewUnavailableReason) => void;
   onExtensionEditorText: (text: string) => void;
+  onExtensionEditorSubmit: (text: string) => void;
   onSessionReplaced: (task: TaskSummary, previousTaskId: string) => void;
 }
 
@@ -52,7 +53,7 @@ export function useRuntimeEvents({
   patchTaskUi, updateTaskLists, discardStreamDeltas, queueStreamDelta, updateActivity,
   setQueueState, setExtensionUiRequest, setSteeringMessageKeysByTask, setMessagesByTask,
   setTaskUi, setMessageLoads, setContextUsage, setActiveTask, refreshWorkspace,
-  onQueueActivity, onChangeReviewUpdated, onChangeReviewStatus, onExtensionEditorText,
+  onQueueActivity, onChangeReviewUpdated, onChangeReviewStatus, onExtensionEditorText, onExtensionEditorSubmit,
   onSessionReplaced,
 }: RuntimeEventsOptions) {
   const replacementTaskIdRef = useRef<string | undefined>(undefined);
@@ -143,6 +144,7 @@ export function useRuntimeEvents({
     if (event?.type === "extension.ui.presentation") {
       if (event.action === "reset" && taskId === activeTaskId) document.title = "PiDeck";
       if (event.action === "editor-text" && (taskId === activeTaskId || taskId === replacementTaskIdRef.current) && typeof event.text === "string") onExtensionEditorText(event.text);
+      if (event.action === "editor-submit" && (taskId === activeTaskId || taskId === replacementTaskIdRef.current) && typeof event.text === "string") onExtensionEditorSubmit(event.text);
       if (event.action === "title" && taskId === activeTaskId && typeof event.title === "string" && event.title.trim()) document.title = event.title.trim();
       setTaskUi((current) => {
         const previous = current[taskId] ?? createDefaultTaskUiState();
@@ -158,6 +160,11 @@ export function useRuntimeEvents({
           if (Array.isArray(event.lines)) widgets.push({ key: event.key, lines: event.lines.filter((line: unknown): line is string => typeof line === "string"), placement: event.placement === "belowEditor" ? "belowEditor" : "aboveEditor" });
           return { ...current, [taskId]: { ...previous, extensionWidgets: widgets } };
         }
+        if (event.action === "header") return { ...current, [taskId]: { ...previous, extensionHeader: Array.isArray(event.lines) ? event.lines.filter((line: unknown): line is string => typeof line === "string") : undefined } };
+        if (event.action === "footer") return { ...current, [taskId]: { ...previous, extensionFooter: Array.isArray(event.lines) ? event.lines.filter((line: unknown): line is string => typeof line === "string") : undefined } };
+        if (event.action === "editor") return { ...current, [taskId]: { ...previous, extensionEditor: event.active === true ? { active: true, lines: Array.isArray(event.lines) ? event.lines.filter((line: unknown): line is string => typeof line === "string") : [] } : undefined } };
+        if (event.action === "terminal-input") return { ...current, [taskId]: { ...previous, extensionTerminalInputActive: event.active === true } };
+        if (event.action === "autocomplete") return { ...current, [taskId]: { ...previous, extensionAutocomplete: event.active === true ? { active: true, triggerCharacters: Array.isArray(event.triggerCharacters) ? event.triggerCharacters.filter((item: unknown): item is string => typeof item === "string") : [] } : undefined } };
         if (event.action === "working-message") return { ...current, [taskId]: { ...previous, extensionWorkingMessage: typeof event.message === "string" ? event.message : undefined } };
         if (event.action === "working-visible") return { ...current, [taskId]: { ...previous, extensionWorkingVisible: event.visible !== false } };
         if (event.action === "working-indicator") {
