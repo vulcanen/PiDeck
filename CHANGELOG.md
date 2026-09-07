@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Release automation now keeps newly generated installers as a Draft Release until they pass manual signing and installation checks.
+
 ## [0.1.5] - 2026-09-07
 
 ### Added
