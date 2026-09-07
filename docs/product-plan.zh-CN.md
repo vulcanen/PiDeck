@@ -199,12 +199,13 @@ PiDeck 已将 `@gotgenes/pi-permission-system@31.1.1` 作为桌面 PiHost 的 Ex
 5. 移除重复的 PiDeck 自定义审批门，避免一次工具调用出现两套审批。
 6. 通过真实工具调用验证 allow、ask、deny、session approval 和失败关闭行为。
 
-## 8. 当前未实现能力
+## 8. 当前边界与后续计划
 
 以下仍是计划，不是当前产品承诺：
 
-- Monaco Diff、任务级基线和逐块审阅。
-- Extension 的组件 Widget、terminal input、同步 editor component、autocomplete provider、Footer、Header 与 TUI `custom` 均通过有界的画面/按键桥接适配，Pi 原生 `/llama` 可在桌面端运行。组件实例保留在 PiHost，不跨进程传递；实时编辑文本、扩展快捷键执行和 Pi 主题颜色映射已接入。
+- 在已接入的任务级基线统一/拆分 Diff 审查上增加逐块接受/撤销和 Monaco 可编辑合并流程。
+
+Extension 的组件 Widget、terminal input、同步 editor component、autocomplete provider、Footer、Header 与 TUI `custom` 均已通过有界的画面/按键桥接适配，Pi 原生 `/llama` 可在桌面端运行。组件实例保留在 PiHost，不跨进程传递；实时编辑文本、扩展快捷键执行和 Pi 主题颜色映射已接入。
 
 当前兼容基线还包括：手动压缩取消后不自动执行暂存提示、`/model provider/model`、带系统保存确认的 `/export 路径`，以及通过 Pi 锁定存储持久化的重试、压缩、代理、超时、默认工具高级配置。具体行为和重启要求见[功能矩阵](pi-cli-feature-matrix.zh-CN.md#命令设置与-extension-兼容)。
 

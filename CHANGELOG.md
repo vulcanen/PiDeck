@@ -11,7 +11,7 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Pi-backed `/settings`, live `/reload`, and user `!command` / `!!command` desktop mappings, including persisted default model/Thinking selection.
-- Serializable Extension UI status, working indicator, Widget, title, and editor presentation, with explicit compatibility notices for TUI-only component APIs.
+- Serializable Extension UI status, working indicator, title, editor text, text/component Widgets, Footer/Header, custom editor, terminal input, autocomplete, and interactive `custom` presentation through a bounded PiHost screen/input bridge.
 - Pi 0.85.1 SDK compatibility, including its dynamically discovered GPT-6 Astra
   model catalog and upstream Agent, provider, and session fixes.
 - Updated the bundled `@gotgenes/pi-permission-system` Extension to `31.1.1` and

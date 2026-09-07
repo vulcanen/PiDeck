@@ -201,12 +201,13 @@ Integration constraints:
 5. Remove duplicate PiDeck custom approval gates to avoid two approval flows per tool call.
 6. Verify allow, ask, deny, session approval, and failure-close behavior through real tool calls.
 
-## 8. Currently Unimplemented Capabilities
+## 8. Current Boundaries and Planned Work
 
 Still planned, not current product promises:
 
 - Chunk-by-chunk accept/revert and an editable Monaco merge workflow on top of the integrated task-baseline unified diff review.
-- Extension component Widgets, terminal input, synchronous editor components, autocomplete providers, Footers, Headers, and interactive `custom` components are adapted through a bounded serializable screen/input bridge (used by `/llama`). Component instances stay inside PiHost rather than crossing processes. Live editor text, registered shortcut execution, and Pi theme color adaptation are implemented.
+
+Extension component Widgets, terminal input, synchronous editor components, autocomplete providers, Footers, Headers, and interactive `custom` components are adapted through a bounded serializable screen/input bridge (used by `/llama`). Component instances stay inside PiHost rather than crossing processes. Live editor text, registered shortcut execution, and Pi theme color adaptation are implemented.
 
 The current parity baseline additionally includes manual compaction cancellation without automatically running staged prompts, `/model provider/model`, explicit `/export path` with native save confirmation, and advanced retry/compaction/proxy/timeout/default-tool settings persisted through Pi's locked storage. See the [feature matrix](pi-cli-feature-matrix.en.md#command-settings-and-extension-parity) for exact behavior and restart requirements.
 

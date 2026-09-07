@@ -6,25 +6,25 @@
 [![GitHub Release](https://img.shields.io/github/v/release/vulcanen/PiDeck?display_name=tag&sort=semver)](https://github.com/vulcanen/PiDeck/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-PiDeck is an open source desktop interface for [Pi](https://github.com/earendil-works/pi). It brings the projects, sessions, models, providers, tools, and extensions exposed by the Pi CLI / SDK into one Electron workspace.
+PiDeck is an unofficial desktop client for [Pi](https://github.com/earendil-works/pi). Use it to manage projects and sessions, choose models, follow tool calls, and handle approvals without staying in the terminal.
 
-> **Notice**: PiDeck is an independent, unofficial project. It is not affiliated with or endorsed by the Pi project or its maintainers. PiDeck does not implement a second agent, model catalog, session store, or credential system; the Pi CLI / SDK remains authoritative for those capabilities.
+> PiDeck is independently maintained and is not affiliated with the Pi project. Model calls, sessions, and credentials are still handled by the Pi CLI / SDK; PiDeck provides the desktop interface.
 
-Current compatibility baseline: Pi CLI / SDK `0.85.1`, Electron `43.3.0`.
+Current compatibility baseline: Pi CLI / SDK `0.85.1`, Electron `43.4.1`.
 
 ![PiDeck dark workspace with the project sidebar, empty session state, and message composer](docs/assets/pideck-workspace.png)
 
 ## Features
 
-- Browse multiple projects and their Pi sessions, with a separate workspace for each conversation.
-- Configure providers, API keys, OAuth, models, and thinking levels from the desktop UI.
-- Follow streaming responses, thinking, tool calls, results, and execution durations.
-- Use tool approvals, permission levels, and Steering / Follow-up message queues.
-- Use Pi slash commands, prompts, skills, extension commands, and Pi Package management.
-- Render Markdown, code, Mermaid diagrams, and math while preserving each session's reading position.
-- Switch between Chinese and English as well as light and dark themes.
+- Manage multiple projects and sessions from the sidebar.
+- Configure providers, API keys, OAuth, models, and thinking levels.
+- Follow responses, thinking, tool calls, results, and execution time as they arrive.
+- Approve tool calls, change permissions, and manage Steering / Follow-up queues.
+- Use Pi slash commands, prompts, skills, extensions, and packages.
+- Browse conversation branches with `/fork`, `/clone`, and `/tree`, and review files changed by each run.
+- Render Markdown, code, Mermaid diagrams, and math, with Chinese/English and light/dark themes.
 
-See the [Pi CLI → PiDeck feature matrix](docs/pi-cli-feature-matrix.en.md) for the authoritative implemented and pending scope.
+See the [Pi CLI → PiDeck feature matrix](docs/pi-cli-feature-matrix.en.md) for a complete list of supported and unsupported features.
 
 ## Downloads and system requirements
 
@@ -37,9 +37,9 @@ Download the latest public version from [GitHub Releases](https://github.com/vul
 | macOS Intel | macOS 12 Monterey or later, x64 | `PiDeck-VERSION-macos-x64.dmg` |
 | Linux | No release-validated installer yet | — |
 
-Replace `VERSION` in the filename with the version shown on the Release. If About This Mac shows a “Chip,” choose arm64; if it shows a “Processor,” choose Intel x64.
+Replace `VERSION` with the version shown on the Release page. If About This Mac shows a “Chip,” choose arm64; if it shows a “Processor,” choose Intel x64.
 
-PiDeck installers contain the project's locked Pi SDK and do not require a separate Pi CLI installation. Official installers always prefer the bundled `0.85.1`; only an explicit `PIDECK_PI_MODULE` override replaces it for development or compatibility testing.
+The installer includes Pi SDK `0.85.1`, so Pi CLI does not need to be installed separately. `PIDECK_PI_MODULE` is only needed for development and compatibility testing.
 
 ## Installation
 
@@ -52,9 +52,8 @@ PiDeck installers contain the project's locked Pi SDK and do not require a separ
 ### macOS
 
 1. Download the arm64 or x64 DMG for your Mac.
-2. Before installation, enable “Allow applications from anywhere” in System Settings → Privacy & Security.
-3. Open the DMG and drag PiDeck into Applications.
-4. Start PiDeck from Applications.
+2. Open the DMG and drag PiDeck into Applications.
+3. Start PiDeck from Applications. If macOS blocks an unsigned build, confirm that you want to open it in System Settings → Privacy & Security.
 
 ## First run
 
@@ -63,17 +62,17 @@ PiDeck installers contain the project's locked Pi SDK and do not require a separ
 3. Select a model, thinking level, and tool permission level.
 4. Create or open a session and start a conversation.
 
-Pi sessions, provider credentials, OAuth, and Pi Package configuration are managed by the local Pi Runtime and can be shared with a compatible Pi CLI environment. PiDeck itself stores only project directory references, display order, and UI preferences in Electron `userData`; removing a project from the sidebar does not delete project files or Pi sessions.
+Projects, sessions, provider credentials, and Pi Package settings remain stored locally by Pi. PiDeck only adds the project list and UI preferences; removing a project from the sidebar does not delete its files or Pi sessions.
 
-PiHost network requests use the same proxy-aware dispatcher as Pi CLI. Explicit `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` environment variables take priority, followed by Pi's global `httpProxy` setting, then the system proxy resolved by Electron for each request target on Windows, macOS, or Linux; PAC, bypass, and domain-specific rules therefore remain effective. OAuth pages in the browser remain under the system browser and Provider's control.
+PiDeck supports `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, Pi's `httpProxy` setting, and the system proxy, with environment variables taking priority. OAuth login still happens in the system browser.
 
-PiDeck does not configure an analytics or telemetry exporter. Provider requests are still handled by the selected Pi Runtime and model service; evaluate code and session content under the corresponding provider's privacy policy before sending it.
+PiDeck does not collect usage analytics. Code and conversations you send are handled by the selected model provider, so review that service's privacy policy.
 
-Agent tools and extensions may read or modify project files or execute commands according to the active permission settings. Review the source of third-party packages and choose an appropriate approval level before using them.
+Tools and extensions may read or modify project files and run commands. Check third-party packages before using them and choose an appropriate permission level.
 
 ## Verify downloads
 
-Every Release includes `SHA256SUMS.txt` plus a CycloneDX SBOM generated from the final packaged contents of each macOS arm64, macOS x64, and Windows x64 installer. Download the checksum file alongside the installer and compare the matching hash; GitHub Artifact Attestations can additionally verify that assets came from the repository's release workflow.
+Each Release includes `SHA256SUMS.txt` and a CycloneDX SBOM for every platform. Use the commands below to check the installer hash; GitHub Artifact Attestations can confirm that the file came from this repository's release workflow.
 
 macOS:
 
@@ -95,12 +94,11 @@ Use `x64` instead of `arm64` in the macOS example for an Intel Mac.
 
 - No Linux release installer is currently provided.
 - There is no in-app auto-update yet; new versions are published through GitHub Releases.
-- The local terminal panel is not integrated; shell execution remains available through Pi Agent's real tools.
-- `/fork`, `/clone`, and `/tree` use a unified Session Tree interface with branch previews, filtering, keyboard navigation, task switching after clone/fork, and optional abandoned-branch summaries.
-- Task-baseline diff review is integrated, including unified/split views, filtering, syntax highlighting, and hunk navigation; chunk accept/revert and editable merge remain unimplemented.
-- Pi Print, JSON, RPC, stdin, and Auth Print compatibility channels are not currently exposed.
-- Interactive Extension `custom` UI, component Widgets, Footer/Header, custom editors, general terminal input, and autocomplete are adapted through a bounded terminal-style screen/input bridge; live editor text and theme colors are also supported. Components remain in PiHost, and only bounded plain-text screens and input results cross into the desktop process.
-- An explicitly overridden external Pi SDK may change API behavior; versions other than `0.85.1` are outside the current compatibility guarantee.
+- There is no standalone local terminal panel; shell commands remain available through Pi tools and `!command` / `!!command`.
+- File-change review cannot yet accept, revert, or edit individual chunks.
+- Print, JSON, RPC, stdin, and Auth Print do not have desktop screens; use `npm run cli` or `pideck-cli` instead.
+- Extensions that depend on pixel-level terminal rendering or arbitrary DOM still require Pi CLI.
+- Compatibility is currently guaranteed only for Pi SDK `0.85.1`.
 
 ## Run from source
 
@@ -117,6 +115,14 @@ npm ci
 npm run dev
 ```
 
+To use Pi's Print, JSON, RPC, stdin JSONL, or `auth print-*` commands, run them through PiDeck's CLI entry point:
+
+```bash
+npm run cli -- --help
+npm run cli -- --mode rpc --no-session
+npm run cli -- auth print-api-key --provider openai
+```
+
 Run the project checks:
 
 ```bash
@@ -125,6 +131,7 @@ npm run typecheck
 npm run test:renderer
 npm run build
 npm run smoke:runtime
+npm run smoke:cli
 npm run notices:check
 npm ls --all
 ```
