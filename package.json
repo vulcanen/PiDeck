@@ -5,7 +5,7 @@
   "bin": {
     "pideck-cli": "packages/pi-host/dist/cli.js"
   },
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "author": {
     "name": "Vulcanen"
@@ -62,11 +62,11 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@gotgenes/pi-permission-system": "^31.1.1",
-    "@pideck/contracts": "0.1.4",
-    "@pideck/domain": "0.1.4",
-    "@pideck/i18n": "0.1.4",
-    "@pideck/permission-engine": "0.1.4",
-    "@pideck/pi-adapter": "0.1.4"
+    "@pideck/contracts": "0.1.5",
+    "@pideck/domain": "0.1.5",
+    "@pideck/i18n": "0.1.5",
+    "@pideck/permission-engine": "0.1.5",
+    "@pideck/pi-adapter": "0.1.5"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",

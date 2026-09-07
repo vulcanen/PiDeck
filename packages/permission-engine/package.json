@@ -1,6 +1,6 @@
 {
   "name": "@pideck/permission-engine",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -18,6 +18,6 @@
     "@types/node": "^24.9.0"
   },
   "dependencies": {
-    "@pideck/contracts": "0.1.4"
+    "@pideck/contracts": "0.1.5"
   }
 }
