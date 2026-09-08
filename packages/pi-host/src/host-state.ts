@@ -37,6 +37,7 @@ export type ActiveChangeReviewTracker = {
 export const activeChangeReviews = new Map<string, ActiveChangeReviewTracker>();
 export const pendingChangeReviewWrites = new Set<Promise<void>>();
 export const pendingChangeReviewWritesBySession = new Map<string, Set<Promise<void>>>();
+export const changeReviewMutationLocks = new Map<string, Promise<void>>();
 
 // AgentSession can enter automatic-compaction preflight before Pi reports
 // `isStreaming`. Track both boundaries so another request cannot mistake this

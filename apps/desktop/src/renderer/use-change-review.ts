@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   SessionChangeReview,
   SessionChangeReviewAvailability,
+  SessionChangeReviewMergeSource,
   SessionChangeReviewUnavailableReason,
 } from "@pideck/contracts";
 
@@ -285,6 +286,25 @@ export function useChangeReview({ taskId, projectCwd, onError }: { taskId?: stri
     setLoaded((current) => current.scopeKey === scopeKey ? { ...current, availability, reason, error: undefined } : current);
   }, [scopeKey, taskId]);
 
+  const resolveHunk = useCallback(async (reviewId: string, filePath: string, hunkIndex: number, action: "accept" | "revert") => {
+    if (!taskId || !projectCwd) throw new Error("No active task");
+    const review = await window.pideck.sessions.resolveChangeReviewHunk(taskId, reviewId, filePath, hunkIndex, action, projectCwd);
+    applyUpdatedReview(taskId, review);
+    return review;
+  }, [applyUpdatedReview, projectCwd, taskId]);
+
+  const loadMergeSource = useCallback(async (reviewId: string, filePath: string): Promise<SessionChangeReviewMergeSource> => {
+    if (!taskId || !projectCwd) throw new Error("No active task");
+    return window.pideck.sessions.changeReviewMergeSource(taskId, reviewId, filePath, projectCwd);
+  }, [projectCwd, taskId]);
+
+  const applyMerge = useCallback(async (reviewId: string, filePath: string, content: string, currentRevision: string) => {
+    if (!taskId || !projectCwd) throw new Error("No active task");
+    const review = await window.pideck.sessions.applyChangeReviewMerge(taskId, reviewId, filePath, content, currentRevision, projectCwd);
+    applyUpdatedReview(taskId, review);
+    return review;
+  }, [applyUpdatedReview, projectCwd, taskId]);
+
   const selectedReviewId = selectedReview?.id ?? viewState.selectedReviewId;
   const selectedFilePath = selectedReviewId ? viewState.selectedFiles[selectedReviewId] ?? null : null;
   const setSelectedFilePath = useCallback((filePath: string) => {
@@ -336,6 +356,9 @@ export function useChangeReview({ taskId, projectCwd, onError }: { taskId?: stri
     selectedReviewLoading: Boolean(selectedSummary && detailLoadingRef.current.has(selectedSummary.id)),
     selectedReviewError: selectedSummary ? detailErrorsRef.current.get(selectedSummary.id) : undefined,
     retrySelectedReview,
+    resolveHunk,
+    loadMergeSource,
+    applyMerge,
     reviewWidth: viewState.reviewWidth,
     setReviewWidth,
     fileListWidth: viewState.fileListWidth,

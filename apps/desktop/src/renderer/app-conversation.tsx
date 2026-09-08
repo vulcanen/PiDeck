@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { PermissionStatus, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewUnavailableReason } from "@pideck/contracts";
+import type { PermissionStatus, SessionChangeReview, SessionChangeReviewAvailability, SessionChangeReviewMergeSource, SessionChangeReviewUnavailableReason } from "@pideck/contracts";
 import type { ProjectSummary, TaskSummary } from "@pideck/domain";
 import { copy, type Language } from "@pideck/i18n";
 import { Icon } from "@pideck/ui-system";
@@ -289,6 +289,9 @@ export interface AppConversationProps {
   onChangeReviewScrollPosition: (position: ChangeReviewScrollPosition) => void;
   onRetryChangeReviews: () => void;
   onRetrySelectedChangeReview: () => void;
+  onResolveChangeReviewHunk: (reviewId: string, filePath: string, hunkIndex: number, action: "accept" | "revert") => Promise<SessionChangeReview>;
+  onLoadChangeReviewMergeSource: (reviewId: string, filePath: string) => Promise<SessionChangeReviewMergeSource>;
+  onApplyChangeReviewMerge: (reviewId: string, filePath: string, content: string, currentRevision: string) => Promise<SessionChangeReview>;
   onChangeReviewWidth: (width: number) => void;
   onChangeReviewFileListWidth: (width: number) => void;
   backgroundInert?: boolean;
@@ -311,7 +314,8 @@ export function AppConversation({
   onSelectChangeReview, onSelectChangeReviewPath, onChangeReviewExpandedPaths,
   onChangeReviewFileFilter, onChangeReviewDiffMode, onChangeReviewWrapLines,
   onChangeReviewIgnoreWhitespace, onChangeReviewScrollPosition, onRetryChangeReviews,
-  onRetrySelectedChangeReview, onChangeReviewWidth, onChangeReviewFileListWidth,
+  onRetrySelectedChangeReview, onResolveChangeReviewHunk, onLoadChangeReviewMergeSource,
+  onApplyChangeReviewMerge, onChangeReviewWidth, onChangeReviewFileListWidth,
   backgroundInert = false,
 }: AppConversationProps) {
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -425,6 +429,9 @@ export function AppConversation({
             onScrollPosition={onChangeReviewScrollPosition}
             onRetry={onRetryChangeReviews}
             onRetryDetail={onRetrySelectedChangeReview}
+            onResolveHunk={onResolveChangeReviewHunk}
+            onLoadMergeSource={onLoadChangeReviewMergeSource}
+            onApplyMerge={onApplyChangeReviewMerge}
             onClose={onCloseChangeReview}
           />
         </>}

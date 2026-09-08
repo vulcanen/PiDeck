@@ -1,11 +1,14 @@
 import type {
   SessionChangeFile,
+  SessionChangeHunkResolutionAction,
   SessionChangeReview,
+  SessionChangeReviewMergeSource,
   SessionChangeReviewUnavailableReason,
 } from "@pideck/contracts";
+import { applyPatch, parsePatch, reversePatch, type StructuredPatch } from "diff";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstat, open, readFile, readlink, realpath } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, lstat, open, readFile, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const MAX_REVIEW_FILES = 200;
@@ -16,6 +19,20 @@ export const MAX_REVIEW_PATCH_BYTES = 250_000;
 export const MAX_REVIEW_TOTAL_PATCH_BYTES = 1_000_000;
 const GIT_TIMEOUT_MS = 15_000;
 const SNAPSHOT_CONCURRENCY = 8;
+
+type WorkspaceTextSnapshot = {
+  absolutePath: string;
+  exists: boolean;
+  content: string;
+  revision: string;
+  mode: number;
+};
+
+export type WorkspaceReviewMutation = {
+  action: SessionChangeHunkResolutionAction;
+  hunkIndexes: number[];
+  rollback: () => Promise<void>;
+};
 
 type FileSnapshot = {
   exists: boolean;
@@ -120,6 +137,178 @@ function repoPath(relativePath: string, scopePrefix: string): string {
 function safeRelativePath(value: string): boolean {
   if (!value || value.includes("\0") || path.posix.isAbsolute(value) || /^[A-Za-z]:\//.test(value)) return false;
   return !value.split("/").some((part) => part === "..");
+}
+
+function contentRevision(content: Buffer): string {
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
+
+async function workspaceTextSnapshot(cwd: string, relativePath: string): Promise<WorkspaceTextSnapshot> {
+  if (!safeRelativePath(relativePath)) throw new Error("Invalid review file path");
+  const projectRoot = await realpath(path.resolve(cwd));
+  const lexicalPath = path.resolve(projectRoot, relativePath);
+  const relativeCheck = path.relative(projectRoot, lexicalPath);
+  if (relativeCheck.startsWith("..") || path.isAbsolute(relativeCheck)) throw new Error("Review file is outside the project");
+  const resolvedParent = await realpath(path.dirname(lexicalPath));
+  const parentCheck = path.relative(projectRoot, resolvedParent);
+  if (parentCheck.startsWith("..") || path.isAbsolute(parentCheck)) throw new Error("Review file resolves outside the project");
+  const absolutePath = path.join(resolvedParent, path.basename(lexicalPath));
+  try {
+    const fileStat = await lstat(absolutePath);
+    if (fileStat.isSymbolicLink() || !fileStat.isFile()) throw new Error("Review merge only supports regular files");
+    if (fileStat.size > MAX_REVIEW_FILE_BYTES) throw new Error("Review file is too large to merge");
+    const buffer = await readFile(absolutePath);
+    if (buffer.includes(0)) throw new Error("Binary files cannot be merged");
+    let content: string;
+    try { content = new TextDecoder("utf-8", { fatal: true }).decode(buffer); }
+    catch { throw new Error("Review file is not valid UTF-8 text"); }
+    return { absolutePath, exists: true, content, revision: contentRevision(buffer), mode: Number(fileStat.mode) & 0o777 };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    return { absolutePath, exists: false, content: "", revision: "missing", mode: 0o644 };
+  }
+}
+
+function parsedReviewPatch(file: SessionChangeFile): StructuredPatch {
+  if (file.binary || file.truncated || !file.patch) throw new Error("This review file has no complete text patch");
+  const patches = parsePatch(file.patch);
+  if (patches.length !== 1 || !patches[0]) throw new Error("The review patch is invalid");
+  return patches[0];
+}
+
+function resolutionIndexes(file: SessionChangeFile): Set<number> {
+  return new Set((file.hunkResolutions ?? []).map((resolution) => resolution.hunkIndex));
+}
+
+function unresolvedHunkIndexes(file: SessionChangeFile, patch: StructuredPatch): number[] {
+  const resolved = resolutionIndexes(file);
+  return patch.hunks.map((_, index) => index).filter((index) => !resolved.has(index));
+}
+
+function patchWithHunks(patch: StructuredPatch, indexes: number[]): StructuredPatch {
+  return { ...patch, hunks: indexes.map((index) => patch.hunks[index]).filter((hunk): hunk is StructuredPatch["hunks"][number] => Boolean(hunk)) };
+}
+
+function reverseReviewHunks(content: string, patch: StructuredPatch, indexes: number[]): string {
+  const reversed = reversePatch(patchWithHunks(patch, indexes));
+  const result = applyPatch(content, reversed, { fuzzFactor: 0, autoConvertLineEndings: true });
+  if (result === false) throw new Error("The file changed after this review. Reload the review before merging.");
+  return result;
+}
+
+async function writeWorkspaceText(snapshot: WorkspaceTextSnapshot, content: string | null, mode: number): Promise<void> {
+  if (content === null) {
+    if (snapshot.exists) await rm(snapshot.absolutePath);
+    return;
+  }
+  if (Buffer.byteLength(content, "utf8") > MAX_REVIEW_FILE_BYTES || content.includes("\0")) throw new Error("Merged file exceeds the text-file limit");
+  const temporaryPath = `${snapshot.absolutePath}.${process.pid}.${randomUUID()}.pideck-merge`;
+  await writeFile(temporaryPath, content, { encoding: "utf8", mode });
+  try {
+    await chmod(temporaryPath, mode);
+    await rename(temporaryPath, snapshot.absolutePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+function fileMode(file: SessionChangeFile, snapshot: WorkspaceTextSnapshot): number {
+  const mode = file.newMode ?? file.oldMode;
+  if (mode === "100755") return 0o755;
+  if (mode === "100644") return 0o644;
+  return snapshot.mode;
+}
+
+function rollbackWorkspaceText(snapshot: WorkspaceTextSnapshot, file: SessionChangeFile, writtenContent?: string | null): () => Promise<void> {
+  if (writtenContent === undefined) return async () => {};
+  const writtenRevision = writtenContent === null ? "missing" : contentRevision(Buffer.from(writtenContent, "utf8"));
+  const writtenMode = fileMode(file, snapshot);
+  return async () => {
+    const current = await workspaceTextSnapshot(path.dirname(snapshot.absolutePath), path.basename(snapshot.absolutePath));
+    if (current.revision !== writtenRevision || (current.exists && current.mode !== writtenMode)) return;
+    await writeWorkspaceText(snapshot, snapshot.exists ? snapshot.content : null, fileMode(file, snapshot));
+  };
+}
+
+export function withResolvedReviewHunks(
+  file: SessionChangeFile,
+  hunkIndexes: number[],
+  action: SessionChangeHunkResolutionAction,
+  resolvedAt = Date.now(),
+): SessionChangeFile {
+  const resolutions = new Map((file.hunkResolutions ?? []).map((resolution) => [resolution.hunkIndex, resolution]));
+  for (const hunkIndex of hunkIndexes) resolutions.set(hunkIndex, { hunkIndex, action, resolvedAt });
+  return { ...file, hunkResolutions: [...resolutions.values()].sort((left, right) => left.hunkIndex - right.hunkIndex) };
+}
+
+export function acceptChangeReviewHunk(file: SessionChangeFile, hunkIndex: number): SessionChangeFile {
+  const patch = parsedReviewPatch(file);
+  if (!unresolvedHunkIndexes(file, patch).includes(hunkIndex)) throw new Error("This change block is already resolved");
+  return withResolvedReviewHunks(file, [hunkIndex], "accepted");
+}
+
+export async function loadChangeReviewMergeSource(
+  reviewId: string,
+  cwd: string,
+  file: SessionChangeFile,
+): Promise<SessionChangeReviewMergeSource> {
+  const patch = parsedReviewPatch(file);
+  const unresolvedHunks = unresolvedHunkIndexes(file, patch);
+  if (!unresolvedHunks.length) throw new Error("All changes in this file are already resolved");
+  const current = await workspaceTextSnapshot(cwd, file.path);
+  const originalContent = reverseReviewHunks(current.content, patch, unresolvedHunks);
+  const lineEnding = /\r\n/.test(current.content || originalContent) ? "crlf" : "lf";
+  return {
+    reviewId,
+    filePath: file.path,
+    originalContent,
+    currentContent: current.content,
+    currentRevision: current.revision,
+    unresolvedHunks,
+    originalExists: file.status !== "added",
+    currentExists: current.exists,
+    lineEnding,
+  };
+}
+
+export async function revertChangeReviewHunk(
+  cwd: string,
+  file: SessionChangeFile,
+  hunkIndex: number,
+): Promise<WorkspaceReviewMutation> {
+  const patch = parsedReviewPatch(file);
+  const unresolved = unresolvedHunkIndexes(file, patch);
+  if (!unresolved.includes(hunkIndex)) throw new Error("This change block is already resolved");
+  const current = await workspaceTextSnapshot(cwd, file.path);
+  const content = reverseReviewHunks(current.content, patch, [hunkIndex]);
+  const lastUnresolved = unresolved.length === 1;
+  const writtenContent = file.status === "added" && lastUnresolved && content === "" ? null : content;
+  await writeWorkspaceText(current, writtenContent, fileMode(file, current));
+  return { action: "reverted", hunkIndexes: [hunkIndex], rollback: rollbackWorkspaceText(current, file, writtenContent) };
+}
+
+export async function applyChangeReviewMerge(
+  reviewId: string,
+  cwd: string,
+  file: SessionChangeFile,
+  content: string,
+  expectedRevision: string,
+): Promise<WorkspaceReviewMutation> {
+  if (Buffer.byteLength(content, "utf8") > MAX_REVIEW_FILE_BYTES || content.includes("\0")) throw new Error("Merged file exceeds the text-file limit");
+  const source = await loadChangeReviewMergeSource(reviewId, cwd, file);
+  if (source.currentRevision !== expectedRevision) throw new Error("The file changed while the merge editor was open. Reload it and try again.");
+  const current = await workspaceTextSnapshot(cwd, file.path);
+  if (current.revision !== expectedRevision) throw new Error("The file changed while the merge editor was open. Reload it and try again.");
+  const action: SessionChangeHunkResolutionAction = content === source.currentContent
+    ? "accepted"
+    : content === source.originalContent ? "reverted" : "merged";
+  const nextContent = action === "reverted" && !source.originalExists && content === "" ? null : content;
+  const wroteWorkspace = nextContent !== current.content || (nextContent === null) !== !current.exists;
+  if (wroteWorkspace) {
+    await writeWorkspaceText(current, nextContent, fileMode(file, current));
+  }
+  return { action, hunkIndexes: source.unresolvedHunks, rollback: rollbackWorkspaceText(current, file, wroteWorkspace ? nextContent : undefined) };
 }
 
 function parseNameStatus(output: Buffer, scopePrefix: string): { paths: string[]; renames: Map<string, string> } {

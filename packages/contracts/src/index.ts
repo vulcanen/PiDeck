@@ -131,6 +131,13 @@ export interface SessionRunRecord {
 }
 
 export type SessionChangeFileStatus = "added" | "modified" | "deleted" | "renamed";
+export type SessionChangeHunkResolutionAction = "accepted" | "reverted" | "merged";
+
+export interface SessionChangeHunkResolution {
+  hunkIndex: number;
+  action: SessionChangeHunkResolutionAction;
+  resolvedAt: number;
+}
 
 export interface SessionChangeFile {
   path: string;
@@ -144,6 +151,19 @@ export interface SessionChangeFile {
   truncated: boolean;
   oldMode?: string;
   newMode?: string;
+  hunkResolutions?: SessionChangeHunkResolution[];
+}
+
+export interface SessionChangeReviewMergeSource {
+  reviewId: string;
+  filePath: string;
+  originalContent: string;
+  currentContent: string;
+  currentRevision: string;
+  unresolvedHunks: number[];
+  originalExists: boolean;
+  currentExists: boolean;
+  lineEnding: "lf" | "crlf";
 }
 
 export interface SessionChangeReview {
@@ -401,6 +421,9 @@ export interface PideckBridge {
     runMetadata(taskId: string, cwd?: string): Promise<SessionRunRecord[]>;
     changeReviews(taskId: string, cwd?: string): Promise<SessionChangeReviewCollection>;
     changeReview(taskId: string, reviewId: string, cwd?: string): Promise<SessionChangeReview | null>;
+    resolveChangeReviewHunk(taskId: string, reviewId: string, filePath: string, hunkIndex: number, action: "accept" | "revert", cwd?: string): Promise<SessionChangeReview>;
+    changeReviewMergeSource(taskId: string, reviewId: string, filePath: string, cwd?: string): Promise<SessionChangeReviewMergeSource>;
+    applyChangeReviewMerge(taskId: string, reviewId: string, filePath: string, content: string, currentRevision: string, cwd?: string): Promise<SessionChangeReview>;
     capabilities(taskId?: string, cwd?: string): Promise<SessionCapabilities>;
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     reload(taskId: string, cwd?: string): Promise<SessionCapabilities>;
@@ -508,6 +531,9 @@ export type PiHostCommand =
   | "sessions.runMetadata"
   | "sessions.changeReviews"
   | "sessions.changeReview"
+  | "sessions.resolveChangeReviewHunk"
+  | "sessions.changeReviewMergeSource"
+  | "sessions.applyChangeReviewMerge"
   | "sessions.capabilities"
   | "sessions.compact"
   | "sessions.reload"
@@ -608,6 +634,28 @@ const piHostPayloadSchemas = {
   "sessions.runMetadata": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "sessions.changeReviews": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "sessions.changeReview": payload({ taskId: z.string(), reviewId: z.string(), cwd: z.string().optional() }),
+  "sessions.resolveChangeReviewHunk": payload({
+    taskId: z.string(),
+    reviewId: z.string().min(1).max(512),
+    filePath: z.string().min(1).max(4096),
+    hunkIndex: z.number().int().min(0).max(10_000),
+    action: z.enum(["accept", "revert"]),
+    cwd: z.string().optional(),
+  }),
+  "sessions.changeReviewMergeSource": payload({
+    taskId: z.string(),
+    reviewId: z.string().min(1).max(512),
+    filePath: z.string().min(1).max(4096),
+    cwd: z.string().optional(),
+  }),
+  "sessions.applyChangeReviewMerge": payload({
+    taskId: z.string(),
+    reviewId: z.string().min(1).max(512),
+    filePath: z.string().min(1).max(4096),
+    content: z.string().max(1_000_000),
+    currentRevision: z.string().regex(/^(?:missing|sha256:[a-f\d]{64})$/),
+    cwd: z.string().optional(),
+  }),
   "sessions.capabilities": payload({ taskId: z.string().optional(), cwd: z.string().optional() }),
   "sessions.compact": payload({ taskId: z.string(), instructions: z.string().optional(), cwd: z.string().optional() }),
   "sessions.reload": payload({ taskId: z.string(), cwd: z.string().optional() }),

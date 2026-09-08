@@ -35,7 +35,7 @@
 | Steering / Follow-up 队列 | Composer 队列面板与投递菜单 | `agent.queue`、`setQueueModes`、`clearQueue`、`promoteQueue`、`editQueue`、`deleteQueue`；正在运行的 prompt 触发自动上下文压缩时，期间提交的普通消息进入 Pi 官方 `steer()` / `followUp()` 队列，不会启动竞争的 `Agent.prompt`，Extension 命令则保持 Pi CLI 的立即执行行为；Host 侧预检门闩同时覆盖 Pi 尚未报告 `isStreaming` 的短暂窗口。批处理模式单选项展示 Pi 已确认的当前模式与请求中反馈，变更审查分栏挤压时队列入口保持单行，带稳定 ID 的条目展示图片缩略图，并支持原位重新编辑或删除任意待处理 Steering/Follow-up 项。由于 Pi 没有任意单项删除 API，PiHost 会校验 sidecar 稳定 ID，再用 Pi 官方清空及按序重新入队 API 原子重建剩余队列，失败时恢复原队列；队列新增、编辑、删除、插入和处理在 follow 状态下自动跟随 |
 | 工具审批 | 中央审批卡 | 当前 PiHost `beforeToolCall` 适配 |
 | 工具过程 | 运行中不可展开的耗时提示 + 按时间排序的 Activity feed；完成后可折叠过程块 | 执行期间摘要只显示耗时，下方以低强调度的行内信息流和统一会话间距，按 Pi 事件顺序交错显示思考块与工具调用；结束后完整过程进入可展开摘要。实时/完成态详情使用同一高度上限并在溢出时内部滚动；实时区域会跟随刷新及延迟尺寸变化，直到用户有意向上滚动，且不会改变外层对话的 follow 状态；完成后保留 Tool Result、工具名称及成功/失败状态 |
-| 单轮文件变更审查 | Composer 摘要可打开可调宽面板或焦点受控抽屉；支持带日期/耗时/结果的无障碍轮次选择、筛选与目录聚合、完整方向键树导航、统一/Codex 风格拆分 diff、换行、仅空白过滤、轻量语法高亮、变更块导航、增量行折叠、重命名/模式/二进制/截断状态、复制路径、可重试错误，以及跨重启按 Session 恢复轮次/文件/目录/尺寸/选项/滚动；空排队轮次保留最近非空摘要 | PiHost 在 `agent_start`/Follow-up 边界捕获 Git 工作树，变更工具后对预览去抖并取消过期扫描，settlement 时权威比较（包括本轮提交后的 HEAD 变化），并使用 Pi 公开的 `generateUnifiedPatch()`。运行前脏文件仅在本轮再次变化时计入；候选、文件、内容、patch、历史及 IPC 均有硬上限，导入数据严格清洗。一个最小 `pideck.change-review-store` custom-entry 锚点关联原子替换 sidecar，最多保留 20 轮/12 MB；`sessions.changeReviews` 只传摘要与可用性，`sessions.changeReview` 延迟加载所选详情；Host 优雅退出会等待最终写入。同一时段的外部工作树修改可能被包含，UI 会明确说明 |
+| 单轮文件变更审查 | Composer 摘要可打开可调宽面板或焦点受控抽屉；支持带日期/耗时/结果的无障碍轮次选择、筛选与目录聚合、完整方向键树导航、统一/Codex 风格拆分 diff、换行、仅空白过滤、轻量语法高亮、变更块导航与逐块接受/撤销、延迟加载的 CodeMirror 可编辑合并、增量行折叠、重命名/模式/二进制/截断状态、复制路径、可重试错误，以及跨重启按 Session 恢复轮次/文件/目录/尺寸/选项/滚动；撤销需确认，二进制/超大/截断 patch 保持只读；空排队轮次保留最近非空摘要 | PiHost 在 `agent_start`/Follow-up 边界捕获 Git 工作树，变更工具后对预览去抖并取消过期扫描，settlement 时权威比较（包括本轮提交后的 HEAD 变化），并使用 Pi 公开的 `generateUnifiedPatch()`。运行前脏文件仅在本轮再次变化时计入；精确零模糊度反向 patch、项目内普通文件校验、逐文件修改锁、乐观 revision 校验、原子写入、元数据持久化失败回滚及处理结果持久化共同保护工作区修改；候选、文件、内容、patch、历史及 IPC 均有硬上限，导入数据严格清洗。一个最小 `pideck.change-review-store` custom-entry 锚点关联原子替换 sidecar，最多保留 20 轮/12 MB；列表 IPC 只传摘要与可用性，详情及合并源只加载所选文件；Host 优雅退出会等待最终写入。同一时段的外部工作树修改可能被包含，UI 会明确说明 |
 | 用户 Shell 命令 | Composer `!command` / `!!command`；不恢复独立终端面板 | `AgentSession.executeBash()`；`!!` 排除输出进入模型上下文，停止操作调用 `abortBash()` |
 | 上下文压缩 | Command Palette；`/compact [instructions]` | `AgentSession.compact()` 缩减后续模型上下文；手动压缩期间提交的输入继续在队列中可见、可编辑，并在压缩后按序恢复；桌面时间线继续显示完整持久化当前 Session 分支 |
 | 重新加载资源 | `/reload` | 调用 `AgentSession.reload()` 重新加载 SettingsManager、Package、Extension、Prompt、Skill、Theme 与模型注册表；先清理已卸载扩展留下的展示状态，再让保留扩展接收新的 `session_start`，最后刷新桌面能力 |
@@ -94,6 +94,6 @@ PiDeck 在输入框下方提供当前权限级别切换，并写入插件的 Pi 
 - Pi Package install/remove/update/config 管理器；快捷设置提供唯一入口。
 当前边界：组件实例不会跨进程，而是在 PiHost 内渲染并只传递有界纯文本画面；因此依赖像素级终端能力或任意 DOM 的扩展仍应使用 Pi CLI。PiDeck 不嵌入独立 CLI 面板，单独的兼容入口仍委托给 Pi 官方 `main()`。
 
-任务基线统一 diff 审查已经接入。逐块接受/撤销及 Monaco 可编辑合并流程仍未实现；在获得安全的 Pi/桌面映射前，PiDeck 不会把这些操作声明为已支持。
+任务基线统一 diff 审查、逐块接受/撤销和可编辑合并已经接入；staging 与提交编排仍不属于审查界面。
 
 新增能力必须先更新 `packages/contracts`，再更新 PiHost、Preload、Renderer 和本文矩阵。

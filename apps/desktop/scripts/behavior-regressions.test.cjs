@@ -15,7 +15,7 @@ const { validatePiHostPayload } = require("../../../packages/contracts/dist/inde
 const { localizeCommandDescription } = require("../../../packages/i18n/dist/index.js");
 const { PermissionEngine } = require("../../../packages/permission-engine/dist/index.js");
 const { copyElectronRuntimeLicenses } = require("../../../scripts/copy-electron-runtime-licenses.cjs");
-const { buildSessionChangeReview, captureWorkspaceChangeState, inspectGitWorkspaceAvailability, MAX_REVIEW_CAPTURE_PATHS } = require("../../../packages/pi-host/dist/session-change-review.js");
+const { acceptChangeReviewHunk, applyChangeReviewMerge, buildSessionChangeReview, captureWorkspaceChangeState, inspectGitWorkspaceAvailability, loadChangeReviewMergeSource, MAX_REVIEW_CAPTURE_PATHS, revertChangeReviewHunk, withResolvedReviewHunks } = require("../../../packages/pi-host/dist/session-change-review.js");
 const { createAgentRunReservation, isExtensionCommand, ManualCompactionPromptQueue, queuePromptDuringCompaction, waitForReservedAgentRun } = require("../../../packages/pi-host/dist/agent-prompt-coordination.js");
 const { updatePiSettings } = require("../../../packages/pi-host/dist/settings-command-handler.js");
 const { replaceQuotedAbsolutePaths } = require("../../../packages/pi-host/dist/external-editor-command.js");
@@ -816,6 +816,71 @@ test("change review follows a run that commits its changes", async (t) => {
   assert.match(review?.files[0]?.patch ?? "", /^\+after$/m);
 });
 
+test("change review resolves exact hunks and editable merges without overwriting concurrent edits", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pideck-change-merge-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: workspace });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: workspace });
+  const filePath = path.join(workspace, "two-hunks.txt");
+  const baseline = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n") + "\n";
+  fs.writeFileSync(filePath, baseline, "utf8");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["-c", "user.name=PiDeck Test", "-c", "user.email=pideck@example.invalid", "commit", "--quiet", "-m", "baseline"], { cwd: workspace });
+  const before = await captureWorkspaceChangeState(workspace);
+  const changed = baseline.replace("line 1\n", "changed 1\n").replace("line 14\n", "changed 14\n");
+  fs.writeFileSync(filePath, changed, "utf8");
+  const after = await captureWorkspaceChangeState(workspace);
+  const sdk = await import(pathToFileURL(path.join(__dirname, "../../../node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
+  const review = await buildSessionChangeReview("merge-review", 1, 2, before, after, sdk.generateUnifiedPatch);
+  const file = review?.files[0];
+  assert.ok(file);
+  assert.equal((file.patch.match(/^@@/gm) ?? []).length, 2);
+
+  const accepted = acceptChangeReviewHunk(file, 0);
+  assert.equal(accepted.hunkResolutions[0].action, "accepted");
+  const source = await loadChangeReviewMergeSource(review.id, workspace, accepted);
+  assert.deepEqual(source.unresolvedHunks, [1]);
+  assert.match(source.originalContent, /^changed 1$/m);
+  assert.match(source.originalContent, /^line 14$/m);
+
+  const reverted = await revertChangeReviewHunk(workspace, accepted, 1);
+  assert.match(fs.readFileSync(filePath, "utf8"), /^line 14$/m);
+  await reverted.rollback();
+  assert.equal(fs.readFileSync(filePath, "utf8"), changed);
+
+  const mergedContent = source.originalContent.replace("line 14\n", "manually merged 14\n");
+  const merged = await applyChangeReviewMerge(review.id, workspace, accepted, mergedContent, source.currentRevision);
+  assert.equal(merged.action, "merged");
+  assert.deepEqual(merged.hunkIndexes, [1]);
+  assert.match(fs.readFileSync(filePath, "utf8"), /^manually merged 14$/m);
+  fs.appendFileSync(filePath, "external after merge\n");
+  await merged.rollback();
+  assert.match(fs.readFileSync(filePath, "utf8"), /external after merge/);
+  fs.writeFileSync(filePath, changed, "utf8");
+
+  const fresh = await loadChangeReviewMergeSource(review.id, workspace, file);
+  fs.appendFileSync(filePath, "external edit\n");
+  await assert.rejects(() => applyChangeReviewMerge(review.id, workspace, file, fresh.currentContent, fresh.currentRevision), /changed while the merge editor was open/);
+  fs.writeFileSync(filePath, changed, "utf8");
+
+  if (process.platform !== "win32") {
+    fs.symlinkSync(filePath, path.join(workspace, "linked.txt"));
+    await assert.rejects(() => loadChangeReviewMergeSource(review.id, workspace, { ...file, path: "linked.txt" }), /regular files/);
+  }
+
+  const addedPath = path.join(workspace, "added.txt");
+  const beforeAdded = await captureWorkspaceChangeState(workspace);
+  fs.writeFileSync(addedPath, "new\n", "utf8");
+  const addedReview = await buildSessionChangeReview("added-review", 3, 4, beforeAdded, await captureWorkspaceChangeState(workspace), sdk.generateUnifiedPatch);
+  const addedFile = addedReview.files.find((item) => item.path === "added.txt");
+  assert.ok(addedFile);
+  const removed = await revertChangeReviewHunk(workspace, addedFile, 0);
+  assert.equal(fs.existsSync(addedPath), false);
+  await removed.rollback();
+  assert.equal(fs.readFileSync(addedPath, "utf8"), "new\n");
+  assert.equal(withResolvedReviewHunks(accepted, [1], removed.action).hunkResolutions.length, 2);
+});
+
 test("change review candidate work and output stay bounded", async () => {
   const beforeFiles = new Map();
   const afterFiles = new Map();
@@ -863,7 +928,7 @@ test("review persistence is schema-validated and bounded across reloads", async 
     outcome: "succeeded",
     startedAt: index,
     endedAt: index + 1,
-    files: [{ path: `file-${index}.txt`, status: "modified", additions: 1, deletions: 1, patch: `--- file-${index}.txt\n+++ file-${index}.txt\n@@ -1 +1 @@\n-a\n+b\n`, patchAvailable: true, binary: false, truncated: false }],
+    files: [{ path: `file-${index}.txt`, status: "modified", additions: 1, deletions: 1, patch: `--- file-${index}.txt\n+++ file-${index}.txt\n@@ -1 +1 @@\n-a\n+b\n`, patchAvailable: true, binary: false, truncated: false, hunkResolutions: [{ hunkIndex: 0, action: "accepted", resolvedAt: index + 1 }] }],
     additions: 1,
     deletions: 1,
     truncated: false,
@@ -877,6 +942,7 @@ test("review persistence is schema-validated and bounded across reloads", async 
   assert.equal(loaded.reviews[0].id, "review-15");
   assert.equal(loaded.reviews.at(-1).id, "review-34");
   assert.equal(loaded.reviews.at(-1).files[0].patchAvailable, true);
+  assert.deepEqual(loaded.reviews.at(-1).files[0].hunkResolutions, [{ hunkIndex: 0, action: "accepted", resolvedAt: 35 }]);
   assert.equal(loaded.reviews.at(-1).outcome, "succeeded");
   const summary = summarizeSessionChangeReview(loaded.reviews.at(-1));
   assert.equal(summary.files[0].patch, undefined);

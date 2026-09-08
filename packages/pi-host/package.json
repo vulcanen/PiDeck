@@ -22,6 +22,7 @@
     "@pideck/contracts": "0.1.5",
     "@pideck/domain": "0.1.5",
     "@pideck/permission-engine": "0.1.5",
-    "@pideck/pi-adapter": "0.1.5"
+    "@pideck/pi-adapter": "0.1.5",
+    "diff": "^9.0.0"
   }
 }

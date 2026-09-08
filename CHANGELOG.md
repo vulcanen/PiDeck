@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added per-hunk accept/revert actions and a CodeMirror-based editable merge view to per-run file change review, with external-edit conflict detection and safe atomic writes.
+
 ### Fixed
 
 - Release automation now keeps newly generated installers as a Draft Release until they pass manual signing and installation checks.

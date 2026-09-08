@@ -21,7 +21,7 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的非官方桌面客户�
 - 实时查看回复、Thinking、工具调用、执行结果和耗时。
 - 审批工具调用，调整权限，并管理 Steering / Follow-up 队列。
 - 使用 Pi 的 slash command、Prompt、Skill、Extension 和 Package。
-- 通过 `/fork`、`/clone`、`/tree` 浏览会话分支，并查看每轮任务产生的文件改动。
+- 通过 `/fork`、`/clone`、`/tree` 浏览会话分支；查看每轮文件改动，逐块接受或撤销，并直接编辑合并结果。
 - 渲染 Markdown、代码、Mermaid 图和数学公式，支持中英文及浅色、深色主题。
 
 完整支持情况见 [Pi CLI → PiDeck 功能矩阵](docs/pi-cli-feature-matrix.zh-CN.md)。
@@ -95,7 +95,7 @@ Select-String -Path .\SHA256SUMS.txt -Pattern 'PiDeck-VERSION-windows-x64-setup.
 - 暂不提供 Linux 发行安装包。
 - 暂无应用内自动更新；新版本通过 GitHub Releases 获取。
 - 没有独立的本地终端面板；Shell 命令仍可通过 Pi 工具及 `!command`、`!!command` 使用。
-- 文件改动审查暂不支持逐块接受、撤销或可编辑合并。
+- 二进制、超大或仅保留了截断差异的文件不能逐块处理或编辑合并。
 - Print、JSON、RPC、stdin 和 Auth Print 没有桌面入口，需要通过 `npm run cli` 或 `pideck-cli` 使用。
 - 依赖像素级终端显示或任意 DOM 的 Extension 仍需使用 Pi CLI。
 - 当前只保证与 Pi SDK `0.85.1` 兼容。

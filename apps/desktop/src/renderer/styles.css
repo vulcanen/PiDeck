@@ -679,7 +679,7 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .change-review-status { display: inline-grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border-radius: 5px; background: var(--surface-strong); color: var(--muted); font: 700 9px var(--font-mono); }
 .change-review-status.added { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
 .change-review-status.deleted { background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--red); }
-.change-review-code { min-width: 0; min-height: 0; overflow: auto; background: color-mix(in srgb, var(--canvas) 96%, var(--surface)); font: 11px/1.58 var(--font-mono); scrollbar-gutter: stable; }
+.change-review-code { min-width: 0; min-height: 0; overflow: auto; container-type: inline-size; background: color-mix(in srgb, var(--canvas) 96%, var(--surface)); font: 11px/1.58 var(--font-mono); scrollbar-gutter: stable; }
 .change-review-code::-webkit-scrollbar, .change-review-files::-webkit-scrollbar { width: 9px; height: 9px; }
 .change-review-code::-webkit-scrollbar-thumb, .change-review-files::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 9px; background: var(--line-strong); background-clip: padding-box; }
 .change-review-line { display: grid; width: max-content; min-width: 100%; grid-template-columns: 44px 44px 20px minmax(max-content, 1fr); min-height: 18px; }
@@ -1315,6 +1315,8 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 @keyframes drawer-in { from { opacity: .7; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes toast-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
+@keyframes hunk-resolved { 0% { box-shadow: inset 0 0 var(--resolution-color); } 45% { box-shadow: inset 5px 0 var(--resolution-color); } 100% { box-shadow: inset 3px 0 var(--resolution-color); } }
+@keyframes hunk-badge-in { from { opacity: 0; transform: translateY(-3px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
 /* Hardened per-run review: bounded diff mounting, scoped restoration, drawer
    focus behavior, and Git/error/truncation states. */
@@ -1348,6 +1350,57 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .change-review-hunk-actions button:disabled { color: var(--faint); opacity: .45; }
 .change-review-hunk-actions button:first-child svg { transform: rotate(90deg); }
 .change-review-hunk-actions button:last-child svg { transform: rotate(-90deg); }
+.change-review-hunk-content { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding-right: 6px; }
+.change-review-hunk-content code { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.change-review-hunk-group { position: relative; width: max-content; min-width: 100%; }
+.change-review-code.wrap-lines .change-review-hunk-group { width: 100%; }
+.change-review-hunk-controls-sticky { position: sticky; top: 4px; left: 0; z-index: 4; display: flex; width: 100cqw; height: 0; box-sizing: border-box; justify-content: flex-end; padding-right: 8px; pointer-events: none; }
+.change-review-hunk-controls-sticky > * { pointer-events: auto; }
+.change-review-hunk-group.confirming-revert .change-review-hunk-controls-sticky { z-index: 6; }
+.change-review-hunk-group.resolved-accepted { --resolution-color: var(--green); }
+.change-review-hunk-group.resolved-reverted { --resolution-color: var(--red); }
+.change-review-hunk-group.resolved-merged { --resolution-color: var(--blue); }
+.change-review-hunk-group[class*="resolved-"] { animation: hunk-resolved 520ms var(--motion) both; }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line,
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row,
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-meta { opacity: .5; filter: saturate(.35); transition: opacity 180ms var(--motion), filter 180ms var(--motion); }
+.change-review-hunk-resolution-actions, .change-review-hunk-resolution { position: relative; display: inline-flex; min-height: 22px; flex: 0 0 auto; align-items: center; gap: 4px; font: 9px var(--font-sans); }
+.change-review-hunk-resolution-actions button { min-height: 22px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--green) 32%, var(--line)); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--green) 8%, var(--surface)); color: var(--green); }
+.change-review-hunk-resolution-actions button.revert { border-color: color-mix(in srgb, var(--red) 28%, var(--line)); background: color-mix(in srgb, var(--red) 7%, var(--surface)); color: var(--red); }
+.change-review-hunk-resolution-actions button:hover:not(:disabled) { background: var(--surface); box-shadow: var(--shadow-subtle); }
+.change-review-hunk-resolution-actions button:disabled { opacity: .45; }
+.change-review-hunk-resolution { padding: 0 7px; border: 1px solid color-mix(in srgb, var(--green) 22%, var(--line)); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--green) 12%, var(--surface)); color: var(--green); box-shadow: var(--shadow-subtle); animation: hunk-badge-in 180ms var(--motion) both; }
+.change-review-hunk-resolution.reverted { border-color: color-mix(in srgb, var(--red) 22%, var(--line)); background: color-mix(in srgb, var(--red) 8%, var(--surface)); color: var(--red); }
+.change-review-hunk-resolution.merged { border-color: color-mix(in srgb, var(--blue) 22%, var(--line)); background: color-mix(in srgb, var(--blue) 9%, var(--surface)); color: var(--blue); }
+.change-review-revert-popover { position: absolute; top: calc(100% + 7px); right: 0; z-index: 5; display: grid; width: min(280px, calc(100cqw - 16px)); gap: 8px; padding: 10px; border: 1px solid color-mix(in srgb, var(--red) 28%, var(--line-strong)); border-radius: var(--radius-card); background: var(--surface); color: var(--muted); box-shadow: var(--shadow-popover); animation: hunk-badge-in 140ms var(--motion) both; }
+.change-review-revert-popover::before { position: absolute; top: -5px; right: 18px; width: 8px; height: 8px; border-top: 1px solid color-mix(in srgb, var(--red) 28%, var(--line-strong)); border-left: 1px solid color-mix(in srgb, var(--red) 28%, var(--line-strong)); background: var(--surface); content: ""; transform: rotate(45deg); }
+.change-review-revert-popover > span:first-child { display: grid; gap: 3px; }
+.change-review-revert-popover strong { color: var(--text); font-size: var(--font-size-compact); font-weight: 600; }
+.change-review-revert-popover small { font-size: 9px; line-height: 1.4; }
+.change-review-revert-popover > span:last-child { display: flex; justify-content: flex-end; gap: 5px; }
+.change-review-revert-popover .button { min-height: var(--control-height-compact); padding: 0 8px; font-size: var(--font-size-compact); }
+.change-review-action-error { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 7px 10px; border-top: 1px solid color-mix(in srgb, var(--amber) 28%, var(--line)); background: color-mix(in srgb, var(--amber) 7%, var(--canvas)); color: var(--muted); font-size: var(--font-size-compact); }
+.change-review-action-error { border-color: color-mix(in srgb, var(--red) 28%, var(--line)); background: color-mix(in srgb, var(--red) 7%, var(--canvas)); color: var(--red); }
+.change-review-action-error span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-review-merge-trigger { border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line)); color: var(--accent); }
+.change-review-merge-trigger:disabled { border-color: transparent; color: var(--faint); opacity: .55; }
+.change-review-merge-backdrop { position: fixed; inset: 0; z-index: var(--layer-modal); display: grid; place-items: center; padding: 24px; background: var(--overlay-scrim-subtle); backdrop-filter: blur(2px); }
+.change-review-merge-dialog { display: grid; width: min(1120px, calc(100vw - 48px)); height: min(820px, calc(100dvh - 48px)); min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-dialog); background: var(--canvas); box-shadow: var(--shadow-dialog); animation: dialog-in 150ms var(--motion) both; }
+.change-review-merge-dialog > header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 14px 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.change-review-merge-dialog > header > div { display: grid; min-width: 0; gap: 4px; }
+.change-review-merge-dialog > header strong { overflow: hidden; color: var(--text); font: 600 var(--font-size-label) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.change-review-merge-dialog > header small { max-width: 720px; color: var(--muted); font-size: var(--font-size-compact); line-height: 1.45; }
+.change-review-merge-editor { min-width: 0; min-height: 0; overflow: hidden; }
+.change-review-merge-editor .cm-editor { outline: 0; }
+.change-review-merge-editor .cm-editor.cm-focused { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+.change-review-merge-editor .cm-scroller { overflow: auto; }
+.change-review-merge-editor .cm-chunkButtons { display: flex; gap: 4px; padding-top: 4px; }
+.change-review-merge-editor .cm-merge-action { min-height: 22px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--green) 32%, var(--line)); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--green) 12%, var(--surface)); color: var(--green); font: 600 10px var(--font-sans); cursor: pointer; }
+.change-review-merge-editor .cm-merge-action.reject { border-color: color-mix(in srgb, var(--red) 30%, var(--line)); background: color-mix(in srgb, var(--red) 10%, var(--surface)); color: var(--red); }
+.change-review-merge-dialog > footer { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--surface); }
+.change-review-merge-dialog > footer > span { min-width: 0; flex: 1; color: var(--muted); font-size: var(--font-size-compact); }
+.change-review-merge-dialog > footer > strong { display: flex; min-width: 0; max-width: 45%; align-items: center; gap: 5px; overflow: hidden; color: var(--red); font-size: var(--font-size-compact); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.change-review-merge-loading { display: flex; align-items: center; gap: 9px; padding: 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-card); background: var(--surface); color: var(--muted); box-shadow: var(--shadow); font-size: var(--font-size-label); }
 .change-review-line.whitespace-only, .change-review-split-cell.whitespace-only { background-image: repeating-linear-gradient(-45deg, transparent 0 4px, color-mix(in srgb, var(--amber) 7%, transparent) 4px 8px); }
 .change-review-code.wrap-lines .change-review-line { width: 100%; grid-template-columns: 44px 44px 20px minmax(0, 1fr); }
 .change-review-code.wrap-lines .change-review-line code, .change-review-code.wrap-lines .change-review-split-cell code { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1556,6 +1609,14 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
   .change-review-split-cell { grid-template-columns: 50px minmax(max-content, 1fr); }
   .change-review-code.wrap-lines .change-review-split-cell { grid-template-columns: 50px minmax(0, 1fr); }
   .change-review-split-gap-cell { padding-left: 62px; }
+  .change-review-merge-backdrop { padding: 0; }
+  .change-review-merge-dialog { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .change-review-merge-dialog > header { padding: 12px; }
+  .change-review-merge-dialog > header small { display: none; }
+  .change-review-merge-dialog > footer { flex-wrap: wrap; }
+  .change-review-merge-dialog > footer > span { flex-basis: 100%; }
+  .change-review-merge-dialog > footer > strong { max-width: 100%; flex-basis: 100%; }
+  .change-review-merge-dialog > footer .button { min-height: var(--control-height-touch); flex: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

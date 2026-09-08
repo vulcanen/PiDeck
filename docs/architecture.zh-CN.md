@@ -136,6 +136,7 @@ PiDeck/
 │        ├─ use-runtime-events.ts         # PiHost 运行时事件状态归一化
 │        ├─ use-change-review.ts          # 有界、可持久恢复的 Session 审查视图/详情状态
 │        ├─ change-review-model.ts        # 纯 diff/目录树/筛选/键盘投影
+│        ├─ ui/change-review-merge.tsx    # 延迟加载的 CodeMirror 可编辑合并对话框
 │        ├─ use-conversation-scroll.ts    # Session 滚动快照与最新位置
 │        ├─ use-stream-deltas.ts          # 流式增量的有界批处理
 │        ├─ use-global-shortcuts.ts       # 全局快捷键与焦点边界
@@ -237,7 +238,7 @@ Renderer 的会话时间线由 `app-conversation.tsx` 与 `ui/message-timeline.t
 
 完整 patch 不再每轮无界追加到 Session JSONL。PiHost 只写一个小型版本化 `pideck.change-review-store` custom-entry 锚点，并原子替换 Session 文件旁的 sidecar；该文件最多 20 轮/12 MB，随 JSONL 导出/导入复制，删除 Session 时一并移除。最近的有效旧 `pideck.change-review` 记录会在后续写入时复制进 sidecar；原有 append-only JSONL entry 为兼容性保留，但不再新增完整 patch entry；所有旧 entry、导入内容和 sidecar 都先经过 schema、相对路径、数量与字节上限校验，损坏 sidecar 会隔离。`sessions.changeReviews` 只返回摘要与 Git 可用性，`sessions.changeReview` 延迟加载所选轮次详情。sidecar 写入串行化，Main 退出前通过内部 `runtime.shutdown` 短暂等待最终写入。
 
-审查 UI 可作为宽分栏或焦点受控抽屉打开；抽屉会把标题栏、项目侧栏、分界线和被覆盖的对话设为 inert，并在关闭后把焦点恢复到审查入口。它支持带日期/耗时/结果的圆角轮次选择、筛选与目录聚合、完整方向键树导航、统一/Codex 风格拆分 diff、自动换行、仅空白过滤、轻量语法高亮、变更块导航、增量行折叠、复制路径，以及非 Git/Git/存储/详情失败重试。打开状态、轮次、文件、目录展开、尺寸、diff 选项与滚动位置均有界并按 Session 跨重启恢复，patch 仍只由 Host 持有。暂不提供 staging、回滚、提交或可编辑合并操作。
+审查 UI 可作为宽分栏或焦点受控抽屉打开；抽屉会把标题栏、项目侧栏、分界线和被覆盖的对话设为 inert，并在关闭后把焦点恢复到审查入口。它支持带日期/耗时/结果的圆角轮次选择、筛选与目录聚合、完整方向键树导航、统一/Codex 风格拆分 diff、自动换行、仅空白过滤、轻量语法高亮、变更块导航与处理、增量行折叠、复制路径，以及非 Git/Git/存储/详情失败重试。完整 UTF-8 文本 patch 可逐块接受或撤销；撤销需确认，并以零模糊度反向应用所选块。`change-review-merge.tsx` 延迟加载 CodeMirror 统一合并视图，既可逐块处理也可直接编辑最终内容。PiHost 重建未处理块的基线，将普通文件限制在项目内，串行化修改、原子写入，并在编辑器打开后文件发生变化时拒绝保存；处理结果持久化到有界 sidecar。打开状态、轮次、文件、目录展开、尺寸、diff 选项与滚动位置均有界并按 Session 跨重启恢复，patch 仍只由 Host 持有。staging 与提交编排仍不提供；二进制、超大或截断 patch 保持只读。
 
 每个访问过的 Session 保留独立 pane，非活动 pane 用 `visibility: hidden` 而非 `display: none`，浏览器因此天然保留各自的 `scrollTop`，无需手动恢复逻辑；其 scroll/resize/mutation observer 会断开，直到 pane 再次激活。快照 `ConversationScrollSnapshot` 只剩 `{ top, follow }`。follow 状态的退出**只认真实输入事件**（`wheel` 且 `deltaY < 0`、touch 上滑），不再从 `scrollTop` 变小推断——因为内容会真实收缩（流式行被最终消息替换、working 指示器消失、执行摘要折叠），按位移推断会误判成"用户上滚"从而杀死自动跟随。程序化平滑滚动期间用 `pinningRef`（含 1000ms 兜底超时）latch 住 follow，避免"跳到最新"按钮在动画中途闪回。Modal 浮层会把应用壳层标记为 inert 并从辅助技术树隐藏，共享焦点基元只允许最上层嵌套对话框处理 Escape。
 

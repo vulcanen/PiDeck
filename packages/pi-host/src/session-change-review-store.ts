@@ -19,6 +19,7 @@ const MAX_PATH_CHARS = 4096;
 const MAX_ID_CHARS = 512;
 const MAX_COUNT = 10_000_000;
 const MAX_DATE_MS = 8_640_000_000_000_000;
+const MAX_HUNK_RESOLUTIONS = 2_000;
 
 type StoredReviewDocument = { schemaVersion: 2; reviews: SessionChangeReview[] };
 type ReviewLoadResult = { reviews: SessionChangeReview[]; invalid: boolean };
@@ -86,6 +87,21 @@ function sanitizeFile(value: unknown, remainingPatchBytes: number): { file?: Ses
   }
   const oldMode = sanitizeMode(record.oldMode);
   const newMode = sanitizeMode(record.newMode);
+  const hunkResolutions = new Map<number, NonNullable<SessionChangeFile["hunkResolutions"]>[number]>();
+  if (Array.isArray(record.hunkResolutions)) {
+    for (const value of record.hunkResolutions.slice(0, MAX_HUNK_RESOLUTIONS)) {
+      if (!value || typeof value !== "object") continue;
+      const resolution = value as Record<string, unknown>;
+      if (!Number.isSafeInteger(resolution.hunkIndex) || Number(resolution.hunkIndex) < 0 || Number(resolution.hunkIndex) > MAX_COUNT) continue;
+      if (resolution.action !== "accepted" && resolution.action !== "reverted" && resolution.action !== "merged") continue;
+      if (!Number.isFinite(resolution.resolvedAt) || Number(resolution.resolvedAt) < 0 || Number(resolution.resolvedAt) > MAX_DATE_MS) continue;
+      hunkResolutions.set(Number(resolution.hunkIndex), {
+        hunkIndex: Number(resolution.hunkIndex),
+        action: resolution.action,
+        resolvedAt: Number(resolution.resolvedAt),
+      });
+    }
+  }
   return {
     file: {
       path: record.path,
@@ -99,6 +115,7 @@ function sanitizeFile(value: unknown, remainingPatchBytes: number): { file?: Ses
       truncated,
       ...(oldMode ? { oldMode } : {}),
       ...(newMode ? { newMode } : {}),
+      ...(hunkResolutions.size ? { hunkResolutions: [...hunkResolutions.values()].sort((left, right) => left.hunkIndex - right.hunkIndex) } : {}),
     },
     patchBytes,
   };

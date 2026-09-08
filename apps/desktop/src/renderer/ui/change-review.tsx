@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,6 +14,7 @@ import type {
   SessionChangeFile,
   SessionChangeReview,
   SessionChangeReviewAvailability,
+  SessionChangeReviewMergeSource,
   SessionChangeReviewUnavailableReason,
 } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
@@ -33,6 +36,7 @@ import { PaneResizeHandle } from "./pane-resize-handle";
 
 const INITIAL_DIFF_ROWS = 800;
 const DIFF_ROW_STEP = 800;
+const ChangeReviewMergeEditor = lazy(() => import("./change-review-merge.js").then((module) => ({ default: module.ChangeReviewMergeEditor })));
 
 function statusLabel(file: SessionChangeFile, language: Language): string {
   const t = copy[language];
@@ -269,19 +273,90 @@ function reviewRunLabel(review: SessionChangeReview, index: number, total: numbe
   return `${t.changeReviewRun(index + 1, total)} · ${suffix}${outcome ? ` · ${outcome}` : ""}${duration}`;
 }
 
-function UnifiedDiffRows({ lines }: { lines: DiffLine[] }) {
-  return <>{lines.map((line) => <div
-    id={line.kind === "hunk" ? `change-review-hunk-${line.hunkIndex}` : undefined}
-    className={`change-review-line ${line.kind} ${line.whitespaceOnly ? "whitespace-only" : ""}`}
-    role="row"
-    tabIndex={line.kind === "hunk" ? -1 : undefined}
-    key={line.key}
-  >
-    <span className="change-review-line-number" role="cell">{line.oldLine ?? ""}</span>
-    <span className="change-review-line-number" role="cell">{line.newLine ?? ""}</span>
-    <span className="change-review-line-marker" role="cell">{line.marker}</span>
-    <code role="cell"><CodeLine text={line.text} /></code>
-  </div>)}</>;
+function HunkControls({
+  hunkIndex,
+  resolution,
+  language,
+  disabled,
+  confirmingRevert,
+  onAccept,
+  onRequestRevert,
+  onCancelRevert,
+  onConfirmRevert,
+}: {
+  hunkIndex: number;
+  resolution?: "accepted" | "reverted" | "merged";
+  language: Language;
+  disabled: boolean;
+  confirmingRevert: boolean;
+  onAccept: (hunkIndex: number) => void;
+  onRequestRevert: (hunkIndex: number) => void;
+  onCancelRevert: () => void;
+  onConfirmRevert: (hunkIndex: number) => void;
+}) {
+  const t = copy[language];
+  if (resolution) return <span className={`change-review-hunk-resolution ${resolution}`} role="status" aria-live="polite">
+    <Icon name="check" size={11} />
+    {resolution === "accepted" ? t.changeReviewHunkAccepted : resolution === "reverted" ? t.changeReviewHunkReverted : t.changeReviewHunkMerged}
+  </span>;
+  return <span className="change-review-hunk-resolution-actions">
+    <button type="button" disabled={disabled} onClick={() => onAccept(hunkIndex)}>{t.changeReviewAcceptHunk}</button>
+    <button type="button" className="revert" disabled={disabled} aria-expanded={confirmingRevert} onClick={() => onRequestRevert(hunkIndex)}>{t.changeReviewRevertHunk}</button>
+    {confirmingRevert && <span className="change-review-revert-popover" role="alertdialog" aria-label={t.changeReviewConfirmRevert} onKeyDown={(event) => {
+      if (event.key === "Escape") { event.preventDefault(); onCancelRevert(); }
+    }}>
+      <span><strong>{t.changeReviewConfirmRevert}</strong><small>{t.changeReviewConfirmRevertBody}</small></span>
+      <span>
+        <button type="button" className="button ghost" autoFocus disabled={disabled} onClick={onCancelRevert}>{t.changeReviewCancel}</button>
+        <button type="button" className="button danger-subtle" disabled={disabled} onClick={() => onConfirmRevert(hunkIndex)}>{t.changeReviewConfirmRevert}</button>
+      </span>
+    </span>}
+  </span>;
+}
+
+function rowsByHunk<T extends { hunkIndex: number }>(rows: T[]): T[][] {
+  const groups: T[][] = [];
+  for (const row of rows) {
+    const current = groups.at(-1);
+    if (!current || current[0]?.hunkIndex !== row.hunkIndex) groups.push([row]);
+    else current.push(row);
+  }
+  return groups;
+}
+
+function UnifiedDiffRows({ lines, file, language, disabled, pendingRevertHunk, onAccept, onRequestRevert, onCancelRevert, onConfirmRevert }: {
+  lines: DiffLine[];
+  file: SessionChangeFile;
+  language: Language;
+  disabled: boolean;
+  pendingRevertHunk: number | null;
+  onAccept: (hunkIndex: number) => void;
+  onRequestRevert: (hunkIndex: number) => void;
+  onCancelRevert: () => void;
+  onConfirmRevert: (hunkIndex: number) => void;
+}) {
+  const resolutions = new Map(file.hunkResolutions?.map((resolution) => [resolution.hunkIndex, resolution.action]));
+  return <>{rowsByHunk(lines).map((group) => {
+    const hunkIndex = group[0]?.hunkIndex ?? -1;
+    const resolution = resolutions.get(hunkIndex);
+    return <div className={`change-review-hunk-group ${resolution ? `resolved-${resolution}` : ""} ${pendingRevertHunk === hunkIndex ? "confirming-revert" : ""}`} role="rowgroup" key={`hunk-group-${hunkIndex}`}>
+      {hunkIndex >= 0 && <div className="change-review-hunk-controls-sticky" role="row"><div role="cell"><HunkControls hunkIndex={hunkIndex} resolution={resolution} language={language} disabled={disabled} confirmingRevert={pendingRevertHunk === hunkIndex} onAccept={onAccept} onRequestRevert={onRequestRevert} onCancelRevert={onCancelRevert} onConfirmRevert={onConfirmRevert} /></div></div>}
+      {group.map((line) => <div
+        id={line.kind === "hunk" ? `change-review-hunk-${line.hunkIndex}` : undefined}
+        className={`change-review-line ${line.kind} ${line.whitespaceOnly ? "whitespace-only" : ""}`}
+        role="row"
+        tabIndex={line.kind === "hunk" ? -1 : undefined}
+        key={line.key}
+      >
+        <span className="change-review-line-number" role="cell">{line.oldLine ?? ""}</span>
+        <span className="change-review-line-number" role="cell">{line.newLine ?? ""}</span>
+        <span className="change-review-line-marker" role="cell">{line.marker}</span>
+        {line.kind === "hunk"
+          ? <span className="change-review-hunk-content" role="cell"><code><CodeLine text={line.text} /></code></span>
+          : <code role="cell"><CodeLine text={line.text} /></code>}
+      </div>)}
+    </div>;
+  })}</>;
 }
 
 function SplitDiffCell({ line, side }: { line?: DiffLine; side: "old" | "new" }) {
@@ -294,6 +369,53 @@ function SplitDiffCell({ line, side }: { line?: DiffLine; side: "old" | "new" })
     <span className="change-review-split-marker">{line?.kind === "addition" ? "+" : line?.kind === "deletion" ? "−" : ""}</span>
     <code>{line ? <CodeLine text={line.text} /> : " "}</code>
   </div>;
+}
+
+function SplitDiffRows({ rows, file, language, disabled, pendingRevertHunk, onAccept, onRequestRevert, onCancelRevert, onConfirmRevert }: {
+  rows: ReturnType<typeof sideBySideRows>;
+  file: SessionChangeFile;
+  language: Language;
+  disabled: boolean;
+  pendingRevertHunk: number | null;
+  onAccept: (hunkIndex: number) => void;
+  onRequestRevert: (hunkIndex: number) => void;
+  onCancelRevert: () => void;
+  onConfirmRevert: (hunkIndex: number) => void;
+}) {
+  const t = copy[language];
+  const resolutions = new Map(file.hunkResolutions?.map((resolution) => [resolution.hunkIndex, resolution.action]));
+  return <>{rowsByHunk(rows).map((group) => {
+    const hunkIndex = group[0]?.hunkIndex ?? -1;
+    const resolution = resolutions.get(hunkIndex);
+    return <div className={`change-review-hunk-group ${resolution ? `resolved-${resolution}` : ""} ${pendingRevertHunk === hunkIndex ? "confirming-revert" : ""}`} role="rowgroup" key={`split-hunk-group-${hunkIndex}`}>
+      {hunkIndex >= 0 && <div className="change-review-hunk-controls-sticky" role="row"><div role="cell"><HunkControls hunkIndex={hunkIndex} resolution={resolution} language={language} disabled={disabled} confirmingRevert={pendingRevertHunk === hunkIndex} onAccept={onAccept} onRequestRevert={onRequestRevert} onCancelRevert={onCancelRevert} onConfirmRevert={onConfirmRevert} /></div></div>}
+      {group.map((row) => {
+        if (row.kind === "pair") return <div className="change-review-split-row" role="row" key={row.key}>
+          <SplitDiffCell line={row.oldLine} side="old" />
+          <SplitDiffCell line={row.newLine} side="new" />
+        </div>;
+        if (row.kind === "hunk") {
+          const hasGap = Boolean(row.oldOmittedLines || row.newOmittedLines);
+          return <div
+            id={`change-review-hunk-${row.hunkIndex}`}
+            className={`change-review-split-meta hunk ${hasGap ? "has-gap" : "no-gap"}`}
+            role="row"
+            tabIndex={-1}
+            title={row.text}
+            key={row.key}
+          >
+            {hasGap
+              ? <>
+                  <div className="change-review-split-gap-cell" role="cell">{row.oldOmittedLines ? <span>{t.changeReviewUnchangedLines(row.oldOmittedLines)}</span> : null}</div>
+                  <div className="change-review-split-gap-cell" role="cell">{row.newOmittedLines ? <span>{t.changeReviewUnchangedLines(row.newOmittedLines)}</span> : null}</div>
+                </>
+              : <code className="sr-only" role="cell">{row.text}</code>}
+          </div>;
+        }
+        return <div className="change-review-split-meta meta" role="row" key={row.key}><code role="cell">{row.text}</code></div>;
+      })}
+    </div>;
+  })}</>;
 }
 
 function ChangeReviewDiff({
@@ -311,6 +433,9 @@ function ChangeReviewDiff({
   onIgnoreWhitespace,
   onScrollPosition,
   onRetryDetail,
+  onResolveHunk,
+  onLoadMergeSource,
+  onApplyMerge,
 }: {
   review: SessionChangeReview;
   file: SessionChangeFile;
@@ -326,6 +451,9 @@ function ChangeReviewDiff({
   onIgnoreWhitespace: (ignore: boolean) => void;
   onScrollPosition: (position: ChangeReviewScrollPosition) => void;
   onRetryDetail: () => void;
+  onResolveHunk: (reviewId: string, filePath: string, hunkIndex: number, action: "accept" | "revert") => Promise<SessionChangeReview>;
+  onLoadMergeSource: (reviewId: string, filePath: string) => Promise<SessionChangeReviewMergeSource>;
+  onApplyMerge: (reviewId: string, filePath: string, content: string, currentRevision: string) => Promise<SessionChangeReview>;
 }) {
   const t = copy[language];
   const codeRef = useRef<HTMLDivElement>(null);
@@ -334,13 +462,28 @@ function ChangeReviewDiff({
   const [visibleRows, setVisibleRows] = useState(INITIAL_DIFF_ROWS);
   const [copied, setCopied] = useState(false);
   const [currentHunk, setCurrentHunk] = useState(-1);
+  const [busyHunk, setBusyHunk] = useState<number | null>(null);
+  const [pendingRevertHunk, setPendingRevertHunk] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string>();
+  const [mergeSource, setMergeSource] = useState<SessionChangeReviewMergeSource>();
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const [mergeSaving, setMergeSaving] = useState(false);
+  const [mergeError, setMergeError] = useState<string>();
+  const mergeTriggerRef = useRef<HTMLButtonElement>(null);
   const parsedLines = useMemo(() => file.patch ? parseUnifiedPatch(file.patch) : [], [file.patch]);
   const lines = useMemo(() => ignoreWhitespace ? parsedLines.filter((line) => !line.whitespaceOnly) : parsedLines, [ignoreWhitespace, parsedLines]);
   const splitRows = useMemo(() => sideBySideRows(lines), [lines]);
   const totalRows = diffMode === "split" ? splitRows.length : lines.length;
   const hunkCount = lines.reduce((maximum, line) => Math.max(maximum, line.hunkIndex + 1), 0);
 
-  useEffect(() => { setVisibleRows(INITIAL_DIFF_ROWS); setCurrentHunk(-1); }, [diffMode, file.path, ignoreWhitespace, review.id]);
+  useEffect(() => {
+    setVisibleRows(INITIAL_DIFF_ROWS);
+    setCurrentHunk(-1);
+    setPendingRevertHunk(null);
+    setActionError(undefined);
+    setMergeSource(undefined);
+    setMergeError(undefined);
+  }, [diffMode, file.path, ignoreWhitespace, review.id]);
   useLayoutEffect(() => {
     const code = codeRef.current;
     if (!code) return;
@@ -363,6 +506,45 @@ function ChangeReviewDiff({
   };
 
   const patchPending = file.patchAvailable && !file.patch && !file.binary;
+  const hunkActionsAvailable = review.state === "completed" && Boolean(file.patch) && !file.binary && !file.truncated;
+  const resolvedHunkCount = new Set((file.hunkResolutions ?? [])
+    .map((resolution) => resolution.hunkIndex)
+    .filter((hunkIndex) => hunkIndex >= 0 && hunkIndex < hunkCount)).size;
+  const unresolvedHunks = Math.max(0, hunkCount - resolvedHunkCount);
+  const resolveHunk = async (hunkIndex: number, action: "accept" | "revert") => {
+    setBusyHunk(hunkIndex);
+    setActionError(undefined);
+    try {
+      await onResolveHunk(review.id, file.path, hunkIndex, action);
+      setPendingRevertHunk(null);
+    } catch {
+      setActionError(t.changeReviewHunkActionFailed);
+    } finally {
+      setBusyHunk(null);
+    }
+  };
+  const openMerge = async () => {
+    setMergeLoading(true);
+    setMergeError(undefined);
+    try { setMergeSource(await onLoadMergeSource(review.id, file.path)); }
+    catch { setMergeError(t.changeReviewMergeLoadFailed); }
+    finally { setMergeLoading(false); }
+  };
+  const saveMerge = async (content: string, revision: string) => {
+    setMergeSaving(true);
+    setMergeError(undefined);
+    try {
+      await onApplyMerge(review.id, file.path, content, revision);
+      setMergeSource(undefined);
+      window.requestAnimationFrame(() => mergeTriggerRef.current?.focus());
+    } catch (error) {
+      setMergeError(error instanceof Error && /changed while the merge editor was open/i.test(error.message)
+        ? t.changeReviewMergeConflict
+        : t.changeReviewMergeSaveFailed);
+    } finally {
+      setMergeSaving(false);
+    }
+  };
   return <section className="change-review-diff" aria-label={file.path}>
     <header className="change-review-file-header">
       <div>
@@ -389,6 +571,7 @@ function ChangeReviewDiff({
       </div>
       <button type="button" className="change-review-toggle" aria-pressed={wrapLines} title={t.changeReviewWrap} onClick={() => onWrapLines(!wrapLines)}>{t.changeReviewWrap}</button>
       <button type="button" className="change-review-toggle" aria-pressed={ignoreWhitespace} title={t.changeReviewIgnoreWhitespace} onClick={() => onIgnoreWhitespace(!ignoreWhitespace)}>{t.changeReviewIgnoreWhitespace}</button>
+      <button ref={mergeTriggerRef} type="button" className="change-review-toggle change-review-merge-trigger" disabled={!hunkActionsAvailable || unresolvedHunks === 0 || mergeLoading} title={hunkActionsAvailable ? t.changeReviewMergeDescription : t.changeReviewMergeUnavailable} onClick={() => void openMerge()}>{mergeLoading ? t.changeReviewMergeLoading : t.changeReviewMerge}</button>
       <span className="change-review-hunk-actions">
         <button type="button" disabled={!hunkCount} title={t.changeReviewPreviousHunk} aria-label={t.changeReviewPreviousHunk} onClick={() => moveToHunk(-1)}><Icon name="chevron" size={12} /></button>
         <button type="button" disabled={!hunkCount} title={t.changeReviewNextHunk} aria-label={t.changeReviewNextHunk} onClick={() => moveToHunk(1)}><Icon name="chevron" size={12} /></button>
@@ -415,36 +598,37 @@ function ChangeReviewDiff({
         : detailError
           ? <div className="change-review-no-patch" role="alert"><Icon name="alert" size={17} /><span>{t.changeReviewDetailFailed}</span><button type="button" className="button ghost" onClick={onRetryDetail}>{t.changeReviewRetry}</button></div>
           : diffMode === "unified"
-            ? <UnifiedDiffRows lines={lines.slice(0, visibleRows)} />
-            : splitRows.slice(0, visibleRows).map((row) => {
-                if (row.kind === "pair") return <div className="change-review-split-row" role="row" key={row.key}>
-                  <SplitDiffCell line={row.oldLine} side="old" />
-                  <SplitDiffCell line={row.newLine} side="new" />
-                </div>;
-                if (row.kind === "hunk") {
-                  const hasGap = Boolean(row.oldOmittedLines || row.newOmittedLines);
-                  return <div
-                    id={`change-review-hunk-${row.hunkIndex}`}
-                    className={`change-review-split-meta hunk ${hasGap ? "has-gap" : "no-gap"}`}
-                    role="row"
-                    tabIndex={-1}
-                    title={row.text}
-                    key={row.key}
-                  >
-                    {hasGap
-                      ? <>
-                          <div className="change-review-split-gap-cell" role="cell">{row.oldOmittedLines ? <span>{t.changeReviewUnchangedLines(row.oldOmittedLines)}</span> : null}</div>
-                          <div className="change-review-split-gap-cell" role="cell">{row.newOmittedLines ? <span>{t.changeReviewUnchangedLines(row.newOmittedLines)}</span> : null}</div>
-                        </>
-                      : <code className="sr-only" role="cell">{row.text}</code>}
-                  </div>;
-                }
-                return <div className="change-review-split-meta meta" role="row" key={row.key}><code role="cell">{row.text}</code></div>;
-              })}
+            ? <UnifiedDiffRows
+                lines={lines.slice(0, visibleRows)}
+                file={file}
+                language={language}
+                disabled={!hunkActionsAvailable || busyHunk !== null}
+                pendingRevertHunk={pendingRevertHunk}
+                onAccept={(hunkIndex) => void resolveHunk(hunkIndex, "accept")}
+                onRequestRevert={(hunkIndex) => setPendingRevertHunk((current) => current === hunkIndex ? null : hunkIndex)}
+                onCancelRevert={() => setPendingRevertHunk(null)}
+                onConfirmRevert={(hunkIndex) => void resolveHunk(hunkIndex, "revert")}
+              />
+            : <SplitDiffRows
+                rows={splitRows.slice(0, visibleRows)}
+                file={file}
+                language={language}
+                disabled={!hunkActionsAvailable || busyHunk !== null}
+                pendingRevertHunk={pendingRevertHunk}
+                onAccept={(hunkIndex) => void resolveHunk(hunkIndex, "accept")}
+                onRequestRevert={(hunkIndex) => setPendingRevertHunk((current) => current === hunkIndex ? null : hunkIndex)}
+                onCancelRevert={() => setPendingRevertHunk(null)}
+                onConfirmRevert={(hunkIndex) => void resolveHunk(hunkIndex, "revert")}
+              />}
       {!detailLoading && !detailError && totalRows === 0 && <div className="change-review-no-patch"><Icon name="file" size={17} /><span>{file.binary ? t.changeReviewBinary : t.changeReviewNoPatch}</span>{file.oldMode && file.newMode && <small>{t.changeReviewModeChanged(file.oldMode, file.newMode)}</small>}</div>}
       {!detailLoading && !detailError && visibleRows < totalRows && <button type="button" className="change-review-show-more" onClick={() => setVisibleRows((count) => Math.min(totalRows, count + DIFF_ROW_STEP))}>{t.changeReviewShowMoreLines(Math.min(DIFF_ROW_STEP, totalRows - visibleRows))}</button>}
     </div>
+    {actionError && <div className="change-review-action-error" role="alert"><Icon name="alert" size={13} /><span>{actionError}</span></div>}
     {file.truncated && <div className="change-review-warning"><Icon name="alert" size={13} /><span>{t.changeReviewTruncated}</span></div>}
+    {mergeError && !mergeSource && <div className="change-review-action-error" role="alert"><Icon name="alert" size={13} /><span>{mergeError}</span></div>}
+    {mergeSource && <Suspense fallback={<div className="change-review-merge-backdrop"><div className="change-review-merge-loading" role="status"><span className="conversation-spinner" aria-hidden="true" />{t.changeReviewMergeLoading}</div></div>}>
+      <ChangeReviewMergeEditor source={mergeSource} language={language} busy={mergeSaving} error={mergeError} returnFocusRef={mergeTriggerRef} onSave={saveMerge} onCancel={() => setMergeSource(undefined)} />
+    </Suspense>}
   </section>;
 }
 
@@ -479,6 +663,9 @@ export interface ChangeReviewPanelProps {
   onScrollPosition: (position: ChangeReviewScrollPosition) => void;
   onRetry: () => void;
   onRetryDetail: () => void;
+  onResolveHunk: (reviewId: string, filePath: string, hunkIndex: number, action: "accept" | "revert") => Promise<SessionChangeReview>;
+  onLoadMergeSource: (reviewId: string, filePath: string) => Promise<SessionChangeReviewMergeSource>;
+  onApplyMerge: (reviewId: string, filePath: string, content: string, currentRevision: string) => Promise<SessionChangeReview>;
   onClose: () => void;
 }
 
@@ -488,6 +675,7 @@ function ChangeReviewPanel({
   diffMode, wrapLines, ignoreWhitespace, scrollPosition, drawer, returnFocusRef, onFileListWidth,
   onSelectReview, onSelectPath, onExpandedPaths, onFileFilter, onDiffMode, onWrapLines,
   onIgnoreWhitespace, onScrollPosition, onRetry, onRetryDetail, onClose,
+  onResolveHunk, onLoadMergeSource, onApplyMerge,
 }: ChangeReviewPanelProps) {
   const t = copy[language];
   const [runPickerOpen, setRunPickerOpen] = useState(false);
@@ -634,6 +822,9 @@ function ChangeReviewPanel({
                 onIgnoreWhitespace={onIgnoreWhitespace}
                 onScrollPosition={onScrollPosition}
                 onRetryDetail={onRetryDetail}
+                onResolveHunk={onResolveHunk}
+                onLoadMergeSource={onLoadMergeSource}
+                onApplyMerge={onApplyMerge}
               />}
               <PaneResizeHandle
                 className="change-review-files-resize-handle"

@@ -1,4 +1,4 @@
-import { validatePiHostPayload, type PermissionMode, type PiHostRequest, type PiHostResponse, type PiPackageResourceType, type PiSettingsUpdate, type ScopedModelSelection, type SessionChangeReview, type SessionChangeReviewCollection, type SessionRunRecord } from "@pideck/contracts";
+import { validatePiHostPayload, type PermissionMode, type PiHostRequest, type PiHostResponse, type PiPackageResourceType, type PiSettingsUpdate, type ScopedModelSelection, type SessionChangeFile, type SessionChangeReview, type SessionChangeReviewCollection, type SessionRunRecord } from "@pideck/contracts";
 import { deriveSessionTitle, isCommandDerivedSessionTitle, isDefaultSessionTitle } from "@pideck/domain";
 import { configurePiHttpNetworking, getModelRuntime, loadPiSdk, modelSummary, resolvePiModule, sessionModelLabel, type PiSdk } from "@pideck/pi-adapter";
 import { PermissionEngine, resolvePermissionExtensionPath } from "@pideck/permission-engine";
@@ -32,6 +32,7 @@ import {
   agentSessions,
   authWaiters,
   capabilitySessions,
+  changeReviewMutationLocks,
   executionGroupStarts,
   manualCompactionQueues,
   pendingChangeReviewWrites,
@@ -46,7 +47,18 @@ import {
   type ActiveProviderLogin,
 } from "./host-state.js";
 import { summarizePiSettings, updatePiSettings } from "./settings-command-handler.js";
-import { buildSessionChangeReview, inspectGitWorkspaceAvailability, inspectWorkspaceChangeState, type WorkspaceChangeInspection } from "./session-change-review.js";
+import {
+  acceptChangeReviewHunk,
+  applyChangeReviewMerge,
+  buildSessionChangeReview,
+  inspectGitWorkspaceAvailability,
+  inspectWorkspaceChangeState,
+  loadChangeReviewMergeSource,
+  revertChangeReviewHunk,
+  withResolvedReviewHunks,
+  type WorkspaceChangeInspection,
+  type WorkspaceReviewMutation,
+} from "./session-change-review.js";
 import {
   copySessionChangeReviewStore,
   deleteSessionChangeReviewStore,
@@ -601,6 +613,42 @@ function previewChangeReview(
         if (tracker.previewController === controller) tracker.previewController = undefined;
       });
   }, 180);
+}
+
+async function withChangeReviewMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = changeReviewMutationLocks.get(key) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const settled = result.then(() => undefined, () => undefined);
+  changeReviewMutationLocks.set(key, settled);
+  try { return await result; }
+  finally { if (changeReviewMutationLocks.get(key) === settled) changeReviewMutationLocks.delete(key); }
+}
+
+async function mutateStoredReviewFile<T>(
+  session: any,
+  stateKey: string,
+  taskId: string,
+  reviewId: string,
+  filePath: string,
+  mutate: (file: SessionChangeFile) => Promise<{ file: SessionChangeFile; result: T; workspaceMutation?: WorkspaceReviewMutation }>,
+): Promise<{ review: SessionChangeReview; result: T }> {
+  return withChangeReviewMutation(`${stateKey}\0${reviewId}\0${filePath}`, async () => {
+    const loaded = await loadSessionChangeReviews(session);
+    const review = loaded.reviews.find((item) => item.id === reviewId);
+    if (!review) throw new Error("Change review not found");
+    if (review.state !== "completed") throw new Error("Wait for the run to finish before resolving changes");
+    const file = review.files.find((item) => item.path === filePath);
+    if (!file) throw new Error("Change review file not found");
+    const mutation = await mutate(file);
+    const updated = { ...review, files: review.files.map((item) => item.path === filePath ? mutation.file : item) };
+    try { await persistSessionChangeReview(session, updated); }
+    catch (error) {
+      if (mutation.workspaceMutation) await mutation.workspaceMutation.rollback().catch(() => undefined);
+      throw error;
+    }
+    emit(taskId, { type: "change-review.updated", review: jsonSafe(updated) });
+    return { review: updated, result: mutation.result };
+  });
 }
 
 type NormalizedPromptImage = { type: "image"; data: string; mimeType: string };
@@ -1772,6 +1820,56 @@ async function handle(request: PiHostRequest): Promise<void> {
         const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
         const loaded = await loadSessionChangeReviews(session);
         const review = loaded.reviews.find((item) => item.id === payload.reviewId) ?? null;
+        send({ id: request.id, ok: true, result: jsonSafe(review) });
+        return;
+      }
+      case "sessions.resolveChangeReviewHunk": {
+        const payload = request.payload as { taskId: string; reviewId: string; filePath: string; hunkIndex: number; action: "accept" | "revert"; cwd?: string };
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        const { review } = await mutateStoredReviewFile(session, stateKey, payload.taskId, payload.reviewId, payload.filePath, async (file) => {
+          if (payload.action === "accept") return { file: acceptChangeReviewHunk(file, payload.hunkIndex), result: undefined };
+          const workspaceMutation = await revertChangeReviewHunk(cwd, file, payload.hunkIndex);
+          return {
+            file: withResolvedReviewHunks(file, workspaceMutation.hunkIndexes, workspaceMutation.action),
+            result: undefined,
+            workspaceMutation,
+          };
+        });
+        send({ id: request.id, ok: true, result: jsonSafe(review) });
+        return;
+      }
+      case "sessions.changeReviewMergeSource": {
+        const payload = request.payload as { taskId: string; reviewId: string; filePath: string; cwd?: string };
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        const source = await withChangeReviewMutation(`${stateKey}\0${payload.reviewId}\0${payload.filePath}`, async () => {
+          const loaded = await loadSessionChangeReviews(session);
+          const review = loaded.reviews.find((item) => item.id === payload.reviewId);
+          if (!review) throw new Error("Change review not found");
+          if (review.state !== "completed") throw new Error("Wait for the run to finish before merging changes");
+          const file = review.files.find((item) => item.path === payload.filePath);
+          if (!file) throw new Error("Change review file not found");
+          return loadChangeReviewMergeSource(review.id, cwd, file);
+        });
+        send({ id: request.id, ok: true, result: jsonSafe(source) });
+        return;
+      }
+      case "sessions.applyChangeReviewMerge": {
+        const payload = request.payload as { taskId: string; reviewId: string; filePath: string; content: string; currentRevision: string; cwd?: string };
+        const cwd = payload.cwd ?? resolveWorkspaceCwd();
+        const stateKey = sessionStateKey(payload.taskId, cwd);
+        const session = await ensureAgentSession(payload.taskId, cwd);
+        const { review } = await mutateStoredReviewFile(session, stateKey, payload.taskId, payload.reviewId, payload.filePath, async (file) => {
+          const workspaceMutation = await applyChangeReviewMerge(payload.reviewId, cwd, file, payload.content, payload.currentRevision);
+          return {
+            file: withResolvedReviewHunks(file, workspaceMutation.hunkIndexes, workspaceMutation.action),
+            result: undefined,
+            workspaceMutation,
+          };
+        });
         send({ id: request.id, ok: true, result: jsonSafe(review) });
         return;
       }

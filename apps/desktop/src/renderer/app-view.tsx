@@ -211,6 +211,9 @@ export function AppView({ controller }: { controller: AppController }) {
         onChangeReviewScrollPosition={changeReview.setDiffScrollPosition}
         onRetryChangeReviews={changeReview.reloadReviews}
         onRetrySelectedChangeReview={changeReview.retrySelectedReview}
+        onResolveChangeReviewHunk={changeReview.resolveHunk}
+        onLoadChangeReviewMergeSource={changeReview.loadMergeSource}
+        onApplyChangeReviewMerge={changeReview.applyMerge}
         onChangeReviewWidth={changeReview.setReviewWidth}
         onChangeReviewFileListWidth={changeReview.setFileListWidth}
         backgroundInert={mobileSidebarOpen}
