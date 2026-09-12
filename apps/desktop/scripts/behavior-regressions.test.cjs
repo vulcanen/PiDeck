@@ -1520,7 +1520,7 @@ test("package manifest validation rejects developer state and source trees", asy
 
 test("packaged SBOM reports the lockfile-pinned Electron runtime as a framework", async () => {
   const generatorUrl = pathToFileURL(path.join(__dirname, "../../../scripts/generate-packaged-sbom.mjs")).href;
-  const { electronRuntimeComponent } = await import(generatorUrl);
+  const { electronRuntimeComponent, packageManifestEntries } = await import(generatorUrl);
   const root = path.join(__dirname, "../../..");
   const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
   const component = electronRuntimeComponent(root);
@@ -1529,6 +1529,16 @@ test("packaged SBOM reports the lockfile-pinned Electron runtime as a framework"
   assert.equal(component.name, "electron");
   assert.equal(component.version, lock.packages["node_modules/electron"].version);
   assert.equal(component.purl, `pkg:npm/electron@${component.version}`);
+  assert.deepEqual(packageManifestEntries([
+    "/package.json",
+    "/node_modules/react/package.json",
+    "\\node_modules\\zod\\package.json",
+    "\\node_modules\\zod\\index.js",
+  ]), [
+    { extractPath: "package.json", normalizedPath: "package.json" },
+    { extractPath: "node_modules/react/package.json", normalizedPath: "node_modules/react/package.json" },
+    { extractPath: "node_modules\\zod\\package.json", normalizedPath: "node_modules/zod/package.json" },
+  ]);
 });
 
 test("native window colors follow the Renderer theme contract", () => {
