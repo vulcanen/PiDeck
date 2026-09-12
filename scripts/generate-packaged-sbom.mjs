@@ -59,16 +59,29 @@ export function electronRuntimeComponent(projectRoot = root) {
   return componentFromManifest(manifest, "framework");
 }
 
+export function packageManifestEntries(entries) {
+  return entries
+    .map((entry) => {
+      const extractPath = entry.replace(/^[/\\]+/, "");
+      return {
+        extractPath,
+        normalizedPath: extractPath.replaceAll("\\", "/"),
+      };
+    })
+    .filter(({ normalizedPath }) =>
+      normalizedPath === "package.json" || normalizedPath.endsWith("/package.json"));
+}
+
 function packagedComponents(asarPath) {
   const components = new Map();
-  const packageJsonPaths = listPackage(asarPath)
-    .map((entry) => entry.replace(/^[/\\]+/, "").replaceAll("\\", "/"))
-    .filter((entry) => entry === "package.json" || entry.endsWith("/package.json"));
+  const packageJsonEntries = packageManifestEntries(listPackage(asarPath));
 
-  for (const packageJsonPath of packageJsonPaths) {
+  for (const { extractPath } of packageJsonEntries) {
     let manifest;
     try {
-      manifest = JSON.parse(extractFile(asarPath, packageJsonPath).toString("utf8"));
+      // @electron/asar resolves archive paths with the host platform separator.
+      // Keep the original separator for extraction; normalize only for matching.
+      manifest = JSON.parse(extractFile(asarPath, extractPath).toString("utf8"));
     } catch {
       continue;
     }
