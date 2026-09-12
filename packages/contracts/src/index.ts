@@ -248,6 +248,8 @@ export interface PiSettingsSummary {
   compactionReserveTokens?: number;
   compactionKeepRecentTokens?: number;
   branchSummaryReserveTokens?: number;
+  /** Skip Pi's interactive "Summarize branch?" confirmation prompt. */
+  branchSummarySkipPrompt?: boolean;
   httpProxy?: string;
   httpProxyHasCredentials?: boolean;
   httpIdleTimeoutMs?: number;
@@ -282,6 +284,7 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
   | "providerRetryTimeoutMs" | "providerRetryMaxRetries" | "providerRetryMaxRetryDelayMs"
   | "compactionReserveTokens" | "compactionKeepRecentTokens"
   | "branchSummaryReserveTokens"
+  | "branchSummarySkipPrompt"
   | "httpProxy" | "httpIdleTimeoutMs" | "websocketConnectTimeoutMs" | "defaultTools"
   | "defaultProvider"
   | "defaultModel"
@@ -705,6 +708,7 @@ const piHostPayloadSchemas = {
     providerRetryTimeoutMs: z.number().int().min(0).max(2147483647).optional(), providerRetryMaxRetries: z.number().int().min(0).max(100).optional(), providerRetryMaxRetryDelayMs: z.number().int().min(0).max(2147483647).optional(),
     compactionReserveTokens: z.number().int().positive().max(100000000).optional(), compactionKeepRecentTokens: z.number().int().min(0).max(100000000).optional(),
     branchSummaryReserveTokens: z.number().int().positive().max(100000000).optional(),
+    branchSummarySkipPrompt: z.boolean().optional(),
     httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), websocketConnectTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),
     thinkingBudgets: z.object({ minimal: z.number().int().positive().max(100000000).optional(), low: z.number().int().positive().max(100000000).optional(), medium: z.number().int().positive().max(100000000).optional(), high: z.number().int().positive().max(100000000).optional() }).strict().nullable().optional(),
     imageAutoResize: z.boolean().optional(), blockImages: z.boolean().optional(),

@@ -338,6 +338,22 @@ await new Promise((resolve, reject) => {
         finish(new Error(`Unexpected settings.get response: ${JSON.stringify(message)}`));
         return;
       }
+      child.send({ id: "settings-update-branch-summary", command: "settings.update", payload: { cwd: root, branchSummarySkipPrompt: true } });
+      return;
+    }
+    if (message?.id === "settings-update-branch-summary") {
+      if (!message.ok || message.result?.branchSummarySkipPrompt !== true) {
+        finish(new Error(`Unexpected branchSummary.skipPrompt settings update: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "settings-clear-branch-summary", command: "settings.update", payload: { cwd: root, branchSummarySkipPrompt: false } });
+      return;
+    }
+    if (message?.id === "settings-clear-branch-summary") {
+      if (!message.ok || message.result?.branchSummarySkipPrompt !== false) {
+        finish(new Error(`Unexpected branchSummary.skipPrompt settings reset: ${JSON.stringify(message)}`));
+        return;
+      }
       child.send({ id: "settings-update-thinking", command: "settings.update", payload: { cwd: root, modelThinkingLevels: { "smoke-provider/smoke-model": "max" } } });
       return;
     }

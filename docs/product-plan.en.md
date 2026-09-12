@@ -237,7 +237,11 @@ npm run test:renderer
 npm run build
 npm run smoke:runtime
 npm run smoke:cli
+# Requires configured credentials; runs the real GPT-5.5 transport matrix.
+npm run acceptance:network
 ```
+
+The transport-specific cells and cleanup guarantees are documented in the [network acceptance matrix](network-acceptance-matrix.en.md).
 
 Release tags must resolve to a commit contained in `main`; the workflow pins that SHA, runs the same verification on Linux, then builds the Windows x64, macOS arm64, and macOS x64 installers on matching native GitHub runners. It generates a separate SBOM from each final package and creates a draft release with SHA-256 checksums; trusted public distribution additionally requires platform signing and macOS notarization secrets in the protected `release-signing` Environment.
 

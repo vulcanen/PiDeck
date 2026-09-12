@@ -50,6 +50,34 @@ test("Session Tree dialog filters technical entries and supports keyboard node s
   dom.close();
 });
 
+test("Session Tree honors Pi branchSummary.skipPrompt and navigates without a summary", async () => {
+  const dom = installDom();
+  const { createRoot } = require("react-dom/client");
+  const { act } = React;
+  const { SessionBranchDialog } = require("../dist/renderer/ui/session-branch-dialog.js");
+  const navigations = [];
+  const snapshot = {
+    leafId: "current",
+    truncated: false,
+    entries: [
+      { id: "target", parentId: null, type: "message", role: "user", preview: "Target", depth: 0, childCount: 1, active: false, current: false, forkable: true },
+      { id: "current", parentId: "target", type: "message", role: "assistant", preview: "Current", depth: 1, childCount: 0, active: true, current: true, forkable: false },
+    ],
+  };
+  const root = createRoot(dom.document.body);
+  await act(async () => { root.render(React.createElement(SessionBranchDialog, {
+    language: "en", mode: "tree", snapshot, skipSummaryPrompt: true, loading: false, busy: false, error: null,
+    onRetry() {}, onClose() {}, onAbort() {}, onFork() {}, onClone() {}, onNavigate: (...args) => navigations.push(args),
+  })); await flushReact(); });
+  await act(async () => dom.document.querySelector('[data-session-entry-id="target"]').click());
+  assert.equal(dom.document.querySelector('[data-summary-prompt-skipped="true"]')?.textContent.includes("skip the summary prompt"), true);
+  assert.equal(dom.document.querySelector('.session-branch-summary-options'), null);
+  await act(async () => dom.document.querySelector(".session-branch-footer .primary").click());
+  assert.deepEqual(navigations, [["target", { summarize: false }]]);
+  await act(async () => root.unmount());
+  dom.close();
+});
+
 test("Session Tree keeps long linear conversations left-aligned and bounds mounted rows", async () => {
   const dom = installDom();
   const { createRoot } = require("react-dom/client");
@@ -270,7 +298,7 @@ test("Pi Settings exposes non-display Pi runtime settings and round-trips them",
     defaultThinkingLevel: "medium", transport: "auto", compactionEnabled: true,
     steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", effectiveExternalEditor: "notepad", externalEditorSource: "default",
     retryEnabled: true, retryMaxRetries: 3, retryBaseDelayMs: 2000, compactionReserveTokens: 16384,
-    compactionKeepRecentTokens: 20000, httpIdleTimeoutMs: 300000, branchSummaryReserveTokens: 16384,
+    compactionKeepRecentTokens: 20000, httpIdleTimeoutMs: 300000, branchSummaryReserveTokens: 16384, branchSummarySkipPrompt: false,
     providerRetryMaxRetries: 0, providerRetryMaxRetryDelayMs: 60000, websocketConnectTimeoutMs: 15000,
     defaultProjectTrust: "ask", enableSkillCommands: true, imageAutoResize: true, blockImages: false,
     enableInstallTelemetry: true,
@@ -296,6 +324,7 @@ test("Pi Settings exposes non-display Pi runtime settings and round-trips them",
     assert.ok(menu);
     menu.querySelector('[role="option"][data-value="websocket-cached"]').click();
     for (const id of ["pi-blockImages", "pi-enableSkillCommands"]) dom.document.querySelector(`[data-testid="${id}"]`).click();
+    dom.document.querySelector('[data-testid="pi-branchSummarySkipPrompt"]').click();
     assert.ok(dom.document.querySelector('[data-testid="pi-providerRetryTimeoutMs"]'));
     assert.ok(dom.document.querySelector('[data-testid="pi-npmCommand"]'));
     await flushReact();
@@ -305,7 +334,8 @@ test("Pi Settings exposes non-display Pi runtime settings and round-trips them",
   assert.equal(saved[0].transport, "websocket-cached");
   assert.equal(saved[0].blockImages, true);
   assert.equal(saved[0].enableSkillCommands, false);
-  for (const id of ["pi-branchSummarySkipPrompt", "pi-hideThinkingBlock", "pi-showCacheMissNotices", "pi-warningsAnthropicExtraUsage", "pi-enableAnalytics"]) {
+  assert.equal(saved[0].branchSummarySkipPrompt, true);
+  for (const id of ["pi-hideThinkingBlock", "pi-showCacheMissNotices", "pi-warningsAnthropicExtraUsage", "pi-enableAnalytics"]) {
     assert.equal(dom.document.querySelector(`[data-testid="${id}"]`), null);
   }
   await act(async () => { root.unmount(); });

@@ -98,6 +98,7 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
     providerRetryMaxRetries: 2,
     providerRetryMaxRetryDelayMs: 45000,
     branchSummaryReserveTokens: 4096,
+    branchSummarySkipPrompt: true,
     websocketConnectTimeoutMs: 9000,
     thinkingBudgets: { low: 4096, high: 32768 },
     imageAutoResize: false,
@@ -111,7 +112,7 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
     enableInstallTelemetry: false,
   }, storage);
   assert.deepEqual(current.retry.provider, { maxRetries: 2, unknown: true, timeoutMs: 120000, maxRetryDelayMs: 45000 });
-  assert.deepEqual(current.branchSummary, { reserveTokens: 4096 });
+  assert.deepEqual(current.branchSummary, { reserveTokens: 4096, skipPrompt: true });
   assert.equal(current.websocketConnectTimeoutMs, 9000);
   assert.deepEqual(current.thinkingBudgets, { low: 4096, high: 32768 });
   assert.deepEqual(current.images, { autoResize: false, blockImages: true });

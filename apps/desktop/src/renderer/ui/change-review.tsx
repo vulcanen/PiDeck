@@ -295,13 +295,17 @@ function HunkControls({
   onConfirmRevert: (hunkIndex: number) => void;
 }) {
   const t = copy[language];
-  if (resolution) return <span className={`change-review-hunk-resolution ${resolution}`} role="status" aria-live="polite">
-    <Icon name="check" size={11} />
-    {resolution === "accepted" ? t.changeReviewHunkAccepted : resolution === "reverted" ? t.changeReviewHunkReverted : t.changeReviewHunkMerged}
-  </span>;
+  if (resolution) {
+    const label = resolution === "accepted" ? t.changeReviewHunkAccepted : resolution === "reverted" ? t.changeReviewHunkReverted : t.changeReviewHunkMerged;
+    const icon = resolution === "accepted" ? "check" : resolution === "reverted" ? "x" : "diff";
+    return <span className={`change-review-hunk-resolution ${resolution}`} data-resolution={resolution} role="status" aria-live="polite">
+      <Icon name={icon} size={12} />
+      <span>{label}</span>
+    </span>;
+  }
   return <span className="change-review-hunk-resolution-actions">
-    <button type="button" disabled={disabled} onClick={() => onAccept(hunkIndex)}>{t.changeReviewAcceptHunk}</button>
-    <button type="button" className="revert" disabled={disabled} aria-expanded={confirmingRevert} onClick={() => onRequestRevert(hunkIndex)}>{t.changeReviewRevertHunk}</button>
+    <button type="button" disabled={disabled} onClick={() => onAccept(hunkIndex)}><Icon name="check" size={11} /><span>{t.changeReviewAcceptHunk}</span></button>
+    <button type="button" className="revert" disabled={disabled} aria-expanded={confirmingRevert} onClick={() => onRequestRevert(hunkIndex)}><Icon name="x" size={11} /><span>{t.changeReviewRevertHunk}</span></button>
     {confirmingRevert && <span className="change-review-revert-popover" role="alertdialog" aria-label={t.changeReviewConfirmRevert} onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); onCancelRevert(); }
     }}>

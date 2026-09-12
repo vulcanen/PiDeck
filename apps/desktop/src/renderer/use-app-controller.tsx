@@ -86,6 +86,7 @@ export function useAppController() {
   const [resumeOpen, setResumeOpen] = useState(false);
   const [sessionBranchMode, setSessionBranchMode] = useState<SessionBranchMode | null>(null);
   const [sessionTreeSnapshot, setSessionTreeSnapshot] = useState<SessionTreeSnapshot | null>(null);
+  const [sessionBranchSkipPrompt, setSessionBranchSkipPrompt] = useState(false);
   const [sessionTreeLoading, setSessionTreeLoading] = useState(false);
   const [sessionTreeBusy, setSessionTreeBusy] = useState(false);
   const [sessionTreeError, setSessionTreeError] = useState<string | null>(null);
@@ -871,9 +872,13 @@ export function useAppController() {
     setSessionTreeLoading(true);
     setSessionTreeError(null);
     try {
-      const tree = await window.pideck.sessions.tree(task.id, projectCwd);
+      const [tree, settings] = await Promise.all([
+        window.pideck.sessions.tree(task.id, projectCwd),
+        window.pideck.settings.get(projectCwd).catch(() => null),
+      ]);
       if (requestId !== sessionTreeRequestRef.current) return;
       setSessionTreeSnapshot(tree);
+      setSessionBranchSkipPrompt(settings?.branchSummarySkipPrompt === true);
     } catch (error) {
       if (requestId !== sessionTreeRequestRef.current) return;
       setSessionTreeError(error instanceof Error ? error.message : String(error));
@@ -887,6 +892,7 @@ export function useAppController() {
     if (isWorking) { showNotice(t.sessionTreeWaitUntilIdle, "warning"); return; }
     setSessionBranchMode(mode);
     setSessionTreeSnapshot(null);
+    setSessionBranchSkipPrompt(false);
     setSessionTreeError(null);
     void loadSessionTree(activeTask);
   }
@@ -896,6 +902,7 @@ export function useAppController() {
     sessionTreeRequestRef.current += 1;
     setSessionBranchMode(null);
     setSessionTreeSnapshot(null);
+    setSessionBranchSkipPrompt(false);
     setSessionTreeError(null);
     setSessionTreeLoading(false);
   }
@@ -1726,7 +1733,7 @@ export function useAppController() {
     composerProps, jumpToLatest, sendPrompt, abortActive,
     paletteCommands, composer, updateComposer, compactSession, exportSession, selectPaletteCommand,
     quickSettingsOpen, quickSettingsPage, setQuickSettingsOpen, openQuickSettings,
-    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, sessionBranchMode, sessionTreeSnapshot, sessionTreeLoading, sessionTreeBusy, sessionTreeError, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, scopedModelsOpen, setScopedModelsOpen,
+    commandDialog, setCommandDialog, renameOpen, setRenameOpen, resumeOpen, setResumeOpen, sessionBranchMode, sessionTreeSnapshot, sessionBranchSkipPrompt, sessionTreeLoading, sessionTreeBusy, sessionTreeError, trustOpen, setTrustOpen, trustProject, trustStatus, trustBusy, scopedModelsOpen, setScopedModelsOpen,
     importSession, renameSession, openProjectTrust, resolveTrust, saveScopedModels,
     notices, dismissNotice, contextMenu, projectContextMenu, pendingDelete, pendingProjectRemove, deletingTaskId,
     removingProjectCwd, extensionUiRequest, packagesOpen, settingsOpen, piSettingsOpen, providerFocus, previewImage,

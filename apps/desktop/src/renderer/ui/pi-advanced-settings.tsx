@@ -16,7 +16,6 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
     ["compactionKeepRecentTokens", t.piCompactionKeepRecentTokens, 0, 100000000, true],
     ["httpIdleTimeoutMs", t.piHttpIdleTimeoutMs, 0, 2147483647, true],
     ["websocketConnectTimeoutMs", t.piWebsocketConnectTimeoutMs, 0, 2147483647, false],
-    ["branchSummaryReserveTokens", t.piBranchSummaryReserveTokens, 1, 100000000, true],
   ] as const;
   const thinkingBudgetRows = [
     ["minimal", t.piThinkingBudgetMinimal],
@@ -50,6 +49,13 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
           {thinkingBudgetRows.map(([level, label]) => <label key={level}><span>{label}</span><input type="number" data-testid={`pi-thinking-budget-${level}`} min={1} max={100000000} step={1} value={settings.thinkingBudgets?.[level] ?? ""} onChange={(event) => updateThinkingBudget(level, event.target.valueAsNumber)} /></label>)}
           <button type="button" className="button ghost" onClick={() => onChange({ thinkingBudgets: null })}>{t.piClearThinkingBudgets}</button>
         </div>
+      </fieldset>
+      <fieldset className="pi-settings-subsection">
+        <legend>{t.piBranchSummary}</legend>
+        <p className="pi-settings-hint">{t.piBranchSummaryHint}</p>
+        <label><span>{t.piBranchSummaryReserveTokens}</span><input type="number" data-testid="pi-branchSummaryReserveTokens" min={1} max={100000000} step={1} required defaultValue={settings.branchSummaryReserveTokens} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) onChange({ branchSummaryReserveTokens: event.target.valueAsNumber }); }} /></label>
+        <label className="pi-settings-check"><input type="checkbox" data-testid="pi-branchSummarySkipPrompt" checked={settings.branchSummarySkipPrompt ?? false} onChange={(event) => onChange({ branchSummarySkipPrompt: event.target.checked })} /><span>{t.piBranchSummarySkipPrompt}</span></label>
+        <small className="pi-settings-hint">{t.piBranchSummarySkipPromptHint}</small>
       </fieldset>
       <fieldset className="pi-settings-subsection">
         <legend>{t.piProjectTrustAndResources}</legend>

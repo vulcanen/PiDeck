@@ -9,7 +9,8 @@ export interface PiSettingsManager {
   getCompactionSettings(): { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } | undefined;
   getRetrySettings?(): { enabled: boolean; maxRetries: number; baseDelayMs: number };
   getProviderRetrySettings?(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs?: number };
-  getBranchSummarySettings?(): { reserveTokens?: number };
+  getBranchSummarySettings?(): { reserveTokens?: number; skipPrompt?: boolean };
+  getBranchSummarySkipPrompt?(): boolean;
   getHttpIdleTimeoutMs?(): number;
   getWebSocketConnectTimeoutMs?(): number;
   getDefaultTools?(): string[] | undefined;
@@ -100,6 +101,7 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     compactionReserveTokens: compaction?.reserveTokens,
     compactionKeepRecentTokens: compaction?.keepRecentTokens,
     branchSummaryReserveTokens: branchSummary?.reserveTokens,
+    branchSummarySkipPrompt: branchSummary?.skipPrompt ?? manager.getBranchSummarySkipPrompt?.(),
     httpProxy, httpProxyHasCredentials,
     httpIdleTimeoutMs: manager.getHttpIdleTimeoutMs?.(),
     websocketConnectTimeoutMs: manager.getWebSocketConnectTimeoutMs?.(),
@@ -238,6 +240,7 @@ export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string,
   if (payload.compactionReserveTokens !== undefined) compaction.reserveTokens = payload.compactionReserveTokens;
   if (payload.compactionKeepRecentTokens !== undefined) compaction.keepRecentTokens = payload.compactionKeepRecentTokens;
   if (payload.branchSummaryReserveTokens !== undefined) branchSummary.reserveTokens = payload.branchSummaryReserveTokens;
+  if (payload.branchSummarySkipPrompt !== undefined) branchSummary.skipPrompt = payload.branchSummarySkipPrompt;
   if (Object.keys(retry).length) patch.retry = retry;
   if (Object.keys(compaction).length) patch.compaction = compaction;
   if (Object.keys(branchSummary).length) patch.branchSummary = branchSummary;

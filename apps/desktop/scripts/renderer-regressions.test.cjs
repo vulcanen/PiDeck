@@ -835,11 +835,20 @@ test("per-run file changes open a bounded and accessible split-pane review", () 
   assert.match(review, /change-review-line-number/);
   assert.match(review, /ChangeReviewMergeEditor = lazy/);
   assert.match(review, /change-review-hunk-resolution-actions/);
+  assert.match(review, /data-resolution=\{resolution\}/);
+  assert.match(review, /resolution === "reverted" \? "x"/);
   assert.match(review, /change-review-revert-popover/);
   assert.match(review, /change-review-hunk-controls-sticky/);
   assert.match(review, /resolved-\$\{resolution\}/);
   assert.match(styles, /\.change-review-revert-popover/);
   assert.match(styles, /\.change-review-hunk-group\[class\*="resolved-"\]/);
+  assert.match(styles, /\.change-review-hunk-group\[class\*="resolved-"\]::before/);
+  assert.match(styles, /--resolution-line-background:/);
+  assert.match(styles, /\.change-review-hunk-group\[class\*="resolved-"\] > \.change-review-line\.addition/);
+  assert.match(styles, /\.change-review-hunk-group\[class\*="resolved-"\] > \.change-review-line:not\(\.hunk\):not\(\.meta\) code/);
+  assert.match(styles, /\.change-review-hunk-group\[class\*="resolved-"\] > \.change-review-split-row \.change-review-split-cell code/);
+  assert.match(styles, /opacity: 1; filter: none/);
+  assert.match(styles, /\.change-review-hunk-resolution\.reverted[^}]*color: var\(--red\)/);
   assert.match(mergeEditor, /unifiedMergeView/);
   assert.match(mergeEditor, /diffConfig: \{ scanLimit: 500, timeout: 1_000 \}/);
   assert.match(mergeEditor, /useDialogFocus/);
@@ -986,11 +995,16 @@ test("model menu hides its scrollbar without disabling overflow scrolling", () =
 test("session tree uses fixed branch rails instead of message-depth width", () => {
   const styles = rendererSource("styles.css");
   const dialog = rendererSource("ui/session-branch-dialog.tsx");
+  const controller = rendererSource("use-app-controller.tsx");
 
   assert.match(styles, /\.session-branch-row \{[^}]*grid-template-columns:\s*52px minmax\(0, 1fr\)/);
   assert.doesNotMatch(styles, /--tree-depth/);
   assert.match(dialog, /SESSION_TREE_PAGE_SIZE = 160/);
   assert.match(dialog, /visibleEntries\.map/);
+  assert.match(dialog, /skipSummaryPrompt/);
+  assert.match(dialog, /data-summary-prompt-skipped/);
+  assert.match(controller, /settings\.get\(projectCwd\)/);
+  assert.match(controller, /sessionBranchSkipPrompt/);
 });
 
 test("renderer controls share theme tokens across surfaces and modes", () => {

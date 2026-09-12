@@ -185,6 +185,13 @@ async function testModelListWheel() {
   if (!pass) throw new Error("Model-list wheel changed the conversation scroll position");
 }
 
+async function configuredGpt55Model() {
+  const models = await evaluate("window.pideck.models.list()");
+  const matches = (Array.isArray(models) ? models : []).filter((model) => model?.authConfigured === true && /gpt[- ]?5\\.5/i.test(`${model.providerId}/${model.id} ${model.name ?? ""}`));
+  if (matches.length !== 1) throw new Error(`Expected exactly one authenticated GPT-5.5 model, found ${matches.map((model) => `${model.providerId}/${model.id}`).join(", ") || "none"}`);
+  return matches[0];
+}
+
 const sdk = await import("@earendil-works/pi-coding-agent");
 const agentDir = sdk.getAgentDir?.();
 if (!agentDir) throw new Error("Pi agent directory is unavailable");
@@ -207,9 +214,14 @@ try {
   writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
   console.log(`UI opened Pi Settings; screenshot: ${screenshotPath}`);
 
-  await applyCase("default model", () => selectValue("pi-defaultModel", "openai-codex/gpt-5.6-sol"), () => readControl("pi-defaultModel"), (value) => /gpt-5\.6(?:-|\s+)sol/i.test(value));
+  const acceptanceModel = await configuredGpt55Model();
+  const acceptanceModelReference = `${acceptanceModel.providerId}/${acceptanceModel.id}`;
+  console.log(`Using configured GPT-5.5 model ${acceptanceModelReference}`);
+  const acceptanceModelPattern = new RegExp(acceptanceModel.id.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"), "i");
+  await applyCase("default model", () => selectValue("pi-defaultModel", acceptanceModelReference), () => readControl("pi-defaultModel"), (value) => acceptanceModelPattern.test(value));
   await applyCase("default thinking", () => selectValue("pi-defaultThinking", "low"), () => readControl("pi-defaultThinking"), (value) => value === "low");
-  await applyCase("per-model thinking", () => selectValue("pi-model-thinking-openai-codex-gpt-5.6-sol", "medium"), () => readControl("pi-model-thinking-openai-codex-gpt-5.6-sol"), (value) => value === "medium");
+  const modelThinkingTestId = `pi-model-thinking-${acceptanceModel.providerId}-${acceptanceModel.id}`;
+  await applyCase("per-model thinking", () => selectValue(modelThinkingTestId, "medium"), () => readControl(modelThinkingTestId), (value) => value === "medium");
   for (const transport of ["auto", "sse", "websocket", "websocket-cached"]) {
     const display = transport === "sse" ? "SSE" : transport === "websocket" ? "WebSocket" : transport === "websocket-cached" ? "WebSocket (cached)" : "auto";
     await applyCase(`transport ${transport}`, () => selectValue("pi-transport", transport), () => readControl("pi-transport"), (value) => value === display);
@@ -231,6 +243,7 @@ try {
     ["HTTP idle timeout", () => fill("pi-httpIdleTimeoutMs", "120000"), () => readControl("pi-httpIdleTimeoutMs"), (value) => value === "120000"],
     ["WebSocket connect timeout", () => fill("pi-websocketConnectTimeoutMs", "10000"), () => readControl("pi-websocketConnectTimeoutMs"), (value) => value === "10000"],
     ["branch summary reserve", () => fill("pi-branchSummaryReserveTokens", "8192"), () => readControl("pi-branchSummaryReserveTokens"), (value) => value === "8192"],
+    ["branch summary skip prompt", () => setChecked("pi-branchSummarySkipPrompt", true), () => readControl("pi-branchSummarySkipPrompt"), (value) => value === true],
     ["HTTP proxy", () => fill("pi-httpProxy", "http://127.0.0.1:9"), () => readControl("pi-httpProxy"), (value) => value === "http://127.0.0.1:9/"],
     ["default tools", async () => { await evaluate(`(() => { const label = Array.from(document.querySelectorAll('.pi-settings-fields > label')).find((item) => item.innerText.includes('使用 Pi 默认工具') || item.innerText.includes('Use Pi default tools')); const element = label?.querySelector('input[type="checkbox"]'); if (!element) throw new Error('Default-tools automatic checkbox not found'); if (element.checked) element.click(); return true; })()`); await fill("pi-defaultTools", "read bash"); }, () => readControl("pi-defaultTools"), (value) => value === "read, bash"],
     ["image auto resize", () => setChecked("pi-imageAutoResize", false), () => readControl("pi-imageAutoResize"), (value) => value === false],
@@ -256,7 +269,7 @@ try {
   await newTask();
   const composerDefaults = await evaluate(`({model: document.querySelector('[title="选择模型"]')?.innerText ?? '', thinking: document.querySelector('[title="选择思考等级"]')?.innerText.trim() ?? ''})`);
   console.log(`UI new-session defaults: ${JSON.stringify(composerDefaults)}`);
-  if (!/gpt-5\.6(?:-|\s+)sol/i.test(composerDefaults.model)) throw new Error(`New session did not expose the saved model default: ${JSON.stringify(composerDefaults)}`);
+  if (!acceptanceModelPattern.test(composerDefaults.model)) throw new Error(`New session did not expose the saved model default: ${JSON.stringify(composerDefaults)}`);
   if (!composerDefaults.thinking || !/medium|low/i.test(composerDefaults.thinking)) throw new Error(`New session did not expose saved thinking defaults: ${JSON.stringify(composerDefaults)}`);
 
   // The shell settings are exercised through PiDeck's visible !! command path, not only read back from the form.

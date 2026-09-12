@@ -19,7 +19,7 @@
   const model = { id: "fixture-model", name: "Preview model", providerId: "fixture-provider", providerName: "Preview provider", authConfigured: true, thinkingLevels: ["off", "medium"], contextWindow: 100000, reasoning: true };
   const { fallbackSlashCommands } = await import("/src/renderer/pi-capabilities.ts");
   const capabilities = { model, thinkingLevel: "medium", thinkingLevels: model.thinkingLevels, slashCommands: [...fallbackSlashCommands, { name: "fixture-extension", source: "extension", description: "Test extension dialog" }], prompts: [{ name: "review-template", description: "Review with a prompt template" }], skills: [{ name: "skill:review", description: "Review skill" }] };
-  const settings = { defaultProvider: model.providerId, defaultModel: model.id, defaultThinkingLevel: "medium", transport: "auto", compactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" };
+  const settings = { defaultProvider: model.providerId, defaultModel: model.id, defaultThinkingLevel: "medium", transport: "auto", compactionEnabled: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", branchSummaryReserveTokens: 16384, branchSummarySkipPrompt: false };
   window.pideck = {
     app: { setLanguage: noop, setWindowTheme: noop, setConfirmClose: noop, popupMenu: async ({ menu }) => {
       if (params.has("menuError")) throw new Error("Native menu unavailable in fixture");

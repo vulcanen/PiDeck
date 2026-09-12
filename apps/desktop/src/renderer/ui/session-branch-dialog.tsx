@@ -18,6 +18,8 @@ interface SessionBranchDialogProps {
   onFork: (entryId: string) => void;
   onClone: () => void;
   onNavigate: (entryId: string, options: { summarize: boolean; customInstructions?: string }) => void;
+  /** Mirrors Pi's branchSummary.skipPrompt setting. */
+  skipSummaryPrompt?: boolean;
 }
 
 function entryKind(entry: SessionTreeEntrySummary, t: (typeof copy)[Language]): string {
@@ -68,7 +70,7 @@ function branchLayout(entries: SessionTreeEntrySummary[]) {
 }
 
 export function SessionBranchDialog({
-  language, mode, snapshot, loading, busy, error, onRetry, onClose, onAbort, onFork, onClone, onNavigate,
+  language, mode, snapshot, loading, busy, error, onRetry, onClose, onAbort, onFork, onClone, onNavigate, skipSummaryPrompt = false,
 }: SessionBranchDialogProps) {
   const t = copy[language];
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -78,7 +80,12 @@ export function SessionBranchDialog({
   const [pageStart, setPageStart] = useState(0);
   const [summarize, setSummarize] = useState(false);
   const [customInstructions, setCustomInstructions] = useState("");
-  useDialogFocus(dialogRef, () => { if (busy && mode === "tree" && summarize) onAbort(); else if (!busy) onClose(); });
+  useEffect(() => {
+    if (!skipSummaryPrompt) return;
+    setSummarize(false);
+    setCustomInstructions("");
+  }, [skipSummaryPrompt]);
+  useDialogFocus(dialogRef, () => { if (busy && mode === "tree" && summarize && !skipSummaryPrompt) onAbort(); else if (!busy) onClose(); });
 
   const entries = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -141,7 +148,10 @@ export function SessionBranchDialog({
     if (!actionable || busy) return;
     if (mode === "fork" && selected) onFork(selected.id);
     else if (mode === "clone") onClone();
-    else if (selected) onNavigate(selected.id, { summarize, ...(customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}) });
+    else if (selected) {
+      const shouldSummarize = !skipSummaryPrompt && summarize;
+      onNavigate(selected.id, { summarize: shouldSummarize, ...(shouldSummarize && customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}) });
+    }
   }
 
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
@@ -206,10 +216,12 @@ export function SessionBranchDialog({
               <dl>{formattedTime && <div><dt>{t.sessionTreeTime}</dt><dd>{formattedTime}</dd></div>}<div><dt>{t.sessionTreePath}</dt><dd>{selected.active ? t.sessionTreeActivePath : t.sessionTreeOtherBranch}</dd></div></dl>
               {mode === "fork" && <p className="session-branch-impact">{t.forkSessionImpact}</p>}
               {mode === "tree" && selected.current && <p className="session-branch-impact neutral">{t.sessionTreeAlreadyHere}</p>}
-              {mode === "tree" && !selected.current && <div className="session-branch-summary-options">
-                <label><input type="checkbox" checked={summarize} onChange={(event) => setSummarize(event.target.checked)} /><span><strong>{t.sessionTreeSummarize}</strong><small>{t.sessionTreeSummarizeHint}</small></span></label>
-                {summarize && <label className="session-branch-instructions"><span>{t.sessionTreeCustomInstructions}</span><textarea rows={3} value={customInstructions} onChange={(event) => setCustomInstructions(event.target.value)} placeholder={t.sessionTreeCustomInstructionsPlaceholder} /></label>}
-              </div>}
+              {mode === "tree" && !selected.current && (skipSummaryPrompt
+                ? <p className="session-branch-summary-skipped" role="status" data-summary-prompt-skipped="true">{t.sessionTreeSummaryPromptSkipped}</p>
+                : <div className="session-branch-summary-options">
+                  <label><input type="checkbox" checked={summarize} onChange={(event) => setSummarize(event.target.checked)} /><span><strong>{t.sessionTreeSummarize}</strong><small>{t.sessionTreeSummarizeHint}</small></span></label>
+                  {summarize && <label className="session-branch-instructions"><span>{t.sessionTreeCustomInstructions}</span><textarea rows={3} value={customInstructions} onChange={(event) => setCustomInstructions(event.target.value)} placeholder={t.sessionTreeCustomInstructionsPlaceholder} /></label>}
+                </div>)}
             </> : <p>{t.sessionTreeSelectEntry}</p>}
           </aside>
         </div>}

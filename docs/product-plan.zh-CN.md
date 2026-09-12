@@ -237,7 +237,11 @@ npm run test:renderer
 npm run build
 npm run smoke:runtime
 npm run smoke:cli
+# 需要已配置凭据；执行真实 GPT-5.5 通信矩阵。
+npm run acceptance:network
 ```
+
+通信方式的逐格条件与清理保证见[网络验收矩阵](network-acceptance-matrix.zh-CN.md)。
 
 Release Tag 还会验证 Tag commit 属于 `main` 并锁定其 SHA，在 Linux 上执行同一套验证，再分别在匹配的原生 GitHub Runner 上构建 Windows x64、macOS arm64 和 macOS x64 安装包。工作流从每个平台最终包生成独立 SBOM，并创建包含 SHA-256 校验和的 Draft Release；可信公开分发还需要在受保护的 `release-signing` Environment 中配置平台签名和 macOS 公证 Secret。
 

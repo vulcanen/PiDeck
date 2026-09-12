@@ -50,6 +50,7 @@
     "verify:package": "node scripts/verify-package-contents.mjs",
     "smoke:runtime": "node scripts/smoke-source-runtime.mjs && node scripts/smoke-session-isolation.mjs",
     "smoke:cli": "node scripts/smoke-cli.mjs",
+    "acceptance:network": "npm run build && node scripts/network-acceptance.mjs",
     "smoke:package": "node scripts/smoke-packaged-runtime.mjs",
     "sbom:package": "node scripts/generate-packaged-sbom.mjs"
   },

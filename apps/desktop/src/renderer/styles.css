@@ -987,6 +987,7 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .session-branch-summary-options > label:first-child span { display: grid; gap: 3px; }
 .session-branch-summary-options strong { color: var(--text); font-size: var(--font-size-label); }
 .session-branch-summary-options small, .session-branch-instructions > span { color: var(--muted); font-size: var(--font-size-caption); line-height: var(--line-height-body); }
+.session-branch-summary-skipped { margin-top: 18px; padding: 10px 12px; border-left: 2px solid var(--accent); border-radius: var(--radius-sm); background: var(--selection-bg-subtle); color: var(--muted); font-size: var(--font-size-caption); line-height: var(--line-height-body); }
 .session-branch-instructions { display: grid; gap: 6px; }
 .session-branch-instructions textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-control); outline: 0; background: var(--surface-raised); color: var(--text); font-family: inherit; font-size: var(--font-size-label); line-height: var(--line-height-body); }
 .session-branch-instructions textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
@@ -1357,21 +1358,50 @@ kbd { color: var(--faint); font: 600 10px var(--font-mono); }
 .change-review-hunk-controls-sticky { position: sticky; top: 4px; left: 0; z-index: 4; display: flex; width: 100cqw; height: 0; box-sizing: border-box; justify-content: flex-end; padding-right: 8px; pointer-events: none; }
 .change-review-hunk-controls-sticky > * { pointer-events: auto; }
 .change-review-hunk-group.confirming-revert .change-review-hunk-controls-sticky { z-index: 6; }
-.change-review-hunk-group.resolved-accepted { --resolution-color: var(--green); }
-.change-review-hunk-group.resolved-reverted { --resolution-color: var(--red); }
-.change-review-hunk-group.resolved-merged { --resolution-color: var(--blue); }
-.change-review-hunk-group[class*="resolved-"] { animation: hunk-resolved 520ms var(--motion) both; }
+.change-review-hunk-group.resolved-accepted { --resolution-color: var(--green); --resolution-surface: color-mix(in srgb, var(--green) 5%, transparent); }
+.change-review-hunk-group.resolved-reverted { --resolution-color: var(--red); --resolution-surface: color-mix(in srgb, var(--red) 5%, transparent); }
+.change-review-hunk-group.resolved-merged { --resolution-color: var(--blue); --resolution-surface: color-mix(in srgb, var(--blue) 5%, transparent); }
+/* Keep the status tint layered like VS Code's diffEditor line/text backgrounds:
+   low-alpha across the hunk, stronger on changed cells, with syntax colors intact. */
+.change-review-hunk-group[class*="resolved-"] {
+  --resolution-line-background: color-mix(in srgb, var(--resolution-color) 9%, var(--canvas));
+  --resolution-code-background: color-mix(in srgb, var(--resolution-color) 12%, var(--canvas));
+  --resolution-split-gutter-background: color-mix(in srgb, var(--resolution-color) 9%, var(--split-gutter, var(--canvas)));
+  --resolution-split-code-background: color-mix(in srgb, var(--resolution-color) 12%, var(--split-canvas, var(--canvas)));
+  --resolution-addition-background: color-mix(in srgb, var(--green) 12%, var(--resolution-line-background));
+  --resolution-deletion-background: color-mix(in srgb, var(--red) 12%, var(--resolution-line-background));
+  --resolution-addition-code-background: color-mix(in srgb, var(--green) 15%, var(--resolution-split-code-background));
+  --resolution-deletion-code-background: color-mix(in srgb, var(--red) 15%, var(--resolution-split-code-background));
+  background: var(--resolution-surface);
+  outline: 1px solid color-mix(in srgb, var(--resolution-color) 28%, transparent);
+  outline-offset: -1px;
+  animation: hunk-resolved 520ms var(--motion) both;
+}
+.change-review-hunk-group[class*="resolved-"]::before { position: absolute; inset: 0 auto 0 0; z-index: 2; width: 3px; border-radius: 0 2px 2px 0; background: var(--resolution-color); content: ""; pointer-events: none; }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line { background-color: var(--resolution-line-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line:not(.hunk):not(.meta) code { background-color: var(--resolution-code-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line.addition { background-color: var(--resolution-addition-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line.deletion { background-color: var(--resolution-deletion-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line.addition code { background-color: color-mix(in srgb, var(--green) 10%, var(--resolution-code-background)); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-line.deletion code { background-color: color-mix(in srgb, var(--red) 10%, var(--resolution-code-background)); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row .change-review-split-cell { background-color: var(--resolution-split-gutter-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row .change-review-split-cell code { background-color: var(--resolution-split-code-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row .change-review-split-cell.addition { background-color: color-mix(in srgb, var(--green) 12%, var(--resolution-split-gutter-background)); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row .change-review-split-cell.addition code { background-color: var(--resolution-addition-code-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row .change-review-split-cell.deletion { background-color: color-mix(in srgb, var(--red) 12%, var(--resolution-split-gutter-background)); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-row .change-review-split-cell.deletion code { background-color: var(--resolution-deletion-code-background); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-meta { background-color: var(--resolution-split-code-background); }
 .change-review-hunk-group[class*="resolved-"] > .change-review-line,
 .change-review-hunk-group[class*="resolved-"] > .change-review-split-row,
-.change-review-hunk-group[class*="resolved-"] > .change-review-split-meta { opacity: .5; filter: saturate(.35); transition: opacity 180ms var(--motion), filter 180ms var(--motion); }
+.change-review-hunk-group[class*="resolved-"] > .change-review-split-meta { opacity: 1; filter: none; transition: opacity 180ms var(--motion), filter 180ms var(--motion), background-color 180ms var(--motion); }
 .change-review-hunk-resolution-actions, .change-review-hunk-resolution { position: relative; display: inline-flex; min-height: 22px; flex: 0 0 auto; align-items: center; gap: 4px; font: 9px var(--font-sans); }
-.change-review-hunk-resolution-actions button { min-height: 22px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--green) 32%, var(--line)); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--green) 8%, var(--surface)); color: var(--green); }
+.change-review-hunk-resolution-actions button { display: inline-flex; min-height: 22px; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--green) 42%, var(--line)); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--green) 10%, var(--surface)); color: var(--green); font: inherit; }
 .change-review-hunk-resolution-actions button.revert { border-color: color-mix(in srgb, var(--red) 28%, var(--line)); background: color-mix(in srgb, var(--red) 7%, var(--surface)); color: var(--red); }
-.change-review-hunk-resolution-actions button:hover:not(:disabled) { background: var(--surface); box-shadow: var(--shadow-subtle); }
+.change-review-hunk-resolution-actions button:hover:not(:disabled), .change-review-hunk-resolution-actions button:focus-visible { background: var(--surface); box-shadow: var(--shadow-subtle); }
 .change-review-hunk-resolution-actions button:disabled { opacity: .45; }
-.change-review-hunk-resolution { padding: 0 7px; border: 1px solid color-mix(in srgb, var(--green) 22%, var(--line)); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--green) 12%, var(--surface)); color: var(--green); box-shadow: var(--shadow-subtle); animation: hunk-badge-in 180ms var(--motion) both; }
-.change-review-hunk-resolution.reverted { border-color: color-mix(in srgb, var(--red) 22%, var(--line)); background: color-mix(in srgb, var(--red) 8%, var(--surface)); color: var(--red); }
-.change-review-hunk-resolution.merged { border-color: color-mix(in srgb, var(--blue) 22%, var(--line)); background: color-mix(in srgb, var(--blue) 9%, var(--surface)); color: var(--blue); }
+.change-review-hunk-resolution { padding: 0 8px; border: 1px solid color-mix(in srgb, var(--green) 58%, var(--line)); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--green) 17%, var(--surface)); color: var(--green); font-weight: 650; box-shadow: var(--shadow-subtle); animation: hunk-badge-in 180ms var(--motion) both; }
+.change-review-hunk-resolution.reverted { border-color: color-mix(in srgb, var(--red) 58%, var(--line)); background: color-mix(in srgb, var(--red) 16%, var(--surface)); color: var(--red); }
+.change-review-hunk-resolution.merged { border-color: color-mix(in srgb, var(--blue) 58%, var(--line)); background: color-mix(in srgb, var(--blue) 15%, var(--surface)); color: var(--blue); }
 .change-review-revert-popover { position: absolute; top: calc(100% + 7px); right: 0; z-index: 5; display: grid; width: min(280px, calc(100cqw - 16px)); gap: 8px; padding: 10px; border: 1px solid color-mix(in srgb, var(--red) 28%, var(--line-strong)); border-radius: var(--radius-card); background: var(--surface); color: var(--muted); box-shadow: var(--shadow-popover); animation: hunk-badge-in 140ms var(--motion) both; }
 .change-review-revert-popover::before { position: absolute; top: -5px; right: 18px; width: 8px; height: 8px; border-top: 1px solid color-mix(in srgb, var(--red) 28%, var(--line-strong)); border-left: 1px solid color-mix(in srgb, var(--red) 28%, var(--line-strong)); background: var(--surface); content: ""; transform: rotate(45deg); }
 .change-review-revert-popover > span:first-child { display: grid; gap: 3px; }
