@@ -8,9 +8,18 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-12
+
+PiDeck `0.2.0` is the first public open-source Beta. The complete supported-feature inventory, downloads, verification notes, and known limitations are recorded in the [v0.2.0 release notes](docs/releases/v0.2.0.md).
+
 ### Added
 
 - Added per-hunk accept/revert actions and a CodeMirror-based editable merge view to per-run file change review, with external-edit conflict detection and safe atomic writes.
+- Added real DeepSeek interface screenshots and a Beta-focused README that documents PiDeck's Pi-only product boundary.
+
+### Changed
+
+- Prepared the repository, contribution documentation, security policy, release workflow, and three-platform packaging for the first public source release.
 
 ### Fixed
 
@@ -43,5 +52,6 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Project-scoped Pi resources remain gated by Pi's trust decision, while credentials and component instances stay outside the Renderer process.
 - Dependency alerts and automatic security updates are enabled for the repository; release and CI actions remain pinned to immutable revisions.
 
-[Unreleased]: https://github.com/vulcanen/PiDeck/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/vulcanen/PiDeck/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vulcanen/PiDeck/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/vulcanen/PiDeck/compare/v0.1.4...v0.1.5

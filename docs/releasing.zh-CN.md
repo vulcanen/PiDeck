@@ -90,7 +90,7 @@ Get-AuthenticodeSignature '.\PiDeck-VERSION-windows-x64-setup.exe' | Format-List
 ## 6. 发布后检查
 
 1. 手动发布验收通过的 Draft Release。
-2. 确认 `/releases/latest` 指向新版本，README 的动态版本徽章完成更新。
+2. 稳定版确认 `/releases/latest` 指向新版本；Pre-release 确认对应 Tag 页面可见。README 的动态版本徽章应包含 Pre-release。
 3. 从公开 Release 页面重新下载至少一个安装包，并核对 SHA-256。
 4. 检查 CI/Release 工作流无失败或意外重跑。
 5. 通过 GitHub CLI 或网页验证至少一个安装包的 Artifact Attestation。

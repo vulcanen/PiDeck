@@ -1,6 +1,6 @@
 {
   "name": "@pideck/desktop",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
@@ -17,10 +17,10 @@
     "@codemirror/merge": "^6.12.2",
     "@codemirror/state": "^6.7.4",
     "@gotgenes/pi-permission-system": "^31.1.1",
-    "@pideck/contracts": "0.1.5",
-    "@pideck/domain": "0.1.5",
-    "@pideck/i18n": "0.1.5",
-    "@pideck/ui-system": "0.1.5",
+    "@pideck/contracts": "0.2.0",
+    "@pideck/domain": "0.2.0",
+    "@pideck/i18n": "0.2.0",
+    "@pideck/ui-system": "0.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "cmdk": "^1.1.1",

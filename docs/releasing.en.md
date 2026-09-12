@@ -90,7 +90,7 @@ The status, signer, and certificate chain must match the release expectation. Ke
 ## 6. Post-release checks
 
 1. Manually publish the accepted draft Release.
-2. Confirm `/releases/latest` points to the new version and the README release badge updates.
+2. For a stable release, confirm `/releases/latest` points to the new version. For a pre-release, confirm the tagged release page is visible. The README release badge should include pre-releases.
 3. Download at least one installer again from the public Release page and verify its SHA-256.
 4. Check that CI and Release workflows have no failures or unexpected reruns.
 5. Verify the Artifact Attestation for at least one installer through GitHub CLI or the web interface.

@@ -3,16 +3,27 @@
 [English](README.en.md)
 
 [![CI](https://github.com/vulcanen/PiDeck/actions/workflows/ci.yml/badge.svg)](https://github.com/vulcanen/PiDeck/actions/workflows/ci.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/vulcanen/PiDeck?display_name=tag&sort=semver)](https://github.com/vulcanen/PiDeck/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/vulcanen/PiDeck?display_name=tag&include_prereleases&sort=semver)](https://github.com/vulcanen/PiDeck/releases)
+[![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)](#beta-说明)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的非官方桌面客户端。你可以用它管理项目和会话、选择模型、查看工具调用并处理审批，不必一直在终端中操作 Pi。
+PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的非官方桌面界面。它把项目、会话、模型、工具调用和审批集中到一个本地应用里；真正的 Agent 运行、模型访问、会话保存和凭据管理仍由 Pi 完成。
 
-> PiDeck 由社区独立维护，与 Pi 官方无隶属关系。模型调用、会话和凭据仍由 Pi CLI / SDK 负责，PiDeck 只提供桌面界面。
+> PiDeck 由社区独立维护，与 Pi 官方无隶属关系。
 
 当前适配基线：Pi CLI / SDK `0.85.1`，Electron `43.4.1`。
 
-![PiDeck 深色主题工作台，显示项目侧栏、空会话区域和消息输入区](docs/assets/pideck-workspace.png)
+## Beta 说明
+
+PiDeck 目前处于 Beta 阶段，核心工作流已经可用，但界面细节、兼容范围和安装方式仍可能调整。重要项目请正常使用 Git 或其他方式保留可恢复的版本，并在升级前查看 [变更日志](CHANGELOG.md)。
+
+## 只为 Pi 提供桌面界面
+
+PiDeck 不在 Pi 之外再造一套 Agent，也不维护独立的模型目录、凭据库或会话数据库。界面中的模型、命令、Tool、Session、Extension、Package 和权限状态，都来自 Pi CLI / SDK。
+
+除了桌面交互和呈现，PiDeck 不增加 Pi 本身没有的产品能力。如果某项能力暂时无法可靠映射到桌面界面，PiDeck 会明确保留在 Pi CLI，而不是模拟一个看似可用的实现。目标很直接：保留 Pi 的简单和效率，把日常交互搬到桌面上。
+
+![PiDeck 中的真实 DeepSeek 会话，显示项目、对话、模型和文件修改摘要](docs/assets/pideck-conversation.png)
 
 ## 主要功能
 
@@ -26,9 +37,43 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的非官方桌面客户�
 
 完整支持情况见 [Pi CLI → PiDeck 功能矩阵](docs/pi-cli-feature-matrix.zh-CN.md)。
 
+## 界面预览
+
+下面的画面来自 `Qwen Token Plan CN / DeepSeek V4 Pro 0813` 的真实运行，会话和文件都位于独立的演示工作区。
+
+### 实时执行过程
+
+Thinking、工具调用和执行状态按发生顺序显示；任务完成后，这些内容会收进可展开的执行摘要。
+
+![DeepSeek 正在 PiDeck 中思考并执行任务](docs/assets/pideck-live-activity.png)
+
+### 文件改动审查
+
+每轮任务产生的文件改动可以按文件浏览，支持统一或拆分 Diff、逐块接受或撤销，以及可编辑合并。
+
+![PiDeck 文件改动审查，显示文件树、Diff 和逐块操作](docs/assets/pideck-change-review.png)
+
+### 会话树
+
+`/tree`、`/fork` 和 `/clone` 直接使用 Pi 的 Session 能力，分支浏览和切换不会创建另一套会话格式。
+
+![PiDeck 会话树，显示真实会话中的消息节点和分支操作](docs/assets/pideck-session-tree.png)
+
+### Pi 设置与 Provider
+
+默认模型、Thinking 和其他会话行为写入 Pi 的设置；Provider 凭据也由 Pi 保存在本机配置目录中，不进入 Renderer。
+
+![PiDeck 的 Pi 设置，显示 DeepSeek 模型和 Thinking 配置](docs/assets/pideck-pi-settings.png)
+
+![PiDeck 的 Provider 认证页，显示已配置的 Qwen Token Plan CN](docs/assets/pideck-provider-settings.png)
+
+快捷设置把 Pi 设置、Provider、Package、模型范围、任务操作和命令入口放在同一个面板中。
+
+![PiDeck 快捷设置面板](docs/assets/pideck-quick-settings.png)
+
 ## 下载与系统要求
 
-从 [GitHub Releases](https://github.com/vulcanen/PiDeck/releases/latest) 下载最新公开版本：
+从 [GitHub Releases](https://github.com/vulcanen/PiDeck/releases) 下载最新公开版本：
 
 | 平台 | 系统要求 | 安装包 |
 | --- | --- | --- |
@@ -159,11 +204,13 @@ $env:PIDECK_PI_MODULE = "D:\path\to\pi-coding-agent\dist\index.js"
 
 ## 发布与文档
 
+- [v0.2.0 首个开源 Beta 发布说明](docs/releases/v0.2.0.md)
 - [发布维护指南](docs/releasing.zh-CN.md)
 - [变更日志](CHANGELOG.md)
 - [产品与技术方案](docs/product-plan.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
 - [Pi CLI 功能矩阵](docs/pi-cli-feature-matrix.zh-CN.md)
+- [网络验收矩阵](docs/network-acceptance-matrix.zh-CN.md)
 - [项目开发说明与规范](AGENTS.md)
 
 ## 参与项目
