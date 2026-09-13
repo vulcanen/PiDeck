@@ -70,7 +70,7 @@
     "@pideck/pi-adapter": "0.2.0"
   },
   "devDependencies": {
-    "@electron/asar": "^3.4.1",
+    "@electron/asar": "^4.3.0",
     "@eslint/js": "^10.0.1",
     "electron-builder": "^26.15.3",
     "eslint": "^10.8.0",
