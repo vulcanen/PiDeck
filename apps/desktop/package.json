@@ -42,7 +42,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "concurrently": "^10.0.4",
     "cross-env": "^10.1.0",
-    "electron": "^43.2.0",
+    "electron": "^44.3.0",
     "happy-dom": "^20.11.15",
     "typescript": "^7.0.2",
     "vite": "^8.2.0",
