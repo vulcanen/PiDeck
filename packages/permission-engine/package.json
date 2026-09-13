@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^24.9.0"
+    "@types/node": "^26.5.1"
   },
   "dependencies": {
     "@pideck/contracts": "0.2.0"
