@@ -61,8 +61,8 @@
     "nanoid": "3.3.18"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "@gotgenes/pi-permission-system": "^31.1.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@gotgenes/pi-permission-system": "33.1.0",
     "@pideck/contracts": "0.2.0",
     "@pideck/domain": "0.2.0",
     "@pideck/i18n": "0.2.0",

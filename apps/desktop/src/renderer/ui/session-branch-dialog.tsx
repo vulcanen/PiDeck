@@ -27,6 +27,7 @@ function entryKind(entry: SessionTreeEntrySummary, t: (typeof copy)[Language]): 
   if (entry.role === "assistant") return t.sessionTreePi;
   if (entry.role === "tool") return t.sessionTreeTool;
   if (entry.type === "compaction") return t.sessionTreeCompaction;
+  if (entry.type === "context_edit") return t.sessionTreeContextEdit;
   if (entry.type === "branch_summary") return t.sessionTreeBranchSummary;
   if (entry.type === "model_change" || entry.type === "thinking_level_change") return t.sessionTreeSetting;
   if (entry.type === "custom" || entry.type === "custom_message") return t.sessionTreeExtension;
@@ -92,7 +93,7 @@ export function SessionBranchDialog({
     return (snapshot?.entries ?? []).filter((entry) => {
       if (mode === "fork" && !entry.forkable) return false;
       if (mode === "clone" && !entry.active) return false;
-      if (mode === "tree" && !showAll && !(entry.current || entry.role === "user" || entry.role === "assistant" || entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "custom_message")) return false;
+      if (mode === "tree" && !showAll && !(entry.current || entry.role === "user" || entry.role === "assistant" || entry.type === "compaction" || entry.type === "context_edit" || entry.type === "branch_summary" || entry.type === "custom_message")) return false;
       return !normalizedQuery || searchable(entry).includes(normalizedQuery);
     });
   }, [mode, query, showAll, snapshot]);

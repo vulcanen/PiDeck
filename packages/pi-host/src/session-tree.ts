@@ -40,6 +40,7 @@ function entryPreview(entry: any): string {
     return messagePreview(entry.message?.content);
   }
   if (entry?.type === "custom_message") return clipped(textContent(entry.content));
+  if (entry?.type === "context_edit") return clipped(entry.replacement?.content ? textContent(entry.replacement.content) : entry.targetId);
   if (entry?.type === "compaction" || entry?.type === "branch_summary") return clipped(entry.summary);
   if (entry?.type === "model_change") return clipped(`${entry.provider ?? ""}/${entry.modelId ?? ""}`.replace(/^\//, ""));
   if (entry?.type === "thinking_level_change") return clipped(entry.thinkingLevel);

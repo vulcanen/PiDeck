@@ -405,6 +405,38 @@ function registerIpcHandlers() {
     }
     return requestHost("sessions.export", { taskId, format, cwd: projectCwd, outputPath });
   });
+  registerTrustedIpcHandler("sessions:bug-report", async (_event, taskId: string, hint?: string, cwd?: string) => {
+    const projectCwd = requireKnownProjectCwd(cwd);
+    if (!hostWindow) throw new Error("The PiDeck window is unavailable");
+    const t = copy[currentLanguage];
+    const transcript = await dialog.showMessageBox(hostWindow, {
+      type: "question", title: t.piBugReportTitle, message: t.piBugReportTranscriptQuestion,
+      detail: t.piBugReportTranscriptDetail,
+      buttons: [t.piBugReportIncludeTranscript, t.piBugReportDiagnosticsOnly, t.cancel],
+      defaultId: 1, cancelId: 2, noLink: true,
+    });
+    if (transcript.response === 2) return null;
+    const destination = await dialog.showMessageBox(hostWindow, {
+      type: "question", title: t.piBugReportTitle, message: t.piBugReportDestinationQuestion,
+      detail: t.piBugReportDestinationDetail,
+      buttons: [t.piBugReportExportZip, t.piBugReportUpload, t.cancel],
+      defaultId: 0, cancelId: 2, noLink: true,
+    });
+    if (destination.response === 2) return null;
+    const delivery = destination.response === 1 ? "upload" : "zip";
+    let outputPath: string | undefined;
+    if (delivery === "zip") {
+      const chosen = await dialog.showSaveDialog(hostWindow, {
+        title: t.piBugReportExportZip,
+        defaultPath: path.join(projectCwd, `pi-bug-report-${Date.now()}.zip`),
+        filters: [{ name: "ZIP", extensions: ["zip"] }],
+        properties: ["showOverwriteConfirmation", "createDirectory"],
+      });
+      if (chosen.canceled || !chosen.filePath) return null;
+      outputPath = chosen.filePath;
+    }
+    return requestHost("sessions.bugReport", { taskId, cwd: projectCwd, hint: hint?.trim().slice(0, 4096), includeSession: transcript.response === 0, delivery, outputPath });
+  });
   registerTrustedIpcHandler("sessions:import", async (_event, taskId?: string, cwd?: string) => {
     const trustedCwd = requireKnownProjectCwd(cwd);
     if (!hostWindow) return null;

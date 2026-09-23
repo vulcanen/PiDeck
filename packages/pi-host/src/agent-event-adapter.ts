@@ -62,9 +62,10 @@ export function normalizeAgentEvent(event: any, queueDelivery?: "steer" | "follo
     return { type: event.type, source: event.source, reason: event.reason };
   }
   if (event.type === "summarization_retry_finished") return { type: event.type };
-  if (event.type === "agent_settled" || event.type === "turn_start" || event.type === "turn_end") {
-    return { type: event.type, willRetry: event.willRetry };
-  }
+  if (event.type === "turn_start") return { type: event.type, turnIndex: event.turnIndex, timestamp: event.timestamp };
+  if (event.type === "turn_end") return { type: event.type, turnIndex: event.turnIndex, outcome: event.outcome, canContinue: event.canContinue, messageEntryId: event.messageEntryId, toolResultEntryIds: jsonSafe(event.toolResultEntryIds) };
+  if (event.type === "agent_before_settle") return { type: event.type, outcome: event.outcome, canContinue: event.canContinue };
+  if (event.type === "agent_settled") return { type: event.type };
   // Pi 0.84.4 exposes the lifecycle of blocking Extension UI prompts. Keep
   // the event shape explicit at the bridge boundary so future consumers do
   // not depend on arbitrary SDK objects leaking through the fallback path.

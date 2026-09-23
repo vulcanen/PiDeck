@@ -17,6 +17,7 @@ After building, verify at least:
 - `models.list`
 - `providers.list`
 - `sessions.create`
+- `sessions.bugReport` ZIP export with diagnostics only (never upload during automated smoke)
 - `sessions.capabilities`
 - `sessions.tree`、`sessions.fork`、`sessions.clone`、`sessions.navigateTree`（通过真实 PiHost IPC 验证会话树与会话替换）
 - `workspace.snapshot`

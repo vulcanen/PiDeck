@@ -7,6 +7,7 @@ export interface PiSettingsManager {
   getAllModelThinkingLevels?(): Record<string, string>;
   getTransport(): PiSettingsSummary["transport"] | undefined;
   getCompactionSettings(): { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } | undefined;
+  getCacheWarmingMode?(): PiSettingsSummary["cacheWarming"];
   getRetrySettings?(): { enabled: boolean; maxRetries: number; baseDelayMs: number };
   getProviderRetrySettings?(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs?: number };
   getBranchSummarySettings?(): { reserveTokens?: number; skipPrompt?: boolean };
@@ -28,7 +29,7 @@ export interface PiSettingsManager {
   getSteeringMode(): PiSettingsSummary["steeringMode"];
   getFollowUpMode(): PiSettingsSummary["followUpMode"];
   getExternalEditorCommand?(): string;
-  getGlobalSettings?(): { externalEditor?: unknown; httpProxy?: string };
+  getGlobalSettings?(): { externalEditor?: unknown; httpProxy?: string; compaction?: { modelOverrides?: Record<string, { reserveTokens?: number; keepRecentTokens?: number }> } };
   getProjectSettings?(): { externalEditor?: unknown };
   setDefaultModelAndProvider(provider: string, model: string): void;
   setDefaultThinkingLevel(level: string): void;
@@ -100,6 +101,8 @@ export function summarizePiSettings(manager: PiSettingsManager): PiSettingsSumma
     providerRetryMaxRetryDelayMs: providerRetry?.maxRetryDelayMs,
     compactionReserveTokens: compaction?.reserveTokens,
     compactionKeepRecentTokens: compaction?.keepRecentTokens,
+    compactionModelOverrides: { ...(manager.getGlobalSettings?.().compaction?.modelOverrides ?? {}) },
+    cacheWarming: manager.getCacheWarmingMode?.() ?? "off",
     branchSummaryReserveTokens: branchSummary?.reserveTokens,
     branchSummarySkipPrompt: branchSummary?.skipPrompt ?? manager.getBranchSummarySkipPrompt?.(),
     httpProxy, httpProxyHasCredentials,
@@ -239,6 +242,8 @@ export function advancedSettingsPatch(payload: PiSettingsUpdate): Record<string,
   if (Object.keys(providerRetry).length) retry.provider = providerRetry;
   if (payload.compactionReserveTokens !== undefined) compaction.reserveTokens = payload.compactionReserveTokens;
   if (payload.compactionKeepRecentTokens !== undefined) compaction.keepRecentTokens = payload.compactionKeepRecentTokens;
+  if (payload.compactionModelOverrides !== undefined) compaction.modelOverrides = payload.compactionModelOverrides;
+  if (payload.cacheWarming !== undefined) patch.cacheWarming = payload.cacheWarming;
   if (payload.branchSummaryReserveTokens !== undefined) branchSummary.reserveTokens = payload.branchSummaryReserveTokens;
   if (payload.branchSummarySkipPrompt !== undefined) branchSummary.skipPrompt = payload.branchSummarySkipPrompt;
   if (Object.keys(retry).length) patch.retry = retry;

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { PiSettingsSummary, PiSettingsUpdate, PiThinkingBudgets } from "@pideck/contracts";
 import { copy, type Language } from "@pideck/i18n";
 import { SelectControl } from "./select-control";
@@ -6,6 +7,9 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
   language: Language; settings: PiSettingsSummary; onChange: (patch: Omit<PiSettingsUpdate, "modelThinkingLevels">) => void;
 }) {
   const t = copy[language];
+  const [newCompactionModel, setNewCompactionModel] = useState("");
+  const [newCompactionReserve, setNewCompactionReserve] = useState("");
+  const [newCompactionRecent, setNewCompactionRecent] = useState("");
   const numbers = [
     ["providerRetryTimeoutMs", t.piProviderRetryTimeoutMs, 0, 2147483647, false],
     ["providerRetryMaxRetries", t.piProviderRetryMaxRetries, 0, 100, false],
@@ -29,12 +33,38 @@ export function PiAdvancedSettings({ language, settings, onChange }: {
     const next = { ...(settings.thinkingBudgets ?? {}), [level]: value };
     onChange({ thinkingBudgets: next });
   }
+  function updateCompactionModel(reference: string, value: { reserveTokens?: number; keepRecentTokens?: number } | null) {
+    onChange({ compactionModelOverrides: { [reference]: value && Object.keys(value).length ? value : null } });
+  }
   return <details className="pi-settings-advanced" data-testid="pi-advanced-settings">
     <summary>{t.piAdvancedSettings}</summary>
     <div className="pi-settings-fields">
       <label className="pi-settings-check"><input type="checkbox" checked={settings.retryEnabled ?? true} onChange={(event) => onChange({ retryEnabled: event.target.checked })} /><span>{t.piRetryEnabled}</span></label>
       <p className="pi-settings-hint">{t.piRetryAndCompactionHint}</p>
       {numbers.map(([key, label, min, max, required]) => <label key={key}><span>{label}</span><input type="number" data-testid={`pi-${key}`} min={min} max={max} step={1} required={required} defaultValue={settings[key]} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) onChange({ [key]: event.target.valueAsNumber }); }} /></label>)}
+      <label><span>{t.piCacheWarming}</span><SelectControl testId="pi-cacheWarming" aria-label={t.piCacheWarming} value={settings.cacheWarming ?? "off"} options={[{ value: "off", label: t.piCacheWarmingOff }, { value: "streaming", label: t.piCacheWarmingStreaming }, { value: "idle", label: t.piCacheWarmingIdle }]} onChange={(value) => onChange({ cacheWarming: value as PiSettingsSummary["cacheWarming"] })} /><small>{t.piCacheWarmingHint}</small></label>
+      <fieldset className="pi-settings-subsection">
+        <legend>{t.piCompactionModelOverrides}</legend>
+        <small className="pi-settings-hint">{t.piCompactionModelOverridesHint}</small>
+        {Object.entries(settings.compactionModelOverrides ?? {}).map(([reference, override]) => <div key={reference} className="pi-settings-budget-grid">
+          <span>{reference}</span>
+          <label><span>{t.piCompactionReserveTokens}</span><input type="number" min={0} max={100000000} step={1} value={override.reserveTokens ?? ""} onChange={(event) => { const value = event.target.valueAsNumber; if (event.target.value && !Number.isFinite(value)) return; const next = { ...override }; if (event.target.value) next.reserveTokens = value; else delete next.reserveTokens; updateCompactionModel(reference, next); }} /></label>
+          <label><span>{t.piCompactionKeepRecentTokens}</span><input type="number" min={0} max={100000000} step={1} value={override.keepRecentTokens ?? ""} onChange={(event) => { const value = event.target.valueAsNumber; if (event.target.value && !Number.isFinite(value)) return; const next = { ...override }; if (event.target.value) next.keepRecentTokens = value; else delete next.keepRecentTokens; updateCompactionModel(reference, next); }} /></label>
+          <button type="button" className="button ghost" onClick={() => updateCompactionModel(reference, null)}>{t.piCompactionRemoveOverride}</button>
+        </div>)}
+        <div className="pi-settings-budget-grid">
+          <label><span>{t.piCompactionModel}</span><input type="text" value={newCompactionModel} maxLength={200} placeholder="provider/model" onChange={(event) => setNewCompactionModel(event.target.value)} /></label>
+          <label><span>{t.piCompactionReserveTokens}</span><input type="number" min={0} max={100000000} step={1} value={newCompactionReserve} onChange={(event) => setNewCompactionReserve(event.target.value)} /></label>
+          <label><span>{t.piCompactionKeepRecentTokens}</span><input type="number" min={0} max={100000000} step={1} value={newCompactionRecent} onChange={(event) => setNewCompactionRecent(event.target.value)} /></label>
+          <button type="button" className="button ghost" disabled={!/^[^/\s]+\/\S+$/.test(newCompactionModel.trim()) || (!newCompactionReserve && !newCompactionRecent)} onClick={() => {
+            const reserveTokens = Number(newCompactionReserve);
+            const keepRecentTokens = Number(newCompactionRecent);
+            if ((newCompactionReserve && (!Number.isInteger(reserveTokens) || reserveTokens < 0 || reserveTokens > 100000000)) || (newCompactionRecent && (!Number.isInteger(keepRecentTokens) || keepRecentTokens < 0 || keepRecentTokens > 100000000))) return;
+            updateCompactionModel(newCompactionModel.trim(), { ...(newCompactionReserve ? { reserveTokens } : {}), ...(newCompactionRecent ? { keepRecentTokens } : {}) });
+            setNewCompactionModel(""); setNewCompactionReserve(""); setNewCompactionRecent("");
+          }}>{t.piCompactionAddOverride}</button>
+        </div>
+      </fieldset>
       <label><span>{t.piHttpProxy}</span><input type="url" data-testid="pi-httpProxy" defaultValue={settings.httpProxy ?? ""} autoComplete="off" spellCheck={false} maxLength={4096} placeholder={t.piHttpProxyPlaceholder} onChange={(event) => onChange({ httpProxy: event.target.value })} /><small>{t.piHttpProxyHint}</small>{settings.httpProxyHasCredentials && <small>{t.piHttpProxyCredentialsHint}</small>}</label>
       <label className="pi-settings-check"><input type="checkbox" checked={settings.defaultTools == null} onChange={(event) => onChange({ defaultTools: event.target.checked ? null : [] })} /><span>{t.piDefaultToolsAutomatic}</span></label>
       {settings.defaultTools != null && <label><span>{t.piDefaultTools}</span><input type="text" data-testid="pi-defaultTools" defaultValue={settings.defaultTools.join(", ")} autoComplete="off" spellCheck={false} onChange={(event) => onChange({ defaultTools: event.target.value.split(/[\s,]+/).filter(Boolean) })} /><small>{t.piDefaultToolsHint}</small></label>}

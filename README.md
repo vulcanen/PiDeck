@@ -11,7 +11,7 @@ PiDeck 是 [Pi](https://github.com/earendil-works/pi) 的非官方桌面界面�
 
 > PiDeck 由社区独立维护，与 Pi 官方无隶属关系。
 
-当前适配基线：Pi CLI / SDK `0.85.1`，Electron `43.4.1`。
+当前适配基线：Pi CLI / SDK `0.87.1`、`@gotgenes/pi-permission-system` `33.1.0`，Electron `43.4.1`。
 
 ## Beta 说明
 
@@ -84,7 +84,7 @@ Thinking、工具调用和执行状态按发生顺序显示；任务完成后，
 
 将文件名中的 `VERSION` 换成 Release 页面显示的版本号。Mac 的“关于本机”中显示“芯片”时选择 arm64；显示“处理器”时选择 Intel x64。
 
-安装包已包含 Pi SDK `0.85.1`，无需另外安装 Pi CLI。`PIDECK_PI_MODULE` 仅用于开发和兼容性测试。
+安装包已包含 Pi SDK `0.87.1`，无需另外安装 Pi CLI。`PIDECK_PI_MODULE` 仅用于开发和兼容性测试。
 
 ## 安装
 
@@ -143,7 +143,7 @@ Select-String -Path .\SHA256SUMS.txt -Pattern 'PiDeck-VERSION-windows-x64-setup.
 - 二进制、超大或仅保留了截断差异的文件不能逐块处理或编辑合并。
 - Print、JSON、RPC、stdin 和 Auth Print 没有桌面入口，需要通过 `npm run cli` 或 `pideck-cli` 使用。
 - 依赖像素级终端显示或任意 DOM 的 Extension 仍需使用 Pi CLI。
-- 当前只保证与 Pi SDK `0.85.1` 兼容。
+- 当前只保证与 Pi SDK `0.87.1` 兼容。
 
 ## 从源码运行
 

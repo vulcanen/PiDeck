@@ -177,7 +177,19 @@ export function PiSettings({ language, cwd, models, onClose, onNotice }: {
           <small id="pi-external-editor-status" className="pi-settings-effective">{t.piExternalEditorEffective(settings.effectiveExternalEditor, settings.externalEditorSource)}</small>
         </fieldset>
         <label className="pi-settings-check"><input type="checkbox" checked={settings.compactionEnabled} onChange={(event) => setSettings({ ...settings, compactionEnabled: event.target.checked })} /><span>{t.piAutoCompaction}</span></label>
-        <PiAdvancedSettings language={language} settings={settings} onChange={(patch) => { setAdvancedUpdate((current) => ({ ...current, ...patch })); setSettings((current) => current ? { ...current, ...patch } : current); }} />
+        <PiAdvancedSettings language={language} settings={settings} onChange={(patch) => {
+          setAdvancedUpdate((current) => ({ ...current, ...patch, ...(patch.compactionModelOverrides ? { compactionModelOverrides: { ...current.compactionModelOverrides, ...patch.compactionModelOverrides } } : {}) }));
+          setSettings((current) => {
+            if (!current) return current;
+            const { compactionModelOverrides: overridePatch, ...otherPatch } = patch;
+            if (!overridePatch) return { ...current, ...otherPatch };
+            const overrides = { ...current.compactionModelOverrides };
+            for (const [reference, value] of Object.entries(overridePatch)) {
+              if (value === null) delete overrides[reference]; else overrides[reference] = value;
+            }
+            return { ...current, ...otherPatch, compactionModelOverrides: overrides };
+          });
+        }} />
         <p className="pi-settings-hint">{t.piSettingsReloadHint}</p>
       </div>}
       <div className="settings-footer"><button type="button" className="button ghost" onClick={onClose}>{t.cancel}</button><button type="button" className="button primary" data-testid="pi-settings-save" disabled={busy || editorPicking || !settings || editorCommandMissing} onClick={() => void save()}>{busy ? t.saving : t.save}</button></div>

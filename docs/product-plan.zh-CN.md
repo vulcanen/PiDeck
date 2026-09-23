@@ -19,7 +19,9 @@ Provider API Key、OAuth、Token 刷新和 Session 文件仍由 Pi Runtime 管�
 
 ## 2. 当前实现基线
 
-Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.85.1`。PiDeck 不显式传入 `createAgentSession.tools`，由 Pi 应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时传入 `{ persist: true }`，因此模型和思考等级变更会写入 Pi 的用户级设置；`/thinking [level]` 映射到桌面思考等级选择器，`/settings` 编辑同一份 SettingsManager 默认值。Pi 的 `ui_prompt_start` / `ui_prompt_end` 会在 PiHost 边界归一化为可序列化 Agent 事件；桌面更丰富的队列编辑仍使用直接 AgentSession 队列 API，SDK 的 RPC `clear_queue` 不属于当前直连 Host 传输。Pi 0.85.1 的 GPT-6 Astra 目录由 `ModelRuntime` 动态读取，其 fork 压缩边界、分支摘要、会话导入、代理、Qwen 目录及 OpenAI Codex SSE 修复会直接进入现有桌面映射。
+Pi SDK 基线为 `@earendil-works/pi-coding-agent@0.87.1`。PiDeck 不显式传入 `createAgentSession.tools`，由 Pi 应用项目/全局 `defaultTools` 设置（包括配置后可用的 Windows `powershell` 工具），同时保留 Extension 与自定义工具；模型摘要会过滤 Pi 通过 `null` 明确标记为不支持的思考等级，活动 Session 仍以 `AgentSession.getAvailableThinkingLevels()` 的权威结果为准。PiDeck 调用 `setModel()` / `setThinkingLevel()` 时传入 `{ persist: true }`，因此模型和思考等级变更会写入 Pi 的用户级设置；`/thinking [level]` 映射到桌面思考等级选择器，`/settings` 编辑同一份 SettingsManager 默认值。Pi 的 `ui_prompt_start` / `ui_prompt_end` 会在 PiHost 边界归一化为可序列化 Agent 事件；桌面更丰富的队列编辑仍使用直接 AgentSession 队列 API，SDK 的 RPC `clear_queue` 不属于当前直连 Host 传输。Pi 0.85.1 的 GPT-6 Astra 目录由 `ModelRuntime` 动态读取，其 fork 压缩边界、分支摘要、会话导入、代理、Qwen 目录及 OpenAI Codex SSE 修复会直接进入现有桌面映射。
+
+Pi 0.87.1 还通过运行时目录提供新模型与 Meta Muse，并增加上下文编辑 Session 条目、按模型限制图片输入、缓存预热、按模型配置压缩预算及问题报告 helper。PiDeck 在设置中映射缓存预热与压缩覆盖，在会话树中显示上下文编辑，并通过 `/bug` 提供会话记录确认和 ZIP/上传选项。新的 Extension 边界由 Pi SDK 内部执行，桌面端不自行构造。
 
 项目 Pi 资源遵循 Pi 的授权模型，不把“已打开项目”等同于自动允许加载。当项目存在受保护的设置、Extension、Skill、Prompt、主题、包、系统提示或项目 `.agents/skills` 时，PiDeck 会显示项目保存、父目录继承或全局默认的最终决定，并将其传给 `SettingsManager.create(..., { projectTrusted })`。在全局策略为 `ask` 且新增项目尚无决定时打开询问界面；同一项目级入口保留在项目右键菜单中。
 
@@ -130,7 +132,7 @@ packages/
 app.setLanguage/setWindowTheme/quit
 runtime.status
 projects.list/chooseDirectory/remove/trustStatus/setTrust
-sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
+sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/bugReport/import/rename/generateTitle/stats/share/changelog
 models.list/refresh
 workspace.snapshot
 input.keybindings/externalEdit
@@ -181,7 +183,7 @@ Pi CLI 内置 slash command 的权威清单来自 Pi ResourceLoader/SDK，fallba
 
 ### 7.2 `@gotgenes/pi-permission-system` 现状
 
-PiDeck 已将 `@gotgenes/pi-permission-system@31.1.1` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。它保留 PiDeck 使用的扁平 `permission` / `yoloMode` 配置，同时增加读写方向路径策略、无法解析 Bash 及重定向的安全关闭处理、按 Session 定位的权限服务和动态工具面过滤。PiDeck 不使用该扩展已删除的 root service accessor，也不对 decision attribution 枚举做穷尽分支。桌面端提供以下模式：
+PiDeck 已将 `@gotgenes/pi-permission-system@33.1.0` 作为桌面 PiHost 的 Extension 依赖，并通过 Pi `DefaultResourceLoader.additionalExtensionPaths` 加载。它保留 PiDeck 使用的扁平 `permission` / `yoloMode` 配置，同时增加读写方向路径策略、无法解析 Bash 及重定向的安全关闭处理、按 Session 定位的权限服务和动态工具面过滤。PiDeck 不使用该扩展已删除的 root service accessor，也不对 decision attribution 枚举做穷尽分支。桌面端提供以下模式：
 
 - `allow`：静默允许工具执行。
 - `ask`：执行前由 Pi 权限系统请求审批。

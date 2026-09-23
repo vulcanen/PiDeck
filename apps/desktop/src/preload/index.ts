@@ -48,6 +48,7 @@ const bridge: PideckBridge = {
     compact: (taskId: string, instructions?: string, cwd?: string) => ipcRenderer.invoke("sessions:compact", taskId, instructions, cwd),
     reload: (taskId: string, cwd?: string) => ipcRenderer.invoke("sessions:reload", taskId, cwd),
     export: (taskId: string, format: "jsonl" | "html", cwd?: string, outputPath?: string) => ipcRenderer.invoke("sessions:export", taskId, format, cwd, outputPath),
+    bugReport: (taskId: string, hint?: string, cwd?: string) => ipcRenderer.invoke("sessions:bug-report", taskId, hint, cwd),
     import: (taskId: string | undefined, cwd?: string) => ipcRenderer.invoke("sessions:import", taskId, cwd),
     rename: (taskId: string, name: string, cwd?: string) => ipcRenderer.invoke("sessions:rename", taskId, name, cwd),
     generateTitle: (taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }) => ipcRenderer.invoke("sessions:generateTitle", taskId, message, cwd, model),

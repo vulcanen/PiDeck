@@ -5,7 +5,7 @@
 
 ## 桌面兼容适配补充
 
-`pi-command-arguments.ts` 解析真实模型 ID 与导出文件名。`sessions.export` 新增可选输出路径；Main 校验并解析项目相对路径和 `~/`，通过系统保存窗口确认路径及覆盖，取消返回 `null`，确认后才由 PiHost 调用 Pi 导出器。`.jsonl` 路径选择 JSONL，其余为 HTML。
+`pi-command-arguments.ts` 解析真实模型 ID 与导出文件名。`sessions.export` 新增可选输出路径；Main 校验并解析项目相对路径和 `~/`，通过系统保存窗口确认路径及覆盖，取消返回 `null`，确认后才由 PiHost 调用 Pi 导出器。`.jsonl` 路径选择 JSONL，其余为 HTML。`sessions.bugReport` 通过原生对话框确认是否包含会话记录，以及上传或导出 ZIP；PiHost 的 `bug-report.ts` 调用同版本 Pi 的报告、崩溃日志、会话导出与上传 helper。ZIP 经原生保存窗口选择路径；桌面流程不请求模型生成摘要。
 
 `settings-command-handler.ts` 通过 Pi getter 读取非 TUI 设置，仅将变更的重试、压缩/分支摘要（包括 `skipPrompt`）、网络、图片、授权、Shell、Session、资源和遥测字段通过 `FileSettingsStorage.withLock` 写回，保留嵌套 Provider 重试参数与未知设置。代理摘要隐藏既有凭据，未编辑时保留原值。Session Tree 浮层读取生效的 `skipPrompt`，配置为 Pi 无摘要路径时隐藏摘要控件。网络、Shell 和 Session 目录修改需重启 Host/应用；默认工具用于新建会话。
 
@@ -251,13 +251,13 @@ PiDeck 的 Renderer `activity/completedActivity` 仍是当前进程内的展示�
 - `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
 - `projects.list/chooseDirectory/remove/trustStatus/setTrust`
-- `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
+- `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/bugReport/import/rename/generateTitle/stats/share/changelog`
 - `models.list/refresh`
 - `workspace.snapshot`
 - `input.keybindings/externalEdit`
 - `providers.list/login/logout/setApiKey/resolveAuth/openAuthUrl`
 - `agent.prompt/executeBash/abort/setThinkingLevel/setModel/cycleModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
-- `sessions.compact/reload`、`settings.get/update/chooseExternalEditor`、`extensions.resolveUi/syncEditor/invokeShortcut`
+- `sessions.compact/reload/bugReport`、`settings.get/update/chooseExternalEditor`、`extensions.resolveUi/syncEditor/invokeShortcut`
 - `packages.list/install/remove/update/configure/configureResource/checkUpdates`
 - `approvals.resolve`
 - `permissions.status/setMode`

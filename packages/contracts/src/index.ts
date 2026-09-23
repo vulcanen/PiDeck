@@ -247,6 +247,9 @@ export interface PiSettingsSummary {
   providerRetryMaxRetryDelayMs?: number;
   compactionReserveTokens?: number;
   compactionKeepRecentTokens?: number;
+  /** User-wide per-model compaction budgets from Pi settings. */
+  compactionModelOverrides?: Record<string, { reserveTokens?: number; keepRecentTokens?: number }>;
+  cacheWarming?: "off" | "streaming" | "idle";
   branchSummaryReserveTokens?: number;
   /** Skip Pi's interactive "Summarize branch?" confirmation prompt. */
   branchSummarySkipPrompt?: boolean;
@@ -283,6 +286,7 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
   | "retryEnabled" | "retryMaxRetries" | "retryBaseDelayMs"
   | "providerRetryTimeoutMs" | "providerRetryMaxRetries" | "providerRetryMaxRetryDelayMs"
   | "compactionReserveTokens" | "compactionKeepRecentTokens"
+  | "cacheWarming"
   | "branchSummaryReserveTokens"
   | "branchSummarySkipPrompt"
   | "httpProxy" | "httpIdleTimeoutMs" | "websocketConnectTimeoutMs" | "defaultTools"
@@ -300,6 +304,8 @@ export type PiSettingsUpdate = Partial<Pick<PiSettingsSummary,
 >> & {
   /** Incremental per-model overrides; null removes the Pi setting. */
   modelThinkingLevels?: Record<string, string | null>;
+  /** Incremental per-model compaction overrides; null removes an override. */
+  compactionModelOverrides?: Record<string, { reserveTokens?: number; keepRecentTokens?: number } | null>;
   thinkingBudgets?: PiThinkingBudgetsPatch | null;
 };
 
@@ -431,6 +437,7 @@ export interface PideckBridge {
     compact(taskId: string, instructions?: string, cwd?: string): Promise<unknown>;
     reload(taskId: string, cwd?: string): Promise<SessionCapabilities>;
     export(taskId: string, format: "jsonl" | "html", cwd?: string, outputPath?: string): Promise<{ path: string; reviewPath?: string } | null>;
+    bugReport(taskId: string, hint?: string, cwd?: string): Promise<{ id: string; path?: string } | null>;
     import(taskId: string | undefined, cwd?: string): Promise<ImportedSessionSummary | null>;
     rename(taskId: string, name: string, cwd?: string): Promise<string>;
     generateTitle(taskId: string, message: string, cwd?: string, model?: { providerId: string; modelId: string }): Promise<string | null>;
@@ -541,6 +548,7 @@ export type PiHostCommand =
   | "sessions.compact"
   | "sessions.reload"
   | "sessions.export"
+  | "sessions.bugReport"
   | "sessions.import"
   | "sessions.rename"
   | "sessions.generateTitle"
@@ -663,6 +671,7 @@ const piHostPayloadSchemas = {
   "sessions.compact": payload({ taskId: z.string(), instructions: z.string().optional(), cwd: z.string().optional() }),
   "sessions.reload": payload({ taskId: z.string(), cwd: z.string().optional() }),
   "sessions.export": payload({ taskId: z.string(), format: z.enum(["jsonl", "html"]), cwd: z.string().optional(), outputPath: z.string().min(1).max(4096).optional() }),
+  "sessions.bugReport": payload({ taskId: z.string(), cwd: z.string().optional(), hint: z.string().max(4096).optional(), includeSession: z.boolean(), delivery: z.enum(["zip", "upload"]), outputPath: z.string().min(1).max(4096).optional() }),
   "sessions.import": payload({ taskId: z.string().optional(), inputPath: z.string(), cwd: z.string().optional() }),
   "sessions.rename": payload({ taskId: z.string(), name: z.string(), cwd: z.string().optional() }),
   "sessions.generateTitle": payload({ taskId: z.string(), message: z.string(), cwd: z.string().optional(), model: modelReference.optional() }),
@@ -707,6 +716,8 @@ const piHostPayloadSchemas = {
     retryEnabled: z.boolean().optional(), retryMaxRetries: z.number().int().min(0).max(100).optional(), retryBaseDelayMs: z.number().int().min(0).max(2147483647).optional(),
     providerRetryTimeoutMs: z.number().int().min(0).max(2147483647).optional(), providerRetryMaxRetries: z.number().int().min(0).max(100).optional(), providerRetryMaxRetryDelayMs: z.number().int().min(0).max(2147483647).optional(),
     compactionReserveTokens: z.number().int().positive().max(100000000).optional(), compactionKeepRecentTokens: z.number().int().min(0).max(100000000).optional(),
+    compactionModelOverrides: z.record(z.string().max(200).regex(/^[^/\s]+\/\S+$/), z.object({ reserveTokens: z.number().int().min(0).max(100000000).optional(), keepRecentTokens: z.number().int().min(0).max(100000000).optional() }).strict().nullable()).refine((value) => Object.keys(value).length <= 100).optional(),
+    cacheWarming: z.enum(["off", "streaming", "idle"]).optional(),
     branchSummaryReserveTokens: z.number().int().positive().max(100000000).optional(),
     branchSummarySkipPrompt: z.boolean().optional(),
     httpProxy: z.string().max(4096).optional(), httpIdleTimeoutMs: z.number().int().min(0).max(2147483647).optional(), websocketConnectTimeoutMs: z.number().int().min(0).max(2147483647).optional(), defaultTools: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),

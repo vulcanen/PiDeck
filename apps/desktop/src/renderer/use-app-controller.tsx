@@ -1071,6 +1071,11 @@ export function useAppController() {
     };
     else if (command === "compact") action = () => compactSession(argument || undefined);
     else if (command === "export") action = () => { const options = exportArguments(argument); return exportSession(options.format, options.outputPath); };
+    else if (command === "bug") action = async () => {
+      if (!activeTask) { showNotice(t.noSessions); return; }
+      const result = await window.pideck.sessions.bugReport(activeTask.id, argument, projectCwd);
+      if (result) showNotice(result.path ? t.piBugReportExported(result.path, result.id) : t.piBugReportUploaded(result.id));
+    };
     else if (command === "new") action = () => createTask();
     else if (command === "reload") action = async () => {
       if (!activeTask) { showNotice(t.noSessions); return; }

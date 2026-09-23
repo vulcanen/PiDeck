@@ -21,6 +21,7 @@ const { updatePiSettings } = require("../../../packages/pi-host/dist/settings-co
 const { replaceQuotedAbsolutePaths } = require("../../../packages/pi-host/dist/external-editor-command.js");
 const { copySessionChangeReviewStore, deleteSessionChangeReviewStore, flushSessionChangeReviewStore, loadSessionChangeReviews, persistSessionChangeReview, sanitizeSessionChangeReview, sessionChangeReviewStorePath, summarizeSessionChangeReview } = require("../../../packages/pi-host/dist/session-change-review-store.js");
 const { sessionTranscriptMessages } = require("../../../packages/pi-host/dist/session-transcript.js");
+const { normalizeAgentEvent } = require("../../../packages/pi-host/dist/agent-event-adapter.js");
 const { createTrustAwareSettingsManager, readProjectTrustStatus } = require("../../../packages/pi-host/dist/project-trust.js");
 const { buildSessionTreeSnapshot } = require("../../../packages/pi-host/dist/session-tree.js");
 const { buildChangeFileTree, parseUnifiedPatch, reviewTreeKeyboardAction, sideBySideRows } = require("../dist/renderer/change-review-model.js");
@@ -38,6 +39,16 @@ test("slash arguments preserve provider/model IDs and export paths including spa
   assert.deepEqual(exportArguments("jsonl"), { format: "jsonl" });
   assert.deepEqual(exportArguments("reports/session.jsonl"), { format: "jsonl", outputPath: "reports/session.jsonl" });
   assert.deepEqual(exportArguments(""), { format: "html" });
+});
+
+test("Pi 0.87 boundary events stay small and preserve their actionable status", () => {
+  const context = { llmMessages: ["private transcript"], pendingMessages: ["private prompt"] };
+  assert.deepEqual(normalizeAgentEvent({ type: "turn_end", turnIndex: 2, outcome: "completed", canContinue: true, messageEntryId: "m1", toolResultEntryIds: ["t1"], context }), {
+    type: "turn_end", turnIndex: 2, outcome: "completed", canContinue: true, messageEntryId: "m1", toolResultEntryIds: ["t1"],
+  });
+  assert.deepEqual(normalizeAgentEvent({ type: "agent_before_settle", outcome: "aborted", canContinue: false, context }), {
+    type: "agent_before_settle", outcome: "aborted", canContinue: false,
+  });
 });
 
 test("extension editor mirror is scoped, live, supports paste, and is disposed", () => {
@@ -78,7 +89,7 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
   let current = JSON.parse(stored);
   const manager = {
     getDefaultProvider: () => undefined, getDefaultModel: () => undefined, getDefaultThinkingLevel: () => "off", setDefaultThinkingLevel: level => { current.defaultThinkingLevel = level; }, getTransport: () => "auto",
-    getCompactionSettings: () => current.compaction, getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 2000, ...current.retry }),
+    getCompactionSettings: () => current.compaction, getCacheWarmingMode: () => current.cacheWarming ?? "off", getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 2000, ...current.retry }),
     getSteeringMode: () => "all", getFollowUpMode: () => "all", getGlobalSettings: () => current, getDefaultTools: () => current.defaultTools,
     flush: async () => {}, reload: async () => { current = JSON.parse(stored); },
   };
@@ -110,7 +121,13 @@ test("advanced Pi settings preserve nested unknowns and proxy credentials", asyn
     sessionDir: ".pi/sessions",
     enableSkillCommands: false,
     enableInstallTelemetry: false,
+    cacheWarming: "idle",
+    compactionModelOverrides: { "anthropic/claude-example": { reserveTokens: 16384, keepRecentTokens: 8192 } },
   }, storage);
+  assert.equal(current.cacheWarming, "idle");
+  assert.deepEqual(current.compaction.modelOverrides["anthropic/claude-example"], { reserveTokens: 16384, keepRecentTokens: 8192 });
+  const updated = await updatePiSettings(manager, {}, { compactionModelOverrides: { "anthropic/claude-example": null } }, storage);
+  assert.deepEqual(updated.compactionModelOverrides, {});
   assert.deepEqual(current.retry.provider, { maxRetries: 2, unknown: true, timeoutMs: 120000, maxRetryDelayMs: 45000 });
   assert.deepEqual(current.branchSummary, { reserveTokens: 4096, skipPrompt: true });
   assert.equal(current.websocketConnectTimeoutMs, 9000);
@@ -1433,10 +1450,10 @@ test("Pi permission Extension is locked consistently across workspaces", () => {
   const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
   const installed = JSON.parse(fs.readFileSync(path.join(root, "node_modules/@gotgenes/pi-permission-system/package.json"), "utf8"));
 
-  assert.equal(rootPackage.dependencies["@gotgenes/pi-permission-system"], "^31.1.1");
-  assert.equal(desktopPackage.dependencies["@gotgenes/pi-permission-system"], "^31.1.1");
-  assert.equal(lock.packages["node_modules/@gotgenes/pi-permission-system"].version, "31.1.1");
-  assert.equal(installed.version, "31.1.1");
+  assert.equal(rootPackage.dependencies["@gotgenes/pi-permission-system"], "33.1.0");
+  assert.equal(desktopPackage.dependencies["@gotgenes/pi-permission-system"], "33.1.0");
+  assert.equal(lock.packages["node_modules/@gotgenes/pi-permission-system"].version, "33.1.0");
+  assert.equal(installed.version, "33.1.0");
   assert.equal(installed.exports["."].default, "./src/service.ts");
 });
 

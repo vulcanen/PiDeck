@@ -12,6 +12,7 @@ const expectedPermissionVersion = JSON.parse(readFileSync(path.join(root, "node_
 const hostPath = path.join(root, "packages", "pi-host", "dist", "index.js");
 const piModulePath = path.join(root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js");
 const agentDir = mkdtempSync(path.join(os.tmpdir(), "pideck-source-smoke-"));
+const bugReportPath = path.join(agentDir, "pi-bug-report-smoke.zip");
 const extensionDir = path.join(agentDir, "extensions");
 const packageWorkspace = path.join(agentDir, "package-workspace");
 const packageSource = path.join(packageWorkspace, "demo-package");
@@ -207,6 +208,14 @@ await new Promise((resolve, reject) => {
       taskId = message.ok ? message.result?.id : undefined;
       if (!taskId) {
         finish(new Error(`Could not create smoke session: ${JSON.stringify(message)}`));
+        return;
+      }
+      child.send({ id: "bug-report", command: "sessions.bugReport", payload: { taskId, cwd: root, hint: "PiDeck source smoke", includeSession: false, delivery: "zip", outputPath: bugReportPath } });
+      return;
+    }
+    if (message?.id === "bug-report") {
+      if (!message.ok || message.result?.path !== bugReportPath || readFileSync(bugReportPath).subarray(0, 2).toString() !== "PK") {
+        finish(new Error(`Pi bug-report ZIP export failed: ${JSON.stringify(message)}`));
         return;
       }
       child.send({ id: "agent-execute-bash", command: "agent.executeBash", payload: { taskId, cwd: root, command: "printf pideck-shell-smoke", excludeFromContext: false } });

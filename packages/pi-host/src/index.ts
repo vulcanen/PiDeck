@@ -71,6 +71,7 @@ import {
 import { sessionTranscriptMessages } from "./session-transcript.js";
 import { canonicalProjectPath, createTrustAwareSettingsManager, readProjectTrustStatus } from "./project-trust.js";
 import { buildSessionTreeSnapshot } from "./session-tree.js";
+import { createPiBugReport } from "./bug-report.js";
 
 function execFileText(file: string, args: string[], options: { cwd?: string; timeout?: number } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -2048,6 +2049,13 @@ async function handle(request: PiHostRequest): Promise<void> {
             ...(copiedReviewStore ? { reviewPath: sessionChangeReviewStorePath(outputPath) } : {}),
           },
         });
+        return;
+      }
+      case "sessions.bugReport": {
+        const payload = request.payload as { taskId: string; cwd?: string; hint?: string; includeSession: boolean; delivery: "zip" | "upload"; outputPath?: string };
+        const session = await ensureAgentSession(payload.taskId, payload.cwd ?? resolveWorkspaceCwd());
+        const result = await createPiBugReport(session, payload);
+        send({ id: request.id, ok: true, result });
         return;
       }
       case "sessions.import": {

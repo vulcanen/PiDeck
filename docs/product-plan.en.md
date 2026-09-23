@@ -19,7 +19,9 @@ Provider API keys, OAuth, token refresh, and session files remain managed by the
 
 ## 2. Current Implementation Baseline
 
-Pi SDK baseline: `@earendil-works/pi-coding-agent@0.85.1`. PiDeck leaves `createAgentSession.tools` unset, so Pi applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes persist through Pi's user settings because PiDeck calls `setModel()` / `setThinkingLevel()` with `{ persist: true }`; `/thinking [level]` maps to the desktop thinking selector. The `/settings` sheet edits the same user-wide defaults through `SettingsManager`. Pi's `ui_prompt_start` / `ui_prompt_end` events are normalized as serializable Agent events, while PiDeck's richer queue mutations continue to use the direct `AgentSession` queue API (the SDK's RPC `clear_queue` remains outside the desktop's direct-host transport). Pi 0.85.1's GPT-6 Astra catalog is consumed dynamically through `ModelRuntime`; its fork-compaction, branch-summary, import, proxy, Qwen catalog, and OpenAI Codex SSE fixes therefore flow through the existing desktop mappings.
+Pi SDK baseline: `@earendil-works/pi-coding-agent@0.87.1`. PiDeck leaves `createAgentSession.tools` unset, so Pi applies its project/global `defaultTools` setting—including the optional Windows `powershell` tool when configured—while keeping Extension and custom tools enabled. Model summaries omit thinking levels that Pi explicitly maps to `null`; active sessions continue to use the authoritative `AgentSession.getAvailableThinkingLevels()` result. Model and thinking changes persist through Pi's user settings because PiDeck calls `setModel()` / `setThinkingLevel()` with `{ persist: true }`; `/thinking [level]` maps to the desktop thinking selector. The `/settings` sheet edits the same user-wide defaults through `SettingsManager`. Pi's `ui_prompt_start` / `ui_prompt_end` events are normalized as serializable Agent events, while PiDeck's richer queue mutations continue to use the direct `AgentSession` queue API (the SDK's RPC `clear_queue` remains outside the desktop's direct-host transport). Pi 0.85.1's GPT-6 Astra catalog is consumed dynamically through `ModelRuntime`; its fork-compaction, branch-summary, import, proxy, Qwen catalog, and OpenAI Codex SSE fixes therefore flow through the existing desktop mappings.
+
+Pi 0.87.1 also supplies new models and Meta Muse through the runtime catalog, context-edit Session entries, per-model image limits, cache warming, per-model compaction budgets, and bug-report helpers. PiDeck maps cache warming and compaction overrides in Settings, shows context edits in the Session tree, and exposes `/bug` with transcript consent and ZIP/upload delivery. New extension boundaries stay inside Pi SDK; the desktop does not construct them.
 
 Project Pi resources follow Pi's trust model rather than treating “opened” as implicit trust. When protected project settings, Extensions, Skills, Prompts, themes, packages, system prompts, or project `.agents/skills` exist, PiDeck reports the effective saved/inherited/default decision and passes it to `SettingsManager.create(..., { projectTrusted })`. Adding an unresolved project under the `ask` policy opens the decision UI; the same project-scoped entry remains in the project context menu.
 
@@ -132,7 +134,7 @@ Currently supported:
 app.setLanguage/setWindowTheme/quit
 runtime.status
 projects.list/chooseDirectory/remove/trustStatus/setTrust
-sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog
+sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/bugReport/import/rename/generateTitle/stats/share/changelog
 models.list/refresh
 workspace.snapshot
 input.keybindings/externalEdit
@@ -183,7 +185,7 @@ PiHost currently adapts via `AgentSession.agent.beforeToolCall`:
 
 ### 7.2 `@gotgenes/pi-permission-system` Status
 
-PiDeck has `@gotgenes/pi-permission-system@31.1.1` as an Extension dependency of the desktop PiHost, loaded via Pi `DefaultResourceLoader.additionalExtensionPaths`. It keeps the same flat `permission` / `yoloMode` configuration consumed by PiDeck while adding directional path surfaces, fail-closed handling for unresolved Bash parses and redirects, session-keyed permission services, and dynamic tool-surface filtering. PiDeck does not consume the extension's removed root-service accessor or exhaustively switch on its decision-attribution values. The desktop offers these modes:
+PiDeck has `@gotgenes/pi-permission-system@33.1.0` as an Extension dependency of the desktop PiHost, loaded via Pi `DefaultResourceLoader.additionalExtensionPaths`. It keeps the same flat `permission` / `yoloMode` configuration consumed by PiDeck while adding directional path surfaces, fail-closed handling for unresolved Bash parses and redirects, session-keyed permission services, and dynamic tool-surface filtering. PiDeck does not consume the extension's removed root-service accessor or exhaustively switch on its decision-attribution values. The desktop offers these modes:
 
 - `allow`: silently allow tool execution.
 - `ask`: Pi's permission system requests approval before execution.

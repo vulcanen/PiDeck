@@ -9,7 +9,7 @@
 
 - 手动压缩期间显示停止按钮，先调用 `abortCompaction()` 再调用 `abort()`。取消或失败后，暂存消息返回 Pi 队列，不会自动启动下一轮；长时间压缩不再受普通 IPC 的 60 秒超时限制。
 - `/model provider/model` 使用真实运行时目录（包括扩展稍后注册的 Provider）；不带 Provider 的 ID 必须唯一。`/export 路径` 保留空格，`.jsonl` 输出 JSONL，其余输出 HTML；显式路径进入带覆盖确认的系统保存窗口。原有 `/export jsonl`、`/export html` 仍可用。
-- Pi 设置 → 高级配置提供 Agent/Provider 重试、压缩与分支摘要 Token、Pi 原生 `branchSummary.skipPrompt` 开关、HTTP(S) 代理/空闲超时、WebSocket 连接超时、默认工具、Thinking 与图片处理、项目默认授权、Shell/npm/Session 目录、Skill 命令、警告及遥测开关。开启 `skipPrompt` 后，桌面分支对话框遵循 Pi 的无摘要路径并隐藏摘要选项。传输方式包含 `websocket-cached`。设置写入 Pi 自带锁定存储，保留未知及嵌套设置，既有代理凭据不传入 Renderer。项目覆盖仍优先；网络、Shell 和 Session 目录修改需重启，重试/压缩与资源设置可通过 `/reload` 加载，默认工具用于新会话。
+- Pi 设置 → 高级配置提供 Agent/Provider 重试、压缩与分支摘要 Token、按模型覆盖的压缩预算、Pi 的 `cacheWarming` 预热模式、原生 `branchSummary.skipPrompt` 开关、HTTP(S) 代理/空闲超时、WebSocket 连接超时、默认工具、Thinking 与图片处理、项目默认授权、Shell/npm/Session 目录、Skill 命令、警告及遥测开关。开启 `skipPrompt` 后，桌面分支对话框遵循 Pi 的无摘要路径并隐藏摘要选项。传输方式包含 `websocket-cached`。设置写入 Pi 自带锁定存储，保留未知及嵌套设置，既有代理凭据不传入 Renderer。项目覆盖仍优先；网络、Shell 和 Session 目录修改需重启，重试/压缩与资源设置可通过 `/reload` 加载，默认工具用于新会话。
 - `SessionCapabilities.extensionShortcuts` 返回经过 Pi 原生冲突处理的扩展快捷键；`extensions.invokeShortcut` 先同步当前草稿，再以 Pi RPC context 执行处理器。`extensions.syncEditor` 按项目和会话镜像编辑文本，支持 `getEditorText`、`setEditorText`、`pasteToEditor`；模态窗口和输入法组合期间不触发扩展快捷键。
 - 扩展 `getAllThemes`、`getTheme`、`setTheme` 在 PiHost 中保留真实 Pi Theme 对象（含资源加载主题），只传递校验后的颜色和浅深色信息。主题覆盖按会话隔离，同时作用于工作区与浮层，可通过顶栏主题按钮清除。状态、文本 Widget、通知会移除终端 ANSI 控制符。
 
@@ -26,7 +26,7 @@
 | 会话位置与长会话 | 中央对话线程（普通文档流 + 早期消息折叠） | 不使用虚拟列表；只挂载最近 200 条，更早消息折叠在"显示更早消息"按钮后。防跳动依赖 `overflow-anchor: auto` 原生 scroll anchoring；非活动 pane 用 `visibility: hidden` 天然保留 `scrollTop` 并暂停 DOM observer；follow 仅由真实 wheel/touch 上滑事件退出，程序化滚动期间 latch 住 |
 | Provider 列表 | 快捷设置 → Provider 设置（搜索、认证状态筛选） | `ModelRuntime.getProviders()`、`listCredentials()` |
 | API Key / OAuth | Provider 设置（本机凭据、移除确认） | `ModelRuntime.login()`、`ModelRuntime.logout()`、Pi auth 回调；关闭设置会通过 `AuthInteraction.signal` 中止未完成的登录，新尝试会先替换同一 Provider 的遗留认证再重新打开浏览器；OpenAI Codex 浏览器登录会预检 Pi 0.84.2–0.85.1 的固定回调端口，手动输入回调地址仅作为显式兜底，成功后自动聚焦桌面窗口；PiHost 在 Token 交换前按“显式环境变量 → Pi `httpProxy` → Electron 系统代理”的优先级初始化 Pi 的代理感知 HTTP dispatcher |
-| 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` |
+| 模型列表 | Composer 模型选择器 | `ModelRuntime.getModels()` 动态读取 Pi 0.87.1 的 Claude Opus 5.5、GPT-6 Sol/Luna、xAI 默认 Grok 4.7，以及 Pi 0.86.1 的 Meta Muse Provider；实际可用性由 Provider 与认证状态决定 |
 | 思考等级 | Composer Thinking 菜单；`/thinking [level]`；`/settings` | `AgentSession.getAvailableThinkingLevels()` / `setThinkingLevel(..., { persist: true })`；模型选择同样使用 `setModel(..., { persist: true })`；Composer 与 Pi 设置中的思考选项均从 Pi 模型能力派生，全局及按模型启动默认值（`modelThinkingLevels`）均读写同一份 Pi 用户级 SettingsManager |
 | 默认内置工具 | Pi 全局/项目 `settings.json`；PiDeck 不维护第二套目录 | PiDeck 不传入 `createAgentSession.tools`，由 Pi 应用 `defaultTools`，包括配置后可用的 Windows `powershell` 工具；Extension/自定义工具继续遵循 Pi SDK 语义保持启用 |
 | Pi slash command catalog | 行首已知 `/` 前缀建议、快捷设置 → Pi 命令 | Pi 内置 catalog、Prompt、Skill、Extension command；路径和普通文本不触发命令建议 |
@@ -40,6 +40,7 @@
 | 上下文压缩 | Command Palette；`/compact [instructions]` | `AgentSession.compact()` 缩减后续模型上下文；手动压缩期间提交的输入继续在队列中可见、可编辑，并在压缩后按序恢复；桌面时间线继续显示完整持久化当前 Session 分支 |
 | 重新加载资源 | `/reload` | 调用 `AgentSession.reload()` 重新加载 SettingsManager、Package、Extension、Prompt、Skill、Theme 与模型注册表；先清理已卸载扩展留下的展示状态，再让保留扩展接收新的 `session_start`，最后刷新桌面能力 |
 | Session 导出 | Command Palette | `AgentSession.exportToJsonl()` / `exportToHtml()` |
+| Pi 问题报告 | Composer 或 Pi 命令中的 `/bug [描述]` | 原生对话框选择是否包含当前 Session 记录，以及上传给 Pi 开发者或保存 ZIP。PiHost 使用 Pi 0.87.1 的报告收集、脱敏、归档和上传 helper；桌面端不提供模型生成摘要 |
 | Runtime 状态 | Sidebar | Main/PiHost runtime status event，以及脱敏的 `runtime.error` 启动失败信息 |
 | 中英文 | 顶部显示目标语言的切换按钮（中文界面显示 `EN`，英文界面显示 `中`） | Renderer i18n |
 | 浅色/深色 | 顶部主题按钮 | Renderer theme preference |
@@ -71,11 +72,15 @@
 
 当前已接入的桌面命令包括 `/settings`、`/reload`、`/import`、`/share`、`/copy`、`/name`、`/session`、`/changelog`、`/hotkeys`、`/trust`、`/resume`、`/quit` 和 `/scoped-models`。`/trust` 打开与项目右键菜单相同的项目级状态与授权界面；`/settings` 写入 Pi 自己的用户级设置；`/reload` 调用当前 AgentSession 的真实 reload API；`/import` 会打开 Electron 原生 JSONL 选择器，不接受 Renderer 提供的路径；`/share` 仍要求本机安装并登录 `gh` CLI。
 
+`/bug` 通过带版本守卫的 Pi 同版本模块调用 Pi 自己的报告 helper。Pi 0.87.0 新增的上下文编辑仍保留在权威 Session 树中，并在桌面会话树标出；对话时间线继续展示原始历史。`turn_end`、`agent_before_settle` 和 `context_with_system` 扩展事件在 Pi SDK 内执行，PiDeck 不自行构造这些事件。`models.json` 中按模型设置的图片输入限制由 Pi 的模型/运行时路径执行，PiDeck 不复制该逻辑。
+
 `/fork`、`/clone` 与 `/tree` 已进入 Composer 建议和快捷设置，共用响应式 Session Tree 浏览器。默认显示对话节点，可切换全部技术事件，支持搜索、方向键导航、活动路径/当前位置/分叉点标记，以及操作前的节点影响预览。Fork 仅允许选择 Pi 支持的用户消息，并在新会话 Composer 恢复所选文本；clone 将当前叶节点复制为新会话；tree 保持当前会话，可选生成可取消的离开分支摘要。会话替换与时间线均重新绑定到 Pi 的权威会话标识。
 
 ## 权限与审批边界
 
 当前 PiHost 优先通过 Pi Extension 机制加载 `@gotgenes/pi-permission-system`：
+
+锁定的 33.1.0 版本兼容 Pi ≥0.86 的系统提示词分段结构并调整工具面位置。32.x 的父 Session 审批转发和 33.x 的 MCP 规则后匹配优先语义由 Extension 处理，PiDeck 只桥接其 UI 请求，不重新实现策略。
 
 - `allow`：自动允许工具执行。
 - `ask`：由 Pi 权限系统产生审批请求，再由 PiDeck 审批卡响应。

@@ -233,7 +233,7 @@ PiDeck's Renderer `activity`/`completedActivity` remains presentation state of t
 
 ### Desktop parity adapters
 
-`pi-command-arguments.ts` resolves exact runtime model IDs and export filenames. `sessions.export` accepts an optional output path: Main validates it, resolves project-relative/`~/` paths, and obtains native save/overwrite confirmation before PiHost calls Pi's exporter. A cancelled picker returns `null`. `.jsonl` paths select JSONL, and other paths select HTML.
+`pi-command-arguments.ts` resolves exact runtime model IDs and export filenames. `sessions.export` accepts an optional output path: Main validates it, resolves project-relative/`~/` paths, and obtains native save/overwrite confirmation before PiHost calls Pi's exporter. A cancelled picker returns `null`. `.jsonl` paths select JSONL, and other paths select HTML. `sessions.bugReport` asks for transcript consent and upload/ZIP delivery in native dialogs; PiHost's `bug-report.ts` uses Pi's version-matched bug-report, crash-log, session-export, and upload helpers. ZIP exports use the native save dialog; no model-generated summary is requested.
 
 `settings-command-handler.ts` reads Pi's effective non-TUI settings through Pi's getters and writes only changed retry/compaction/branch-summary (including `skipPrompt`)/network/image/trust/shell/session/resource/telemetry keys through `FileSettingsStorage.withLock`, preserving nested provider retry policy and unknown settings. Existing proxy credentials are stripped from the summary and preserved unless explicitly replaced. The session-tree overlay reads the effective `skipPrompt` value and hides its summary control when Pi's no-summary path is configured. Network, shell, and session-directory changes apply after a Host/application restart; default tools apply to newly created sessions.
 
@@ -254,13 +254,13 @@ Per `PideckBridge` in `packages/contracts/src/index.ts`, currently declared:
 - `app.setLanguage/setWindowTheme/quit`
 - `runtime.status`
 - `projects.list/chooseDirectory/remove/trustStatus/setTrust`
-- `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/import/rename/generateTitle/stats/share/changelog`
+- `sessions.list/create/delete/remove/messages/runMetadata/changeReviews/changeReview/capabilities/compact/export/bugReport/import/rename/generateTitle/stats/share/changelog`
 - `models.list/refresh`
 - `workspace.snapshot`
 - `input.keybindings/externalEdit`
 - `providers.list/login/cancelLogin/logout/setApiKey/resolveAuth/openAuthUrl`
 - `agent.prompt/executeBash/abort/setThinkingLevel/setModel/cycleModel/setScopedModels/queue/setQueueModes/clearQueue/promoteQueue/editQueue/deleteQueue`
-- `sessions.compact/reload`, `settings.get/update/chooseExternalEditor`, `extensions.resolveUi/syncEditor/invokeShortcut`
+- `sessions.compact/reload/bugReport`, `settings.get/update/chooseExternalEditor`, `extensions.resolveUi/syncEditor/invokeShortcut`
 - `packages.list/install/remove/update/configure/configureResource/checkUpdates`
 - `approvals.resolve`
 - `permissions.status/setMode`

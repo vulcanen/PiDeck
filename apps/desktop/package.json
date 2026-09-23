@@ -16,7 +16,7 @@
   "dependencies": {
     "@codemirror/merge": "^6.12.2",
     "@codemirror/state": "^6.7.4",
-    "@gotgenes/pi-permission-system": "^31.1.1",
+    "@gotgenes/pi-permission-system": "33.1.0",
     "@pideck/contracts": "0.2.0",
     "@pideck/domain": "0.2.0",
     "@pideck/i18n": "0.2.0",
